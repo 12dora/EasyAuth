@@ -166,8 +166,12 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
     navigateWhenClosed: true,
     openOnArrowDown: true,
     closeOnPick: false,
-    // 选中的人一定在当前搜索结果里, 下面的记录效果已经把姓名收下了, 这里只管加进已选。
-    onPick: (option) => add(option.user_id),
+    onPick: (option) => {
+      // 显式选中是最可信也最新的一次观察, 立刻记下姓名: 候选列表可能是上一次搜索留下的占位数据,
+      // 它没有取回时刻(dataUpdatedAt 为 0), 记录效果会跳过它, 而这些候选又会挡住按 ID 的批量解析。
+      setSeenOptions((current) => withSeenOptions(current, [option], Date.now()));
+      add(option.user_id);
+    },
     onEnterWithoutOption: () => add(inputValue),
     onEmptyBackspace: inputValue === "" && value.length > 0 ? () => remove(value[value.length - 1]) : undefined,
   });
@@ -263,19 +267,26 @@ function useSeenOptions(
     if (!options || options.length === 0 || seenAt === 0) {
       return;
     }
-    setSeenOptions((current) => {
-      let next = current;
-      for (const option of options) {
-        const seen = next[option.user_id];
-        if (seen && seen.seenAt >= seenAt) {
-          continue;
-        }
-        next = next === current ? { ...current } : next;
-        next[option.user_id] = { option, seenAt };
-      }
-      return next;
-    });
+    setSeenOptions((current) => withSeenOptions(current, options, seenAt));
   }, [options, seenAt, setSeenOptions]);
+}
+
+/** 合并一批观察: 同一个人只有更新的一次才覆盖旧的; 没有变化时原样返回, 不触发多余渲染。 */
+function withSeenOptions(
+  current: Record<string, SeenUserOption>,
+  options: UserOption[],
+  seenAt: number,
+): Record<string, SeenUserOption> {
+  let next = current;
+  for (const option of options) {
+    const seen = next[option.user_id];
+    if (seen && seen.seenAt >= seenAt) {
+      continue;
+    }
+    next = next === current ? { ...current } : next;
+    next[option.user_id] = { option, seenAt };
+  }
+  return next;
 }
 
 function UserChip({

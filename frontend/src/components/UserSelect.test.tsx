@@ -158,6 +158,33 @@ describe("UserSelect", () => {
     expect(screen.queryByText("张三(旧)")).toBeNull();
   });
 
+  test("移除后从残留候选里重新选中, chip 仍然显示姓名", async () => {
+    // 复现: 按 ID 搜到人 -> 选中 -> 移除 -> 从"还挂在那儿"的候选里再选一次。
+    // 输入框已经清空, 那份候选是上一次搜索留下的占位数据(没有取回时刻), 还会挡住按 ID 的批量解析,
+    // 所以这一次选中必须自己把姓名记下来, 否则 chip 会一直是裸 ID。
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ data: [{ user_id: "u-1", name: "张三", department: "销售部", avatar_url: "" }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithProviders(<MultiSelectHarness />);
+
+    const input = screen.getByRole("combobox");
+    await user.type(input, "u-1");
+    await user.click(await screen.findByRole("option", { name: /张三/ }));
+    expect(await screen.findByText("张三")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "移除 张三" }));
+    expect(screen.getByTestId("value")).toHaveTextContent("");
+
+    await user.click(await screen.findByRole("option", { name: /张三/ }));
+
+    expect(screen.getByTestId("value")).toHaveTextContent("u-1");
+    expect(await screen.findByText("张三")).toBeVisible();
+    expect(screen.getByRole("button", { name: "移除 张三" })).toBeVisible();
+  });
+
   test("审批人多选按 approver 口径批量解析: 本地管理账号不会被过滤成裸 ID", async () => {
     const fetchMock = stubUserOptions();
 
@@ -171,6 +198,17 @@ describe("UserSelect", () => {
     ).toEqual(["/console/api/v1/user-options?user_ids=u-1&purpose=approver"]);
   });
 });
+
+/** 多选也是受控的: 用例里用最小壳子接住已选 ID。 */
+function MultiSelectHarness() {
+  const [value, setValue] = useState<string[]>([]);
+  return (
+    <>
+      <span data-testid="value">{value.join(",")}</span>
+      <UserMultiSelect id="approvers" value={value} onChange={setValue} />
+    </>
+  );
+}
 
 /** 单选输入是受控的: 用例里用最小壳子接住 value 与选中的候选项。 */
 function SearchInputHarness() {
