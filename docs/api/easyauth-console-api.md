@@ -173,6 +173,8 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | POST | `…/connectors/test`、`…/external-groups`、`…/mappings`、`…/reconcile`、`…/sync-runs` | 探测与同步 |
 | GET/PUT | `/apps/{app_key}/webhook-config` | **owner**：配置 URL/开关/轮换 secret |
 | POST | `/apps/{app_key}/webhook-config/test` | **owner**：发送测试事件 |
+| GET | `/apps/{app_key}/webhook-deliveries` | **owner**：投递列表 |
+| POST | `/apps/{app_key}/webhook-deliveries/{delivery_pk}/redeliver` | **owner**：失败重投 |
 
 **GET/PUT `/apps/{app_key}/webhook-config`** 字段：
 
@@ -199,8 +201,6 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 `catalog.changed` 载荷：`event_type`、`app_key`、`catalog_version`、`changed_at`。
 
 签名头与既有 webhook 相同：`X-EasyAuth-Event`、`X-EasyAuth-Delivery`、`X-EasyAuth-Timestamp`、`X-EasyAuth-Signature`。
-| GET | `/apps/{app_key}/webhook-deliveries` | **owner**：投递列表 |
-| POST | `/apps/{app_key}/webhook-deliveries/{delivery_pk}/redeliver` | **owner**：失败重投 |
 
 ### Webhook 投递
 

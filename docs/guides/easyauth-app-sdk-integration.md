@@ -53,7 +53,7 @@ SDK 位于仓库 `sdk/python`(包名 `easyauth-app-sdk`,零运行时依赖,FastA
   启动日志会出现 `easyauth_manifest_push_conflict` 提示。相关开关:
   `EASYAUTH_MANIFEST_AUTO_PUSH`(默认开)、`EASYAUTH_MANIFEST_PUSH_BASE_URL`(可选)。
 - manifest 的 `lifecycle`/`webhook` 可选节会在导入时回填应用的 Webhook 配置
-  (交接/入职事件 URL),但控制台管理员改过的值优先(`updated_by` 非 manifest 时不覆盖)。
+  (交接/入职事件 URL, 以及 `webhook.events_url` 权限传播事件 URL),但控制台管理员改过的值优先(`updated_by` 非 manifest 时不覆盖)。
 
 ## 用户目录与钉钉通知
 
@@ -233,7 +233,7 @@ reports = directory_client.search_directory_users(
 
 ## 生命周期交接回调
 
-当前 SDK 版本是 `0.4.0`（2026-08-10），把生命周期交接升级为**三事件内核**，
+当前 SDK 版本是 `0.5.0`（2026-09-08）。生命周期交接仍为**三事件内核**，
 下游要接离职/转岗交接就必须实现这三个回调：
 
 | 事件 | 回调 | 语义 |
@@ -275,6 +275,38 @@ app.include_router(
 
 字段级契约以 [`design/data-handover-v2/00-overview-and-contract.md`](../design/data-handover-v2/00-overview-and-contract.md)
 为准；SDK 包内自带契约样本 `easyauth_app_sdk/contract_samples/handover_v2/*.json`。
+
+## 权限传播事件回调
+
+SDK `0.5.0` 增加异步权限传播端点。EasyAuth 在用户当前授权变化时推送 `grant.changed`,
+在应用权限目录版本提升时推送 `catalog.changed`。目标 URL 来自 manifest
+`webhook.events_url` 或控制台 webhook 配置字段 `events_url`, 下游默认挂载
+`POST /api/v1/easyauth/events`。
+
+| 事件 | 回调 | 语义 |
+|---|---|---|
+| `grant.changed` | `callbacks.on_grant_changed` | 立即拉取该用户权限快照, 并核对 `snapshot_version` 已前进 |
+| `catalog.changed` | `callbacks.on_catalog_changed` | 将该应用全部缓存快照标为过期, 下次检查/登录时再拉取 |
+| `webhook.test` | （短路） | 返回 `{"ok": true}` |
+
+```python
+from easyauth_app_sdk import EventCallbacks, easyauth_events_router
+
+app.include_router(
+    easyauth_events_router(
+        secret_provider,
+        callbacks=EventCallbacks(
+            on_grant_changed=...,
+            on_catalog_changed=...,
+        ),
+    )
+)
+```
+
+两个回调均可选。签名失败默认 **401**。未知 `event_type` 返回 422 `unsupported_event`。
+`event_type` 必须与 `X-EasyAuth-Event` 一致, 校验位于 `webhook.test` 短路之前。
+
+登录时应始终强制刷新权限快照(拉取失败才沿用上次成功数据); 权限检查发现缓存过期时惰性刷新。
 
 ## 参考实现
 
