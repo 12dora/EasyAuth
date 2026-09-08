@@ -905,6 +905,36 @@ def test_snapshot_for_grant_keeps_deactivated_group_on_historical_row() -> None:
     assert resolved.grants == ()
 
 
+def test_snapshot_for_grant_skips_directory_for_historical_managed_users(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user, app = _managed_users_app("crm-historical-managed", "historical-managed")
+    historical = AccessGrant.objects.get(user=user, app=app)
+    historical.is_current = False
+    historical.status = GRANT_STATUS_REVOKED
+    historical.save(update_fields=["is_current", "status"])
+    current = AccessGrant.objects.create(user=user, app=app, version=2)
+    group = AuthorizationGroup.objects.get(app=app, key="team-manager-0")
+    _ = AccessGrantGroup.objects.create(grant=current, authorization_group=group)
+    monkeypatch.setattr(
+        "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
+        lambda: _UnavailableManagedUsersClient(),
+    )
+
+    historical_snapshot = snapshot_for_grant(historical)
+
+    assert historical_snapshot.grants == (
+        ExpandedGrant("customer.view.0", "MANAGED_USERS", "group", "team-manager-0", None),
+    )
+    assert historical_snapshot.grants[0].resolved is None
+    assert historical_snapshot.grants[0].permission_name == "customer.view.0"
+    assert historical_snapshot.grants[0].scope_name == "管理范围"
+    with pytest.raises(ManagedUsersResolutionUnavailableError):
+        _ = snapshot_for_grant(current)
+    with pytest.raises(ManagedUsersResolutionUnavailableError):
+        _ = resolve_user_permissions(user=user, app=app)
+
+
 def _scope(app: App, key: str, *, is_active: bool = True) -> AppScope:
     return AppScope.objects.create(app=app, key=key, name=key.title(), is_active=is_active)
 

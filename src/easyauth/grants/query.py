@@ -425,6 +425,23 @@ def _expanded_grants(
     )
 
 
+def _managed_users_for_expanded_grant(
+    grant: AccessGrant,
+    work: _ExpansionWork,
+    authorization_group_grant: AuthorizationGroupGrant | None = None,
+) -> ResolvedManagedUsers | None:
+    # 非当前历史行只保留权限/范围名称, 不解析管理对象名单, 也不访问组织目录。
+    # 当前授权与 SDK 有效快照仍走 resolve_managed_users, 目录故障必须失败。
+    if not work.effective:
+        return None
+    return resolve_managed_users(
+        user=grant.user,
+        app=grant.app,
+        authorization_group_grant=authorization_group_grant,
+        directory_cache=work.directory_cache,
+    )
+
+
 def _scope_keys(
     app: App,
     *,
@@ -464,13 +481,8 @@ def _group_grants(
                 continue
             resolved = None
             if link.scope_key == MANAGED_USERS_SCOPE:
-                resolved = resolve_managed_users(
-                    user=grant.user,
-                    app=grant.app,
-                    authorization_group_grant=link,
-                    directory_cache=work.directory_cache,
-                )
-                if resolved is None:
+                resolved = _managed_users_for_expanded_grant(grant, work, link)
+                if work.effective and resolved is None:
                     continue
             expanded.add(
                 ExpandedGrant(
@@ -499,12 +511,8 @@ def _direct_grants(
             continue
         resolved = None
         if link.scope_key == MANAGED_USERS_SCOPE:
-            resolved = resolve_managed_users(
-                user=grant.user,
-                app=grant.app,
-                directory_cache=work.directory_cache,
-            )
-            if resolved is None:
+            resolved = _managed_users_for_expanded_grant(grant, work)
+            if work.effective and resolved is None:
                 continue
         identity = (link.permission_id, link.scope_key)
         previous = expanded.get(identity)

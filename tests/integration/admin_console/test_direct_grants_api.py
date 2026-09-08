@@ -414,38 +414,7 @@ def test_direct_grants_rolls_back_when_directory_unavailable_for_managed_users(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _logged_in_superuser("direct-grant-directory-admin")
-    user = UserMirror.objects.create(
-        authentik_user_id="direct-grant-directory-user",
-        dingtalk_source_slug="dingtalk",
-        dingtalk_corp_id="corp-1",
-        dingtalk_userid="manager-dt",
-    )
-    app = App.objects.create(app_key="direct-grant-directory-app", name="CRM")
-    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="管理范围")
-    permission = Permission.objects.create(
-        app=app,
-        key="customer.profile.view",
-        name="查看客户",
-        supported_scopes=["MANAGED_USERS"],
-    )
-    group = AuthorizationGroup.objects.create(
-        app=app,
-        key="team-manager",
-        kind="role",
-        name="主管",
-        requestable=False,
-    )
-    _ = AuthorizationGroupGrant.objects.create(
-        authorization_group=group,
-        permission=permission,
-        scope_key="MANAGED_USERS",
-    )
-    _ = ManagedScopePolicy.objects.create(
-        app=app,
-        target_type="app_default",
-        scope="MANAGED_USERS",
-        resolver="dingtalk_manager_chain",
-    )
+    user, app, group, _permission = _managed_users_catalog("direct-grant-directory")
     monkeypatch.setattr(
         "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
         lambda: _UnavailableManagedUsersClient(),
@@ -473,6 +442,61 @@ def test_direct_grants_rolls_back_when_directory_unavailable_for_managed_users(
     assert AuditLog.objects.filter(event_type=DIRECT_GRANT_APPLIED_ACTION).count() == 0
 
 
+def test_direct_grants_empty_replace_revokes_when_directory_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _logged_in_superuser("direct-grant-revoke-directory-admin")
+    user, app, group, permission = _managed_users_catalog("direct-grant-revoke-directory")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        source=MEMBERSHIP_SOURCE_USER,
+    )
+    monkeypatch.setattr(
+        "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
+        lambda: _UnavailableManagedUsersClient(),
+    )
+
+    response = client.post(
+        DIRECT_GRANTS_API_URL,
+        data=dumps(
+            _payload(
+                user_id=user.authentik_user_id,
+                app_key=app.app_key,
+                reason="收回全部直接授权",
+            ),
+        ),
+        content_type="application/json",
+    )
+
+    grant.refresh_from_db()
+    payload = cast("dict[str, JsonValue]", response.json()["data"]["grant"])
+    assert response.status_code == HTTPStatus.CREATED
+    assert grant.is_current is False
+    assert grant.status == GRANT_STATUS_REVOKED
+    assert AccessGrant.objects.filter(user=user, app=app, is_current=True).count() == 0
+    assert payload["is_current"] is False
+    assert payload["status"] == GRANT_STATUS_REVOKED
+    assert payload["grants"] == [
+        {
+            "permission": permission.key,
+            "scope": "MANAGED_USERS",
+            "source_type": "group",
+            "source_key": group.key,
+            "permission_name": permission.name,
+            "permission_name_en": "",
+            "scope_name": "管理范围",
+            "scope_name_en": "",
+        },
+    ]
+    assert (
+        AuditLog.objects.filter(event_type=DIRECT_GRANT_APPLIED_ACTION, target_id=str(grant.id))
+        .order_by("-id")
+        .exists()
+    )
+
+
 def _catalog(prefix: str) -> tuple[App, AuthorizationGroup, Permission]:
     app = App.objects.create(app_key=f"{prefix}-app", name=prefix)
     _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
@@ -490,6 +514,44 @@ def _catalog(prefix: str) -> tuple[App, AuthorizationGroup, Permission]:
         requestable=False,
     )
     return app, group, permission
+
+
+def _managed_users_catalog(
+    prefix: str,
+) -> tuple[UserMirror, App, AuthorizationGroup, Permission]:
+    user = UserMirror.objects.create(
+        authentik_user_id=f"{prefix}-user",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="manager-dt",
+    )
+    app = App.objects.create(app_key=f"{prefix}-app", name="CRM")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="管理范围")
+    permission = Permission.objects.create(
+        app=app,
+        key="customer.profile.view",
+        name="查看客户",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="team-manager",
+        kind="role",
+        name="主管",
+        requestable=False,
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="MANAGED_USERS",
+    )
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="app_default",
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+    )
+    return user, app, group, permission
 
 
 def _payload(  # noqa: PLR0913 - 测试载荷构造需要显式覆盖各字段。

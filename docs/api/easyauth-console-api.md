@@ -426,9 +426,11 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 以及被去掉的 key（`removed_authorization_group_keys` / `removed_permission_keys`）。
 
 错误：用户/应用不存在 → 404；用户非在职 → 409；目录/范围问题 → 422
-`SEMANTIC_VALIDATION_ERROR`，`details.errors` 为中文列表。含 `MANAGED_USERS` 的授权组在展开
-响应行时若组织目录不可用 → **503 `DEPENDENCY_UNAVAILABLE`**，授权写入与
-`direct_grant_applied` 成功审计一并回滚，不留下半成功状态。成功 201，
+`SEMANTIC_VALIDATION_ERROR`，`details.errors` 为中文列表。**当前**授权含 `MANAGED_USERS`
+在展开响应行时若组织目录不可用 → **503 `DEPENDENCY_UNAVAILABLE`**，授权写入与
+`direct_grant_applied` 成功审计一并回滚，不留下半成功状态。空目标收回最后一条用户来源成员后，
+响应展开的是已收回的历史行：只保留权限/范围名称，不解析管理对象名单，也不访问组织目录；
+目录不可用不得回滚这次收回。成功 201，
 `data` 为 `{ "grant": <授权行> }`，形状见下方「授权行」。
 
 ### 当前授权
@@ -499,7 +501,10 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 **非当前**历史行按展示语义展开：不过滤过期成员，也不按当前目录 `is_active` /
 `deprecated_at` 过滤授权组、权限、范围或组映射；生命周期摘要跟这些展示成员走，
 因此过期限时或已停用目录行不会把历史行变成 `permanent` / `null`。
-**当前授权**与 SDK 有效快照仍按到期与目录启用状态过滤。
+历史行上的 `MANAGED_USERS` 只保留权限/范围名称，不解析管理对象名单，也不访问组织目录；
+目录不可用不得导致历史行展开失败。
+**当前授权**与 SDK 有效快照仍按到期与目录启用状态过滤，并解析 `MANAGED_USERS` 管理对象；
+目录不可用仍为 503。
 `user_name` 为 `UserMirror.name`，
 镜像无姓名时为空字符串。
 

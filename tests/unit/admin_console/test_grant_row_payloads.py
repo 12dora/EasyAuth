@@ -17,8 +17,10 @@ from easyauth.applications.models import (
     AppScope,
     AuthorizationGroup,
     AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
 )
+from easyauth.grants.managed_users import MANAGED_USERS_SCOPE
 from easyauth.grants.models import (
     GRANT_STATUS_REVOKED,
     MEMBERSHIP_SOURCE_DEPARTMENT,
@@ -27,10 +29,13 @@ from easyauth.grants.models import (
     AccessGrantGroup,
     AccessGrantPermission,
 )
+from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
+
+    from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
 
 pytestmark = pytest.mark.django_db
 
@@ -148,6 +153,78 @@ def test_serialize_access_grant_row_keeps_expired_historical_lifecycle() -> None
     assert row["grant_type"] == "timed"
     assert row["grant_expires_at"] == expired_at.isoformat()
     assert row["groups"] == [{"key": "sales", "kind": "role", "name": "销售"}]
+
+
+class _UnavailableManagedUsersClient:
+    def get_managed_users(self, corp_id: str, manager_user_id: str) -> DingTalkManagedUsers:
+        _ = corp_id, manager_user_id
+        message = "目录不可用"
+        raise AuthentikDirectoryUnavailableError(message)
+
+
+def test_serialize_access_grant_row_skips_directory_for_revoked_managed_users(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = UserMirror.objects.create(
+        authentik_user_id="grant-row-revoked-managed-user",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="manager-dt",
+    )
+    app = App.objects.create(app_key="grant-row-revoked-managed-app", name="CRM")
+    _ = AppScope.objects.create(app=app, key=MANAGED_USERS_SCOPE, name="管理范围")
+    permission = Permission.objects.create(
+        app=app,
+        key="customer.profile.view",
+        name="查看客户",
+        supported_scopes=[MANAGED_USERS_SCOPE],
+    )
+    group = AuthorizationGroup.objects.create(app=app, key="team-manager", kind="role", name="主管")
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=MANAGED_USERS_SCOPE,
+    )
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="app_default",
+        scope=MANAGED_USERS_SCOPE,
+        resolver="dingtalk_manager_chain",
+    )
+    grant = AccessGrant.objects.create(
+        user=user,
+        app=app,
+        status=GRANT_STATUS_REVOKED,
+        is_current=False,
+    )
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        source=MEMBERSHIP_SOURCE_USER,
+    )
+    monkeypatch.setattr(
+        "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
+        lambda: _UnavailableManagedUsersClient(),
+    )
+
+    row = serialize_access_grant_row(grant)
+
+    assert row["is_current"] is False
+    assert row["status"] == GRANT_STATUS_REVOKED
+    grants = row["grants"]
+    assert isinstance(grants, list)
+    assert grants == [
+        {
+            "permission": permission.key,
+            "scope": MANAGED_USERS_SCOPE,
+            "source_type": "group",
+            "source_key": group.key,
+            "permission_name": permission.name,
+            "permission_name_en": "",
+            "scope_name": "管理范围",
+            "scope_name_en": "",
+        },
+    ]
 
 
 def test_serialize_access_grant_rows_query_count_does_not_grow_with_row_count(
