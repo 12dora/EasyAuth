@@ -407,13 +407,23 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 
 校验：用户必须存在且 `active`；应用 active；组/权限/范围必须存在、启用且受支持。
 管理员授予**忽略** `requestable` 与审批规则。限时必须未来到期，永久必须
-`grant_expires_at=null`；至少一组或一条直接权限。
+`grant_expires_at=null`。控制台表单会预加载被授权人在该应用上的当前用户来源成员，
+提交后用户来源集合必须与本次提交相等。
 
-合并语义：读取当前授权上 `source="user"` 的组/权限行，与本次提交做并集
-（同一授权组或同一权限+范围时，**新到期时间覆盖旧值**），再把完整用户来源集合交给
-`GrantService.change_grant`（无当前授权时由其创建）。部门来源行不被改写。
+替换语义：本次提交的授权组 / 直接权限即为该用户在该应用上完整的
+`source="user"` 成员集合，交给 `GrantService.change_grant`
+（无当前授权时由其创建）。管理员去掉的用户来源行会被收回；保留的行若期限未改则沿用原到期时间，
+改了则用本次 `grant_expires_at`；新增的行按本次期限写入。部门来源行
+（`source="department"`）本路径不会改写：`GrantService.change_grant` /
+`replace_memberships` 只替换用户来源成员。
+
+空目标（无授权组、无直接权限）表示清空全部管理员授予的用户来源成员：若仍有部门来源行，
+当前授权保持有效且只剩部门行；若没有任何成员剩余，则走既有收回路径撤掉当前授权，
+不留下空的当前授权行。没有当前授权时提交空目标仍为 422。
+
 授权组按组落库，不展开为权限。操作者 `actor_type="admin"`。额外审计
-`direct_grant_applied`（`target_type=grant`）。
+`direct_grant_applied`（`target_type=grant`），记录替换后的用户来源组/权限 key
+以及被去掉的 key（`removed_authorization_group_keys` / `removed_permission_keys`）。
 
 错误：用户/应用不存在 → 404；用户非在职 → 409；目录/范围问题 → 422
 `SEMANTIC_VALIDATION_ERROR`，`details.errors` 为中文列表。含 `MANAGED_USERS` 的授权组在展开
