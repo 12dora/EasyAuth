@@ -173,6 +173,32 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | POST | `…/connectors/test`、`…/external-groups`、`…/mappings`、`…/reconcile`、`…/sync-runs` | 探测与同步 |
 | GET/PUT | `/apps/{app_key}/webhook-config` | **owner**：配置 URL/开关/轮换 secret |
 | POST | `/apps/{app_key}/webhook-config/test` | **owner**：发送测试事件 |
+
+**GET/PUT `/apps/{app_key}/webhook-config`** 字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `enabled` | 是否启用推送 |
+| `approval_callback_url` | 审批完成回调 |
+| `handover_url` | 生命周期交接 |
+| `onboard_url` | 入职事件 |
+| `events_url` | 权限传播事件（`grant.changed` / `catalog.changed`） |
+| `rotate_secret` | PUT 时为 true 则轮换密钥 |
+| `secret_configured` | GET 是否已配置密钥（明文只在轮换响应出现一次） |
+
+`events_url` 纳入 `allowed_hosts` 推导，与其它 URL 一样必须是公网 HTTPS。manifest 顶层 `webhook.events_url`（绝对地址或相对 `base_url` 的站内路径）会在导入时回填，控制台改过的值优先。
+
+**POST `/apps/{app_key}/webhook-config/test`** 的 `target` 可为 `approval_callback_url`、`handover_url`、`onboard_url` 或 `events_url`。
+
+### 权限传播事件
+
+授权事实变更经 `notify_grant_mutation` 投递 `grant.changed`；权限目录版本提升经 `bump_catalog_version` 投递 `catalog.changed`。目标为 `events_url`。未配置 `events_url` 或 secret 时跳过，不回滚授权。
+
+`grant.changed` 载荷：`event_type`、`app_key`、`user_id`、`grant_version`、`catalog_version`、`snapshot_version`、`changed_at`。
+
+`catalog.changed` 载荷：`event_type`、`app_key`、`catalog_version`、`changed_at`。
+
+签名头与既有 webhook 相同：`X-EasyAuth-Event`、`X-EasyAuth-Delivery`、`X-EasyAuth-Timestamp`、`X-EasyAuth-Signature`。
 | GET | `/apps/{app_key}/webhook-deliveries` | **owner**：投递列表 |
 | POST | `/apps/{app_key}/webhook-deliveries/{delivery_pk}/redeliver` | **owner**：失败重投 |
 
@@ -185,7 +211,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | 参数 | 说明 |
 | --- | --- |
 | `status` | `pending` / `delivered` / `failed` |
-| `event_type` | 如 `approval.completed`、`webhook.test` |
+| `event_type` | 如 `approval.completed`、`grant.changed`、`catalog.changed`、`webhook.test` |
 | `include_payload` | `true` 时附带 `payload`（仅 manage_app） |
 | `page` / `page_size` | 分页 |
 
@@ -313,6 +339,11 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 - 所有 `is_active` 应用；所有 active 授权组与未废弃权限，**不**看 `requestable` / 审批规则
 - `approver_options` 恒为 `[]`；`default_approver_user_ids` 为 `[]`，
   `approver_resolution_status` 为 `not_required`
+- 每个应用有平台内置授权组 `super_admin`（超级管理员）：`kind=role`，
+  `requestable=false`，grant 覆盖该应用全部 active、未废弃权限及其受支持的
+  active scope。控制台目录会列出该组；门户申请目录因 `requestable=false`
+  不会列出。控制台不得重命名、停用、删除或占用该 key；manifest 不得声明该
+  key。违规返回 `400 VALIDATION_ERROR`，`details.reason="reserved_authorization_group"`
 
 ### 直接授权
 
