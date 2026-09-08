@@ -142,7 +142,8 @@ const OrgTreeRuntimeContext = createContext<OrgTreeRuntime | null>(null);
 function useOrgTreeRuntime(): OrgTreeRuntime {
   const runtime = useContext(OrgTreeRuntimeContext);
   if (!runtime) {
-    throw new Error("OrgTreeItem 只能渲染在 OrgTree 内部。");
+    // 开发期接线错误(行组件脱离 OrgTree 单独渲染); 这个文件受"界面文案必须走 i18n"的护栏, 因此用英文。
+    throw new Error("OrgTreeItem must render inside OrgTree.");
   }
   return runtime;
 }
