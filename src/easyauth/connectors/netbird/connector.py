@@ -66,6 +66,7 @@ class _ApiBudget:
 class _PeerCache:
     def __init__(self) -> None:
         self.items: list[NetBirdPeer] | None = None
+        self.failed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,7 +241,12 @@ class NetBirdConnector(BaseConnector):
         if target is None or target.role != USER_ROLE_USER:
             # 不存在无事可做; owner/admin 是护栏豁免账号, 同样不触碰。
             return True
-        if not _external_write_allowed(instance, target.user_id, require_active_user=False):
+        if not _external_write_allowed(
+            instance,
+            target.user_id,
+            require_active_user=False,
+            require_clean_dirty=False,
+        ):
             return False
         if not target.is_blocked:
             client.update_user(
@@ -249,8 +255,7 @@ class NetBirdConnector(BaseConnector):
                 auto_group_ids=sorted(target.auto_group_ids),
                 is_blocked=True,
             )
-        _kick_peers_for_user(client, target.user_id)
-        return True
+        return _kick_peers_for_user(client, instance, target.user_id)
 
 
 def _client_from_config(config: dict[str, JsonValue]) -> NetBirdClient:
@@ -572,6 +577,7 @@ def _external_write_allowed(
     *,
     require_active_user: bool,
     allow_unknown_user: bool = False,
+    require_clean_dirty: bool = True,
 ) -> bool:
     # 局部导入避免框架加载连接器注册表时形成循环依赖。
     from easyauth.connectors.services import external_write_allowed  # noqa: PLC0415
@@ -581,6 +587,7 @@ def _external_write_allowed(
         user_id=user_id,
         require_active_user=require_active_user,
         allow_unknown_user=allow_unknown_user,
+        require_clean_dirty=require_clean_dirty,
     )
 
 
@@ -588,17 +595,26 @@ def _kick_cached_user_peers(context: _ReconcileContext, user_id: str) -> None:
     peers = _load_peers(context)
     if peers is None:
         return
-    removed = _delete_matching_peers(
-        context.client,
-        user_id,
-        peers,
-        budget=context.budget,
-        object_errors=context.object_errors,
-    )
+    try:
+        removed = _delete_matching_peers(
+            context.client,
+            context.instance,
+            user_id,
+            peers,
+            budget=context.budget,
+            object_errors=context.object_errors,
+            require_active_user=False,
+            allow_unknown_user=True,
+        )
+    except _FenceLostError:
+        _bump(context.stats, "users_fenced")
+        raise
     _bump(context.stats, "peers_removed", removed)
 
 
 def _load_peers(context: _ReconcileContext) -> list[NetBirdPeer] | None:
+    if context.peers.failed:
+        return None
     if context.peers.items is not None:
         return context.peers.items
     context.budget.charge()
@@ -606,36 +622,65 @@ def _load_peers(context: _ReconcileContext) -> list[NetBirdPeer] | None:
         loaded = context.client.list_peers()
     except NetBirdApiError as error:
         context.object_errors.append(f"列出 NetBird peer 失败: {error}")
-        context.peers.items = []
+        context.peers.failed = True
         return None
     context.peers.items = loaded
     return loaded
 
 
-def _kick_peers_for_user(client: NetBirdClient, user_id: str) -> None:
+def _kick_peers_for_user(
+    client: NetBirdClient,
+    instance: ConnectorInstance,
+    user_id: str,
+) -> bool:
     try:
         peers = client.list_peers()
     except NetBirdApiError as error:
         logger.warning("列出用户 %s 的 NetBird peer 失败: %s", user_id, error)
-        return
+        return False
     errors: list[str] = []
-    _ = _delete_matching_peers(client, user_id, peers, budget=None, object_errors=errors)
+    try:
+        _ = _delete_matching_peers(
+            client,
+            instance,
+            user_id,
+            peers,
+            budget=None,
+            object_errors=errors,
+            require_active_user=False,
+            require_clean_dirty=False,
+        )
+    except _FenceLostError:
+        return False
     for message in errors:
         logger.warning("%s", message)
+    return not errors
 
 
-def _delete_matching_peers(
+def _delete_matching_peers(  # noqa: PLR0913 - 踢线循环需要 client/fence/预算/错误桶同时在场。
     client: NetBirdClient,
+    instance: ConnectorInstance,
     user_id: str,
     peers: list[NetBirdPeer],
     *,
     budget: _ApiBudget | None,
     object_errors: list[str],
+    require_active_user: bool,
+    allow_unknown_user: bool = False,
+    require_clean_dirty: bool = True,
 ) -> int:
     removed = 0
     for peer in peers:
         if peer.user_id != user_id:
             continue
+        if not _external_write_allowed(
+            instance,
+            user_id,
+            require_active_user=require_active_user,
+            allow_unknown_user=allow_unknown_user,
+            require_clean_dirty=require_clean_dirty,
+        ):
+            raise _FenceLostError
         if budget is not None:
             budget.charge()
         try:

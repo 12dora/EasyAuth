@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 PERMANENT_CREATE_ERROR = "permanent create error"
 PERMANENT_UPDATE_ERROR = "permanent update error"
 PERMANENT_APPROVE_ERROR = "permanent approve error"
+PERMANENT_DELETE_PEER_ERROR = "permanent delete peer error"
 
 
 def _allow_expansion(_instance: ConnectorInstance, _user_id: str) -> bool:
@@ -35,8 +36,9 @@ def _allow_external_write(
     *,
     require_active_user: bool,
     allow_unknown_user: bool = False,
+    require_clean_dirty: bool = True,
 ) -> bool:
-    _ = (require_active_user, allow_unknown_user)
+    _ = (require_active_user, allow_unknown_user, require_clean_dirty)
     return True
 
 
@@ -46,8 +48,9 @@ def _deny_external_write(
     *,
     require_active_user: bool,
     allow_unknown_user: bool = False,
+    require_clean_dirty: bool = True,
 ) -> bool:
-    _ = (require_active_user, allow_unknown_user)
+    _ = (require_active_user, allow_unknown_user, require_clean_dirty)
     return False
 
 
@@ -66,6 +69,8 @@ class _FakeNetBirdClient:
     fail_approve_user_ids: set[str] = field(default_factory=set)
     peers: list[NetBirdPeer] = field(default_factory=list)
     deleted_peers: list[str] = field(default_factory=list)
+    list_peers_error: str = ""
+    fail_delete_peer_ids: set[str] = field(default_factory=set)
 
     def list_users(self) -> list[NetBirdUser]:
         if self.fail_with:
@@ -134,13 +139,15 @@ class _FakeNetBirdClient:
         )
 
     def list_peers(self) -> list[NetBirdPeer]:
-        if self.fail_with:
-            raise NetBirdApiError(self.fail_with)
+        if self.fail_with or self.list_peers_error:
+            raise NetBirdApiError(self.list_peers_error or self.fail_with)
         self.calls.append(("list_peers", ""))
         return list(self.peers)
 
     def delete_peer(self, peer_id: str) -> None:
         self.calls.append(("delete_peer", peer_id))
+        if peer_id in self.fail_delete_peer_ids:
+            raise NetBirdApiError(PERMANENT_DELETE_PEER_ERROR, status_code=500)
         self.deleted_peers.append(peer_id)
         self.peers = [peer for peer in self.peers if peer.peer_id != peer_id]
 
@@ -636,8 +643,9 @@ def test_reconcile_blocks_ungranted_jit_user_without_local_mirror(
         *,
         require_active_user: bool,
         allow_unknown_user: bool = False,
+        require_clean_dirty: bool = True,
     ) -> bool:
-        _ = (_instance, require_active_user)
+        _ = (_instance, require_active_user, require_clean_dirty)
         if user_id == "jit-1":
             return allow_unknown_user
         return True
@@ -829,3 +837,135 @@ def test_reconcile_unblocks_blocked_user_without_approve(
     assert report.status == "success"
     assert report.stats["users_unblocked"] == 1
     assert "users_approved" not in report.stats
+
+
+def test_reconcile_stops_peer_delete_when_fence_lost_mid_loop(
+    fake_client: _FakeNetBirdClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remaining = {"n": 2}
+
+    def write_allowed(
+        _instance: ConnectorInstance,
+        _user_id: str,
+        *,
+        require_active_user: bool,
+        allow_unknown_user: bool = False,
+        require_clean_dirty: bool = True,
+    ) -> bool:
+        _ = (_instance, _user_id, require_active_user, allow_unknown_user, require_clean_dirty)
+        if remaining["n"] <= 0:
+            return False
+        remaining["n"] -= 1
+        return True
+
+    monkeypatch.setattr(connector_module, "_external_write_allowed", write_allowed)
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "u-2": _netbird_user("u-2", auto_group_ids=frozenset({"g1"})),
+    }
+    fake_client.peers = [
+        _netbird_peer("p-2a", user_id="u-2"),
+        _netbird_peer("p-2b", user_id="u-2"),
+    ]
+
+    report = NetBirdConnector().reconcile(_instance(), _desired({}, managed=frozenset({"g1"})))
+
+    assert fake_client.deleted_peers == ["p-2a"]
+    assert report.status == "failed"
+    assert "fence" in report.error
+    assert report.stats["users_fenced"] == 1
+
+
+def test_on_user_offboarded_stops_peer_delete_when_fence_lost_mid_loop(
+    fake_client: _FakeNetBirdClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remaining = {"n": 2}
+
+    def write_allowed(
+        _instance: ConnectorInstance,
+        _user_id: str,
+        *,
+        require_active_user: bool,
+        allow_unknown_user: bool = False,
+        require_clean_dirty: bool = True,
+    ) -> bool:
+        _ = (_instance, _user_id, require_active_user, allow_unknown_user, require_clean_dirty)
+        if remaining["n"] <= 0:
+            return False
+        remaining["n"] -= 1
+        return True
+
+    monkeypatch.setattr(connector_module, "_external_write_allowed", write_allowed)
+    fake_client.users = {"u-1": _netbird_user("u-1")}
+    fake_client.peers = [
+        _netbird_peer("p-1", user_id="u-1"),
+        _netbird_peer("p-2", user_id="u-1"),
+    ]
+
+    handled = NetBirdConnector().on_user_offboarded(
+        _instance(),
+        UserMirror(authentik_user_id="u-1"),
+    )
+
+    assert handled is False
+    assert fake_client.deleted_peers == ["p-1"]
+
+
+def test_on_user_offboarded_returns_false_when_peer_list_fails(
+    fake_client: _FakeNetBirdClient,
+) -> None:
+    fake_client.users = {"u-1": _netbird_user("u-1")}
+    fake_client.peers = [_netbird_peer("p-1", user_id="u-1")]
+    fake_client.list_peers_error = "list peers failed"
+
+    handled = NetBirdConnector().on_user_offboarded(
+        _instance(),
+        UserMirror(authentik_user_id="u-1"),
+    )
+
+    assert handled is False
+    assert fake_client.updated_users == [
+        {"user_id": "u-1", "role": "user", "auto_group_ids": [], "is_blocked": True},
+    ]
+    assert fake_client.deleted_peers == []
+
+
+def test_on_user_offboarded_returns_false_when_peer_delete_fails(
+    fake_client: _FakeNetBirdClient,
+) -> None:
+    fake_client.users = {"u-1": _netbird_user("u-1")}
+    fake_client.peers = [
+        _netbird_peer("p-1", user_id="u-1"),
+        _netbird_peer("p-2", user_id="u-1"),
+    ]
+    fake_client.fail_delete_peer_ids = {"p-2"}
+
+    handled = NetBirdConnector().on_user_offboarded(
+        _instance(),
+        UserMirror(authentik_user_id="u-1"),
+    )
+
+    assert handled is False
+    assert fake_client.deleted_peers == ["p-1"]
+
+
+def test_reconcile_peer_list_failure_is_partial_and_does_not_cache_empty(
+    fake_client: _FakeNetBirdClient,
+) -> None:
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "u-2": _netbird_user("u-2", auto_group_ids=frozenset({"g1"})),
+        "u-3": _netbird_user("u-3"),
+    }
+    fake_client.list_peers_error = "list peers failed"
+
+    report = NetBirdConnector().reconcile(_instance(), _desired({}, managed=frozenset({"g1"})))
+
+    assert report.status == "partial"
+    assert "列出 NetBird peer 失败" in report.error
+    assert fake_client.deleted_peers == []
+    assert "peers_removed" not in report.stats
+    assert fake_client.updated_users[0]["user_id"] == "u-2"
+    assert fake_client.updated_users[0]["is_blocked"] is True

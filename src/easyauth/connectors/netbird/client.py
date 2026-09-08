@@ -30,11 +30,6 @@ MAX_GROUP_PAGES: Final = 100
 GROUP_PAGINATION_CONTRACT_MESSAGE: Final = (
     f"NetBird /api/groups 必须支持 page/page_size 分页, 超过 {MAX_GROUP_PAGES} 页仍未结束。"
 )
-PEER_PAGE_SIZE: Final = GROUP_PAGE_SIZE
-MAX_PEER_PAGES: Final = MAX_GROUP_PAGES
-PEER_PAGINATION_CONTRACT_MESSAGE: Final = (
-    f"NetBird /api/peers 必须支持 page/page_size 分页, 超过 {MAX_PEER_PAGES} 页仍未结束。"
-)
 
 USER_ROLE_USER: Final = "user"
 USER_ROLE_ADMIN: Final = "admin"
@@ -209,34 +204,12 @@ class NetBirdClient:
         raise NetBirdApiError(GROUP_PAGINATION_CONTRACT_MESSAGE)
 
     def list_peers(self) -> list[NetBirdPeer]:
-        return [peer for page in self.iter_peer_pages() for peer in page]
-
-    def iter_peer_pages(self) -> list[list[NetBirdPeer]]:
-        # 与 /api/groups 同一套 page/page_size 契约; 若 fork 未分页且一次返回超过
-        # page_size 的完整列表, 视为已收齐, 避免把同一批 ID 再打第二页。
-        pages: list[list[NetBirdPeer]] = []
-        seen_ids: set[str] = set()
-        for page_number in range(1, MAX_PEER_PAGES + 1):
-            payload = self._request(
-                "GET",
-                f"/api/peers?page={page_number}&page_size={PEER_PAGE_SIZE}",
-            )
-            if not isinstance(payload, list):
-                message = "NetBird /api/peers 响应必须是 JSON 数组。"
-                raise NetBirdApiError(message)
-            peers = [_parse_peer(item) for item in payload]
-            ids = [peer.peer_id for peer in peers]
-            _assert_unique_ids(ids, label="peers")
-            duplicate_ids = seen_ids & set(ids)
-            if duplicate_ids:
-                duplicate_id_list = ", ".join(sorted(duplicate_ids))
-                message = f"NetBird /api/peers 分页响应包含跨页重复 ID: {duplicate_id_list}。"
-                raise NetBirdApiError(message)
-            seen_ids.update(ids)
-            pages.append(peers)
-            if len(peers) != PEER_PAGE_SIZE:
-                return pages
-        raise NetBirdApiError(PEER_PAGINATION_CONTRACT_MESSAGE)
+        # 本仓库对接的 NetBird fork 忽略 page/page_size, 一次返回全部 peer。
+        payload = self._request("GET", "/api/peers")
+        if not isinstance(payload, list):
+            message = "NetBird /api/peers 响应必须是 JSON 数组。"
+            raise NetBirdApiError(message)
+        return _unique_peers([_parse_peer(item) for item in payload])
 
     def delete_peer(self, peer_id: str) -> None:
         # DELETE 不是幂等重试范围; 目标已不存在视为踢线成功。
@@ -424,3 +397,14 @@ def _assert_unique_ids(ids: list[str], *, label: str) -> None:
     if len(ids) != len(set(ids)):
         message = f"NetBird /api/{label} 响应包含重复 ID。"
         raise NetBirdApiError(message)
+
+
+def _unique_peers(peers: list[NetBirdPeer]) -> list[NetBirdPeer]:
+    unique: list[NetBirdPeer] = []
+    seen_ids: set[str] = set()
+    for peer in peers:
+        if peer.peer_id in seen_ids:
+            continue
+        seen_ids.add(peer.peer_id)
+        unique.append(peer)
+    return unique

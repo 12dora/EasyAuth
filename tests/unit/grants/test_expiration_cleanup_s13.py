@@ -108,6 +108,44 @@ def test_s13_cleanup_expired_memberships_keeps_parent_until_last_membership_expi
         assert audit_log.metadata["reason"] == GRANT_EXPIRATION_REASON
 
 
+def test_s13_partial_expiry_notifies_urgent_connector_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = timezone.now()
+    user = UserMirror.objects.create(authentik_user_id="s13-cleanup-urgent-user")
+    app = App.objects.create(app_key="s13-cleanup-urgent-app", name="S13 Urgent")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="operator",
+        kind="role",
+        name="Operator",
+    )
+    permission = _scoped_permission(app, key="invoice.read", name="Read invoices")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group, expires_at=now)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key=DEFAULT_SCOPE_KEY,
+        expires_at=now + timedelta(minutes=10),
+    )
+    seen: list[tuple[int, str]] = []
+
+    def capture_expired(mutated: AccessGrant) -> None:
+        seen.append((mutated.id, mutated.status))
+        mutated.connector_dispatch_urgent = True
+
+    monkeypatch.setattr("easyauth.grants.expiration.notify_grant_expired", capture_expired)
+
+    result = cleanup_expired_grants(now=now)
+
+    grant.refresh_from_db()
+    assert result.expired_count == 1
+    assert seen == [(grant.id, GRANT_STATUS_ACTIVE)]
+    assert grant.status == GRANT_STATUS_ACTIVE
+    assert grant.is_current is True
+
+
 def test_s13_cleanup_expired_memberships_skips_candidate_consumed_by_concurrent_revoke(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -7,7 +7,7 @@ from typing import Final
 from celery import shared_task
 from django.utils import timezone
 
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.connectors.base import ConnectorError
 from easyauth.connectors.dispatch import (
     OFFBOARD_TASK_NAME,
@@ -141,21 +141,32 @@ def prune_connector_sync_runs_task() -> int:
 @shared_task(name=OFFBOARD_TASK_NAME, acks_late=True)
 def offboard_user_task(authentik_user_id: str) -> int:
     """认领租约后走连接器离职快路径, 再投递 countdown=0 的全量对账。"""
-    user = UserMirror.objects.filter(authentik_user_id=authentik_user_id).first()
-    if user is None:
+    if not UserMirror.objects.filter(authentik_user_id=authentik_user_id).exists():
         return 0
     instances = list(ConnectorInstance.objects.filter(enabled=True))
     for instance in instances:
-        _run_offboard_fast_path(instance, user)
-        _ = request_instance_reconcile(
-            instance.id,
-            trigger=SYNC_TRIGGER_OFFBOARD,
-            countdown=0,
-        )
+        try:
+            _run_offboard_fast_path(instance, authentik_user_id)
+        finally:
+            _ = request_instance_reconcile(
+                instance.id,
+                trigger=SYNC_TRIGGER_OFFBOARD,
+                countdown=0,
+            )
     return len(instances)
 
 
-def _run_offboard_fast_path(instance: ConnectorInstance, user: UserMirror) -> None:
+def _run_offboard_fast_path(instance: ConnectorInstance, authentik_user_id: str) -> None:
+    user = UserMirror.objects.filter(authentik_user_id=authentik_user_id).first()
+    if user is None:
+        return
+    if user.status == USER_STATUS_ACTIVE:
+        logger.info(
+            "跳过离职快路径: 用户 %s 当前状态为 active, 仅请求全量对账 instance_id=%s",
+            authentik_user_id,
+            instance.id,
+        )
+        return
     connector = get_connector(instance.connector_key)
     if connector is None:
         return
@@ -163,12 +174,20 @@ def _run_offboard_fast_path(instance: ConnectorInstance, user: UserMirror) -> No
     if claimed is None:
         return
     try:
+        user = UserMirror.objects.filter(authentik_user_id=authentik_user_id).first()
+        if user is None or user.status == USER_STATUS_ACTIVE:
+            logger.info(
+                "跳过离职快路径: 用户 %s 已回到 active, 仅请求全量对账 instance_id=%s",
+                authentik_user_id,
+                instance.id,
+            )
+            return
         _ = connector.on_user_offboarded(claimed, user)
     except ConnectorError:
         logger.exception(
             "连接器 %s 离职快路径失败 user_id=%s instance_id=%s",
             instance.connector_key,
-            user.authentik_user_id,
+            authentik_user_id,
             instance.id,
         )
     finally:

@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 from django.utils import timezone
 
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DEPARTED, UserMirror
 from easyauth.applications.models import App
 from easyauth.connectors import dispatch as dispatch_module
 from easyauth.connectors.base import ExternalGroup, ExternalGroupPage
@@ -96,7 +96,10 @@ def test_offboard_task_uses_same_serial_worker_as_reconcile(
     # Given
     app = App.objects.create(app_key="conn-task-off", name="X")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
-    user = UserMirror.objects.create(authentik_user_id="conn-task-off-u1")
+    user = UserMirror.objects.create(
+        authentik_user_id="conn-task-off-u1",
+        status=USER_STATUS_DEPARTED,
+    )
 
     # When
     handled = offboard_user_task(user.authentik_user_id)
@@ -183,7 +186,10 @@ def test_offboard_during_active_lease_keeps_dirty_without_duplicate_worker(
     # Given: 已有活跃对账租约, 快路径不得抢占。
     app = App.objects.create(app_key="conn-task-fb", name="X")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
-    user = UserMirror.objects.create(authentik_user_id="conn-task-fb-u1")
+    user = UserMirror.objects.create(
+        authentik_user_id="conn-task-fb-u1",
+        status=USER_STATUS_DEPARTED,
+    )
     instance.reconcile_lease_token = UUID("b93264e2-69b3-4594-aa49-41af8cf3e32d")
     instance.reconcile_lease_expires_at = timezone.now() + timedelta(minutes=1)
     instance.save(
@@ -200,6 +206,54 @@ def test_offboard_during_active_lease_keeps_dirty_without_duplicate_worker(
     instance.refresh_from_db()
     assert instance.reconcile_dirty is True
     assert instance.reconcile_pending_trigger == SYNC_TRIGGER_OFFBOARD
+
+
+def test_offboard_skips_fast_path_when_user_is_active_again(
+    sent_tasks: _SendTaskRecorder,
+) -> None:
+    app = App.objects.create(app_key="conn-task-stale-off", name="X")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    user = UserMirror.objects.create(
+        authentik_user_id="conn-task-stale-off-u1",
+        status=USER_STATUS_DEPARTED,
+    )
+    user.status = USER_STATUS_ACTIVE
+    user.save(update_fields=["status", "updated_at"])
+
+    handled = offboard_user_task(user.authentik_user_id)
+
+    assert handled == 1
+    assert FakeConnector.offboarded_user_ids == []
+    assert sent_tasks.calls == [
+        ("easyauth.connectors.reconcile_instance", (instance.id,)),
+    ]
+    instance.refresh_from_db()
+    assert instance.reconcile_dirty is True
+    assert instance.reconcile_pending_trigger == SYNC_TRIGGER_OFFBOARD
+    assert instance.reconcile_lease_token is None
+
+
+def test_offboard_requests_reconcile_when_fast_path_raises(
+    sent_tasks: _SendTaskRecorder,
+) -> None:
+    app = App.objects.create(app_key="conn-task-off-err", name="X")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    user = UserMirror.objects.create(
+        authentik_user_id="conn-task-off-err-u1",
+        status=USER_STATUS_DEPARTED,
+    )
+    FakeConnector.next_error_message = "外部 API 不可达"
+
+    handled = offboard_user_task(user.authentik_user_id)
+
+    assert handled == 1
+    assert FakeConnector.offboarded_user_ids == []
+    assert sent_tasks.calls == [
+        ("easyauth.connectors.reconcile_instance", (instance.id,)),
+    ]
+    instance.refresh_from_db()
+    assert instance.reconcile_dirty is True
+    assert instance.reconcile_lease_token is None
 
 
 def test_scheduler_enqueues_due_instances_only(sent_tasks: _SendTaskRecorder) -> None:

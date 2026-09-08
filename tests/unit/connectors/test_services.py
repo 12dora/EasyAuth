@@ -26,9 +26,11 @@ from easyauth.connectors.services import (
     _claim_generation,  # pyright: ignore[reportPrivateUsage]
     _finish_generation,  # pyright: ignore[reportPrivateUsage]
     build_desired_state,
+    claim_instance_lease,
     external_write_allowed,
     mark_reconcile_dirty,
     reconcile_instance,
+    release_instance_lease,
 )
 from easyauth.grants.models import AccessGrantGroup, AccessGrantPermission
 from easyauth.grants.services import (
@@ -643,6 +645,51 @@ def test_non_active_user_is_never_projected_for_unblock() -> None:
 
     assert desired.user_groups == {}
     assert desired.managed_group_refs == frozenset({"immutable-group-id"})
+
+
+def test_fast_path_claim_preserves_dirty_and_queued_across_release() -> None:
+    app, _mapped, _unmapped = _app_with_groups("conn-fast-lease")
+    user = UserMirror.objects.create(authentik_user_id="conn-fast-lease-u1")
+    queued_at = timezone.now()
+    instance = ConnectorInstance.objects.create(
+        app=app,
+        connector_key="fake",
+        enabled=True,
+        reconcile_generation=3,
+        reconcile_dirty=True,
+        reconcile_worker_queued=True,
+        reconcile_worker_queued_at=queued_at,
+        reconcile_pending_trigger=SYNC_TRIGGER_MANUAL,
+    )
+
+    claimed = claim_instance_lease(instance.id)
+    assert claimed is not None
+    claimed.refresh_from_db()
+    assert claimed.reconcile_dirty is True
+    assert claimed.reconcile_worker_queued is True
+    assert claimed.reconcile_worker_queued_at == queued_at
+    assert claimed.reconcile_generation == 3
+    assert claimed.reconcile_lease_token is not None
+    assert external_write_allowed(
+        claimed,
+        user_id=user.authentik_user_id,
+        require_active_user=False,
+        require_clean_dirty=False,
+    )
+    assert not external_write_allowed(
+        claimed,
+        user_id=user.authentik_user_id,
+        require_active_user=False,
+    )
+
+    release_instance_lease(claimed)
+    instance.refresh_from_db()
+    assert instance.reconcile_dirty is True
+    assert instance.reconcile_worker_queued is True
+    assert instance.reconcile_worker_queued_at == queued_at
+    assert instance.reconcile_generation == 3
+    assert instance.reconcile_lease_token is None
+    assert instance.reconcile_lease_expires_at is None
 
 
 def test_duplicate_external_account_across_apps_fails_second_reconcile() -> None:

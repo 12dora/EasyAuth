@@ -532,7 +532,10 @@ def _bind_external_account(instance: ConnectorInstance, connector: BaseConnector
 
 
 def claim_instance_lease(instance_id: int) -> ConnectorInstance | None:
-    """认领实例租约供快路径写入; 已有活跃租约时不抢占, 返回 None。"""
+    """认领实例租约供快路径写入; 已有活跃租约时不抢占, 返回 None。
+
+    快路径不得清掉 dirty/queued: 若任务中途失败, 待对账请求必须仍在。
+    """
     now = timezone.now()
     with transaction.atomic():
         instance = (
@@ -544,19 +547,12 @@ def claim_instance_lease(instance_id: int) -> ConnectorInstance | None:
         )
         if instance is None or _reconcile_lease_is_active(instance, now):
             return None
-        instance.reconcile_worker_queued = False
-        instance.reconcile_worker_queued_at = None
         instance.reconcile_lease_token = uuid.uuid4()
         instance.reconcile_lease_expires_at = now + timedelta(seconds=RECONCILE_LEASE_SECONDS)
-        # 快路径写入与对账相同, 要求 dirty=False 才能通过 external_write_allowed。
-        instance.reconcile_dirty = False
         instance.save(
             update_fields=[
-                "reconcile_worker_queued",
-                "reconcile_worker_queued_at",
                 "reconcile_lease_token",
                 "reconcile_lease_expires_at",
-                "reconcile_dirty",
                 "updated_at",
             ],
         )
@@ -564,7 +560,7 @@ def claim_instance_lease(instance_id: int) -> ConnectorInstance | None:
 
 
 def release_instance_lease(instance: ConnectorInstance) -> None:
-    """释放本任务持有的租约, 让后续对账可以认领。"""
+    """释放本任务持有的租约, 让后续对账可以认领; dirty/queued 保持认领时的原值。"""
     with transaction.atomic():
         locked = (
             ConnectorInstance.objects.select_for_update()
@@ -586,8 +582,13 @@ def external_write_allowed(
     user_id: str,
     require_active_user: bool,
     allow_unknown_user: bool = False,
+    require_clean_dirty: bool = True,
 ) -> bool:
-    """外部写入前续租并检查 lease_token + generation fencing。"""
+    """外部写入前续租并检查 lease_token + generation fencing。
+
+    全量对账要求 dirty=False(新 generation 到达则停止写入)。
+    快路径只要求租约 token 仍有效, 不得因待对账 dirty 而拒绝踢线。
+    """
     user_exists = UserMirror.objects.filter(authentik_user_id=user_id).exists()
     if not user_exists:
         # 外部存在、本地无镜像的 JIT 用户按定义无授权; 只允许收缩/封禁, 扩权仍拒绝。
@@ -605,13 +606,17 @@ def external_write_allowed(
         return False
     now = timezone.now()
     renewed_until = now + timedelta(seconds=RECONCILE_LEASE_SECONDS)
-    updated = ConnectorInstance.objects.filter(
+    query = Q(
         id=instance.id,
         reconcile_generation=instance.reconcile_generation,
-        reconcile_dirty=False,
         reconcile_lease_token=instance.reconcile_lease_token,
         reconcile_lease_expires_at__gt=now,
-    ).update(reconcile_lease_expires_at=renewed_until)
+    )
+    if require_clean_dirty:
+        query &= Q(reconcile_dirty=False)
+    updated = ConnectorInstance.objects.filter(query).update(
+        reconcile_lease_expires_at=renewed_until,
+    )
     if updated:
         instance.reconcile_lease_expires_at = renewed_until
     return updated == 1

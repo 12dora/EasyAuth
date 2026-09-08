@@ -11,7 +11,6 @@ from easyauth.connectors.netbird.client import (
     GROUP_PAGE_SIZE,
     MAX_GROUP_PAGES,
     MAX_RESPONSE_BYTES,
-    PEER_PAGE_SIZE,
     NetBirdApiError,
     NetBirdClient,
 )
@@ -242,7 +241,7 @@ def test_approve_user_posts_to_approve_and_parses_user(
     assert user.auto_group_ids == frozenset({"g1"})
 
 
-def test_list_peers_parses_user_id_and_stops_on_short_page(
+def test_list_peers_parses_user_id_without_paging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen_paths: list[str] = []
@@ -257,9 +256,41 @@ def test_list_peers_parses_user_id_and_stops_on_short_page(
     peers = _client().list_peers()
 
     assert [(peer.peer_id, peer.user_id) for peer in peers] == [("p1", "u1"), ("p2", "u2")]
-    assert seen_paths == [
-        f"https://netbird.example.com/api/peers?page=1&page_size={PEER_PAGE_SIZE}",
-    ]
+    assert seen_paths == ["https://netbird.example.com/api/peers"]
+
+
+@pytest.mark.parametrize("peer_count", [99, 100, 101])
+def test_list_peers_returns_full_list_in_one_request(
+    monkeypatch: pytest.MonkeyPatch,
+    peer_count: int,
+) -> None:
+    seen_paths: list[str] = []
+    payload = (
+        "[" + ",".join(f'{{"id":"p{index}","user_id":"u1"}}' for index in range(peer_count)) + "]"
+    ).encode()
+
+    def open_response(request: _UrlRequest, *, timeout: float) -> _Response:
+        _ = timeout
+        seen_paths.append(request.full_url)
+        return _Response([payload])
+
+    monkeypatch.setattr(client_module, "urlopen", open_response)
+
+    peers = _client().list_peers()
+
+    assert [peer.peer_id for peer in peers] == [f"p{index}" for index in range(peer_count)]
+    assert seen_paths == ["https://netbird.example.com/api/peers"]
+
+
+def test_list_peers_deduplicates_by_peer_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _Response(
+        [b'[{"id":"p1","user_id":"u1"},{"id":"p1","user_id":"u1"},{"id":"p2","user_id":"u2"}]'],
+    )
+    monkeypatch.setattr(client_module, "urlopen", _static_response(response))
+
+    peers = _client().list_peers()
+
+    assert [(peer.peer_id, peer.user_id) for peer in peers] == [("p1", "u1"), ("p2", "u2")]
 
 
 def test_list_peers_allows_missing_user_id(monkeypatch: pytest.MonkeyPatch) -> None:

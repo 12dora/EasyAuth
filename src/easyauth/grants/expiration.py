@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from easyauth.connectors.dispatch import notify_grant_expired
 from easyauth.grants.models import (
     GRANT_STATUS_EXPIRED,
     AccessGrant,
@@ -98,6 +99,9 @@ def expire_grant(
         actor_id=actor_id,
         reason=reason,
     )
+    # 部分过期时 status 仍为 active; 过期清理必须立即对账, 不能等 5 秒去抖。
+    # GrantService.expire_grant 随后的 notify_grant_mutation 会被去重。
+    notify_grant_expired(grant)
 
 
 def _due_groups(grant: AccessGrant, cutoff: datetime) -> QuerySet[AccessGrantGroup]:

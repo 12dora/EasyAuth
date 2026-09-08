@@ -20,17 +20,28 @@ OFFBOARD_TASK_NAME: Final = "easyauth.connectors.offboard_user"
 RECONCILE_COALESCE_SECONDS: Final = 5
 
 
-def notify_grant_mutation(grant: AccessGrant) -> None:
+def notify_grant_mutation(grant: AccessGrant, *, urgent: bool = False) -> None:
     """GrantService 事务内的唯一挂点(F2): 授权事实与分发事件一同提交。"""
+    if getattr(grant, "connector_dispatch_emitted", False):
+        return
+    grant.connector_dispatch_emitted = True
     app_id = grant.app_id
     user_id = grant.user.authentik_user_id
     dispatch_grant_event(
         app_id=app_id,
         user_id=user_id,
         action="grant_mutated",
-        urgent=grant.status == GRANT_STATUS_EXPIRED,
+        urgent=urgent
+        or bool(getattr(grant, "connector_dispatch_urgent", False))
+        or grant.status == GRANT_STATUS_EXPIRED,
     )
     emit_grant_changed(grant)
+
+
+def notify_grant_expired(grant: AccessGrant) -> None:
+    """过期清理路径: 部分过期时 status 仍为 active, 仍立即对账撤权。"""
+    grant.connector_dispatch_urgent = True
+    notify_grant_mutation(grant, urgent=True)
 
 
 def dispatch_grant_event(

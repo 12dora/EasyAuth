@@ -16,7 +16,12 @@ from easyauth.connectors.dispatch import (
     request_instance_reconcile,
 )
 from easyauth.connectors.models import SYNC_TRIGGER_EVENT, ConnectorInstance
-from easyauth.grants.models import AccessGrant, AccessGrantPermission
+from easyauth.grants.models import (
+    GRANT_STATUS_ACTIVE,
+    AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
 from easyauth.grants.services import (
     AuthorizationGroupGrantInput,
     GrantExpirationInput,
@@ -282,4 +287,49 @@ def test_expired_grant_dispatches_urgent_reconcile(
         )
 
     assert expired is not None
+    assert sent_tasks.calls == [(RECONCILE_TASK_NAME, (instance.id,), 0)]
+
+
+def test_partial_expiry_dispatches_urgent_reconcile(
+    sent_tasks: _SendTaskRecorder,
+    django_capture_on_commit_callbacks: DjangoCaptureOnCommitCallbacks,
+) -> None:
+    app = App.objects.create(app_key="conn-partial-expire", name="X")
+    user = UserMirror.objects.create(authentik_user_id="conn-partial-expire-u1")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    remaining_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="remaining",
+        kind="bundle",
+        name="Remaining",
+    )
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=remaining_group)
+    _ = AppScope.objects.get_or_create(app=app, key="GLOBAL", defaults={"name": "Global"})
+    permission = Permission.objects.create(
+        app=app,
+        key="vpn.access",
+        name="VPN access",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key="GLOBAL",
+        expires_at=timezone.now(),
+    )
+
+    with django_capture_on_commit_callbacks(execute=True):
+        expired = GrantService.expire_grant(
+            GrantExpirationInput(
+                user=user,
+                app=app,
+                actor_type="system",
+                actor_id="grant-expiration-cleanup",
+            ),
+        )
+
+    assert expired is not None
+    expired.refresh_from_db()
+    assert expired.status == GRANT_STATUS_ACTIVE
     assert sent_tasks.calls == [(RECONCILE_TASK_NAME, (instance.id,), 0)]
