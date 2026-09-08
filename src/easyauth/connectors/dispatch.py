@@ -7,6 +7,7 @@ from django.db import transaction
 from easyauth.connectors.models import SYNC_TRIGGER_EVENT, ConnectorInstance
 from easyauth.connectors.services import mark_reconcile_dirty
 from easyauth.outbox.services import enqueue_task
+from easyauth.webhooks.events import emit_grant_changed
 
 if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
@@ -23,6 +24,7 @@ def notify_grant_mutation(grant: AccessGrant) -> None:
     app_id = grant.app_id
     user_id = grant.user.authentik_user_id
     dispatch_grant_event(app_id=app_id, user_id=user_id, action="grant_mutated")
+    emit_grant_changed(grant)
 
 
 def dispatch_grant_event(*, app_id: int, user_id: str, action: str) -> None:

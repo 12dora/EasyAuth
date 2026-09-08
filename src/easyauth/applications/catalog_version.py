@@ -7,6 +7,7 @@ from django.db.models import F
 
 from easyauth.applications.models import App
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.webhooks.events import emit_catalog_changed
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -47,4 +48,5 @@ def bump_catalog_version(
             metadata=audit_metadata,
         ),
     )
+    emit_catalog_changed(app)
     return app
