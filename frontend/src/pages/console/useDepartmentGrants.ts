@@ -171,6 +171,8 @@ export function useDepartmentGrants() {
     policiesQuery,
     department: currentList?.department,
     policies: loadedList?.items ?? [],
+    /** 定义在本部门上的策略(不含继承); 新增授权时据此认出"这个应用已经授过了"。 */
+    ownPolicies: currentList ? currentList.items.filter((policy) => !policy.inherited) : [],
     selectedPath,
     selectedDeptId,
     selectDepartment: setSelectedDeptId,
@@ -188,12 +190,13 @@ export function useDepartmentGrants() {
     setDeleteTarget,
     saveMutation,
     deleteMutation,
-    submitEditor: (submission: GrantSubmission) => {
+    /** policyId 为空即新建; 弹窗在新建态载入了本部门已有策略时会带上它的 id, 提交即更新那一条。 */
+    submitEditor: (submission: GrantSubmission, policyId: number | null) => {
       if (!tree || !editor || !selectedDeptId) {
         return;
       }
       saveMutation.mutate({
-        policyId: editor.policy ? editor.policy.id : null,
+        policyId,
         submission,
         deptId: selectedDeptId,
         sourceSlug: tree.source_slug,

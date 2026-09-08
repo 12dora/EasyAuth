@@ -46,10 +46,13 @@ const DEPARTMENTS: Record<string, { memberCount: number; subtreeMemberCount: num
 
 const APPS: Record<string, { app_key: string; name: string; alias: string }> = {
   crm: { app_key: "crm", name: "CRM", alias: "客户管理" },
+  // 第二个应用: 本部门还没授过的应用才走"新建", 已授过的应用会被弹窗认出来改成更新。
+  hr: { app_key: "hr", name: "HR", alias: "人事" },
 };
 
 const GROUPS: Record<string, { key: string; name: string; kind: string }> = {
   sales: { key: "sales", name: "销售", kind: "role" },
+  hr_admin: { key: "hr_admin", name: "人事管理员", kind: "role" },
 };
 
 const PERMISSIONS: Record<string, { key: string; name: string; scope: string; scope_name: string }> = {
@@ -62,7 +65,10 @@ const PERMISSIONS: Record<string, { key: string; name: string; scope: string; sc
 };
 
 const CATALOG = {
-  apps: [{ id: 1, ...APPS.crm }],
+  apps: [
+    { id: 1, ...APPS.crm },
+    { id: 2, ...APPS.hr },
+  ],
   approver_options: [],
   authorization_groups: [
     {
@@ -72,6 +78,14 @@ const CATALOG = {
       kind: "role",
       name: "销售",
       grants: [{ permission_key: "crm.customer.read", scope_key: "SELF" }],
+    },
+    {
+      id: 12,
+      app_key: "hr",
+      key: "hr_admin",
+      kind: "role",
+      name: "人事管理员",
+      grants: [],
     },
   ],
   permission_groups: [
@@ -285,27 +299,27 @@ describe("DepartmentGrantsPage", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "新增授权" });
     expect(within(dialog).getByText("将自动授予 公司 及其子部门的全部在职人员")).toBeVisible();
-    await fillGrantForm(user, dialog, "公司统一放开销售权限");
+    await fillGrantForm(user, dialog, "公司统一开放人事查询");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => expect(createPolicyBody(fetchMock)).not.toBeNull());
     expect(createPolicyBody(fetchMock)).toEqual({
-      app_key: "crm",
-      authorization_group_keys: ["sales"],
+      app_key: "hr",
+      authorization_group_keys: ["hr_admin"],
       direct_grants: [],
       grant_type: "permanent",
       grant_expires_at: null,
-      reason: "公司统一放开销售权限",
+      reason: "公司统一开放人事查询",
       source_slug: SOURCE_SLUG,
       corp_id: CORP_ID,
     });
     expect(await screen.findByText("已新增授权")).toBeVisible();
-    expect(await screen.findByText("公司统一放开销售权限")).toBeVisible();
+    expect(await screen.findByText("公司统一开放人事查询")).toBeVisible();
 
     await user.click(screen.getByText("销售部"));
     // 新策略定义在公司, 因此在销售部是继承行。切部门期间上一份数据还留着, 断言要等新载荷。
     await waitFor(() => expect(screen.getAllByText("继承自 公司")).toHaveLength(2));
-    expect(screen.getByText("公司统一放开销售权限")).toBeVisible();
+    expect(screen.getByText("公司统一开放人事查询")).toBeVisible();
   });
 
   test("在子部门编辑继承行改的是定义它的那条策略, 公司与其它部门同步更新", async () => {
@@ -432,6 +446,38 @@ describe("DepartmentGrantsPage", () => {
     expect(screen.getByText("销售部季度支持")).toBeVisible();
   });
 
+  test("新增授权选中已有授权的应用时载入现有策略, 保存即更新而不是再建一条", async () => {
+    const { fetchMock } = stubFetch();
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await screen.findByText("客户管理 (CRM)");
+    await user.click(screen.getByRole("button", { name: "新增授权" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "新增授权" });
+    await user.selectOptions(within(dialog).getByLabelText("应用"), "crm");
+
+    expect(await within(dialog).findByText("已加载该应用现有授权")).toBeVisible();
+    expect(within(dialog).getByLabelText("说明")).toHaveValue("全员可查看本人客户");
+
+    const reason = within(dialog).getByLabelText("说明");
+    await user.clear(reason);
+    await user.type(reason, "公司统一收敛为只读");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(updatePolicyBody(fetchMock, 3)).not.toBeNull());
+    expect(updatePolicyBody(fetchMock, 3)).toEqual({
+      app_key: "crm",
+      authorization_group_keys: ["sales"],
+      direct_grants: [{ permission: "crm.order.read", scope: "DEPT" }],
+      grant_type: "permanent",
+      grant_expires_at: null,
+      reason: "公司统一收敛为只读",
+    });
+    expect(createPolicyBody(fetchMock)).toBeNull();
+    expect(await screen.findByText("已更新授权")).toBeVisible();
+  });
+
   test("部门树契约不符时立刻显示错误页, 不会一直停在加载中", async () => {
     stubFetch({
       // dept_id 缺失: 契约错误不是瞬时故障, 不该被重试成"一直在加载"。
@@ -478,8 +524,8 @@ describe("DepartmentGrantsPage", () => {
 });
 
 async function fillGrantForm(user: UserEvent, dialog: HTMLElement, reason: string) {
-  await user.selectOptions(within(dialog).getByLabelText("应用"), "crm");
-  await user.click(await authorizationGroupOption(user, dialog, "销售"));
+  await user.selectOptions(within(dialog).getByLabelText("应用"), "hr");
+  await user.click(await authorizationGroupOption(user, dialog, "人事管理员"));
   await user.type(within(dialog).getByLabelText("说明"), reason);
 
   await waitFor(() => expect(within(dialog).getByRole("button", { name: "保存" })).toBeEnabled());

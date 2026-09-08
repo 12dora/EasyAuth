@@ -12,7 +12,12 @@ import {
   grantDraftIsValid,
   useGrantCatalog,
 } from "../../features/grantForm";
-import type { GrantDraft, GrantDraftError, GrantSubmission } from "../../features/grantForm";
+import type {
+  GrantDraft,
+  GrantDraftError,
+  GrantPolicySnapshot,
+  GrantSubmission,
+} from "../../features/grantForm";
 import { useI18n } from "../../i18n/I18nProvider";
 import { departmentDisplayName } from "../../lib/departmentDisplayName";
 import type { DepartmentGrantPolicy } from "../../lib/domain/departmentGrants";
@@ -22,10 +27,13 @@ interface DepartmentGrantEditorDialogProps {
   departmentName: string;
   /** null 表示新建。继承行编辑的是它定义所在部门的策略。 */
   policy: DepartmentGrantPolicy | null;
+  /** 定义在当前部门上的既有策略(不含继承); 新建时按应用回填, 避免同一个应用授两条。 */
+  ownPolicies: DepartmentGrantPolicy[];
   errorMessage: string;
   errorDetails: string[];
   isSubmitting: boolean;
-  onSubmit: (submission: GrantSubmission) => void;
+  /** policyId 为空即新建; 回填了既有策略时带上它的 id, 提交即更新那一条。 */
+  onSubmit: (submission: GrantSubmission, policyId: number | null) => void;
   onClose: () => void;
 }
 
@@ -33,6 +41,7 @@ interface DepartmentGrantEditorDialogProps {
 export function DepartmentGrantEditorDialog({
   departmentName,
   policy,
+  ownPolicies,
   errorMessage,
   errorDetails,
   isSubmitting,
@@ -42,19 +51,13 @@ export function DepartmentGrantEditorDialog({
   const { t } = useI18n();
   const catalogQuery = useGrantCatalog();
   const [draft, setDraft] = useState<GrantDraft>(() =>
-    policy
-      ? grantDraftFromPolicy({
-          app_key: policy.app.app_key,
-          authorization_groups: policy.authorization_groups,
-          permissions: policy.permissions,
-          grant_type: policy.grant_type,
-          expires_at: policy.expires_at,
-          reason: policy.reason,
-        })
-      : EMPTY_GRANT_DRAFT,
+    policy ? grantDraftFromPolicy(policySnapshot(policy)) : EMPTY_GRANT_DRAFT,
   );
 
   const [draftErrors, setDraftErrors] = useState<GrantDraftError[]>([]);
+  // 新建态选中"本部门已经授过"的应用时回填的那条策略; 提交走更新, 不再新增一条同应用的授权。
+  const [preloadedPolicy, setPreloadedPolicy] = useState<DepartmentGrantPolicy | null>(null);
+  const targetPolicy = policy ?? preloadedPolicy;
 
   const title = policy
     ? policy.inherited
@@ -69,7 +72,7 @@ export function DepartmentGrantEditorDialog({
     const errors = grantDraftErrors(draft, catalogQuery.data);
     setDraftErrors(errors);
     if (errors.length === 0) {
-      onSubmit(buildGrantSubmission(draft));
+      onSubmit(buildGrantSubmission(draft), targetPolicy ? targetPolicy.id : null);
     }
   };
   const canSubmit = grantDraftIsValid(draft, catalogQuery.data) && !isSubmitting;
@@ -103,6 +106,11 @@ export function DepartmentGrantEditorDialog({
     >
       <div className="space-y-4">
         <StatusBanner tone="bond" title={t("departmentGrants.dialog.notice", { dept: affectedDepartmentName })} />
+        {preloadedPolicy ? (
+          <p className="text-body leading-5 text-ink-soft" role="status">
+            {t("departmentGrants.dialog.preloadedExisting")}
+          </p>
+        ) : null}
         {errorMessage || draftErrors.length > 0 ? (
           <div className="space-y-2">
             <StatusBanner live="alert" tone="signal" title={bannerTitle} message={bannerMessage} />
@@ -122,6 +130,18 @@ export function DepartmentGrantEditorDialog({
           draft={draft}
           onDraftChange={(next) => {
             setDraftErrors([]);
+            // 新建态选完应用, 先把该应用在本部门已有的授权载进表单: 管理员看到的是现状,
+            // 保存即更新那一条, 而不是在同一个应用上再堆一条策略。换成没授过的应用时回填作废。
+            const appChanged = !policy && next.appKey !== draft.appKey;
+            const existing = appChanged ? existingPolicyFor(ownPolicies, next.appKey) : null;
+            if (existing) {
+              setPreloadedPolicy(existing);
+              setDraft(grantDraftFromPolicy(policySnapshot(existing)));
+              return;
+            }
+            if (appChanged) {
+              setPreloadedPolicy(null);
+            }
             setDraft(next);
           }}
           disabled={isSubmitting}
@@ -130,4 +150,22 @@ export function DepartmentGrantEditorDialog({
       </div>
     </Dialog>
   );
+}
+
+function policySnapshot(policy: DepartmentGrantPolicy): GrantPolicySnapshot {
+  return {
+    app_key: policy.app.app_key,
+    authorization_groups: policy.authorization_groups,
+    permissions: policy.permissions,
+    grant_type: policy.grant_type,
+    expires_at: policy.expires_at,
+    reason: policy.reason,
+  };
+}
+
+function existingPolicyFor(ownPolicies: DepartmentGrantPolicy[], appKey: string): DepartmentGrantPolicy | null {
+  if (!appKey) {
+    return null;
+  }
+  return ownPolicies.find((item) => item.app.app_key === appKey) ?? null;
 }

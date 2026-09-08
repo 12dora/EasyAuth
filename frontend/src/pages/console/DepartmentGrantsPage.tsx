@@ -161,6 +161,7 @@ export function DepartmentGrantsPage() {
         <DepartmentGrantEditorDialog
           departmentName={selectedDepartmentName}
           policy={editor.policy}
+          ownPolicies={page.ownPolicies}
           errorMessage={saveMutation.error ? saveMutation.error.message : ""}
           errorDetails={apiErrorDetailMessages(saveMutation.error)}
           isSubmitting={saveMutation.isPending}
