@@ -22,6 +22,7 @@ from easyauth.audit.models import AuditLog
 from easyauth.grants.direct_grant import DIRECT_GRANT_APPLIED_ACTION
 from easyauth.grants.managed_users import MANAGED_USERS_DIRECTORY_UNAVAILABLE_MESSAGE
 from easyauth.grants.models import (
+    GRANT_STATUS_REVOKED,
     MEMBERSHIP_SOURCE_DEPARTMENT,
     MEMBERSHIP_SOURCE_USER,
     AccessGrant,
@@ -148,9 +149,9 @@ def test_direct_grants_returns_chinese_semantic_errors() -> None:
     assert "不支持指定的授权范围" in unsupported_scope.json()["error"]["details"]["errors"][0]
 
 
-def test_direct_grants_merges_groups_replaces_expiry_and_keeps_department_rows() -> None:
-    client = _logged_in_superuser("direct-grant-merge-admin")
-    app, sales, permission = _catalog("direct-grant-merge")
+def test_direct_grants_replaces_user_memberships_and_keeps_department_rows() -> None:
+    client = _logged_in_superuser("direct-grant-replace-admin")
+    app, sales, permission = _catalog("direct-grant-replace")
     finance = AuthorizationGroup.objects.create(
         app=app,
         key="finance",
@@ -158,7 +159,7 @@ def test_direct_grants_merges_groups_replaces_expiry_and_keeps_department_rows()
         name="财务",
         requestable=False,
     )
-    user = UserMirror.objects.create(authentik_user_id="direct-grant-merge-user")
+    user = UserMirror.objects.create(authentik_user_id="direct-grant-replace-user")
     first_expiry = (timezone.now() + timedelta(days=10)).replace(microsecond=0)
     second_expiry = (timezone.now() + timedelta(days=40)).replace(microsecond=0)
 
@@ -242,14 +243,11 @@ def test_direct_grants_merges_groups_replaces_expiry_and_keeps_department_rows()
         item["key"]
         for item in second_body["grant"]["authorization_groups"]
         if item["source"] == MEMBERSHIP_SOURCE_USER
-    } == {sales.key, finance.key}
+    } == {finance.key}
     assert replaced.status_code == HTTPStatus.CREATED
     assert replaced_body["grant"]["version"] == 3
     assert grant.version == 3
-    sales_expiry = next(expires_at for key, expires_at in user_groups if key == sales.key)
-    finance_expiry = next(expires_at for key, expires_at in user_groups if key == finance.key)
-    assert sales_expiry == second_expiry
-    assert finance_expiry == second_expiry
+    assert user_groups == [(sales.key, second_expiry)]
     assert department_groups == [finance.key]
     assert AccessGrantPermission.objects.filter(
         grant=grant,
@@ -264,7 +262,92 @@ def test_direct_grants_merges_groups_replaces_expiry_and_keeps_department_rows()
     assert audit is not None
     assert audit.actor_type == "admin"
     assert audit.metadata["reason"] == "续期销售授权"
+    assert audit.metadata["authorization_group_keys"] == [sales.key]
+    assert audit.metadata["removed_authorization_group_keys"] == [finance.key]
     assert AuditLog.objects.filter(event_type=DIRECT_GRANT_APPLIED_ACTION).count() == 3
+
+
+def test_direct_grants_empty_replace_keeps_department_rows_and_revokes_when_none_remain() -> None:
+    client = _logged_in_superuser("direct-grant-empty-admin")
+    app, sales, permission = _catalog("direct-grant-empty")
+    user = UserMirror.objects.create(authentik_user_id="direct-grant-empty-user")
+    first = client.post(
+        DIRECT_GRANTS_API_URL,
+        data=dumps(
+            _payload(
+                user_id=user.authentik_user_id,
+                app_key=app.app_key,
+                groups=[sales.key],
+                directs=[{"permission": permission.key, "scope": "GLOBAL"}],
+            ),
+        ),
+        content_type="application/json",
+    )
+    grant = AccessGrant.objects.get(pk=first.json()["data"]["grant"]["id"])
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=sales,
+        source=MEMBERSHIP_SOURCE_DEPARTMENT,
+    )
+
+    cleared = client.post(
+        DIRECT_GRANTS_API_URL,
+        data=dumps(_payload(user_id=user.authentik_user_id, app_key=app.app_key)),
+        content_type="application/json",
+    )
+    grant.refresh_from_db()
+    assert first.status_code == HTTPStatus.CREATED
+    assert cleared.status_code == HTTPStatus.CREATED
+    assert grant.is_current is True
+    assert grant.status != GRANT_STATUS_REVOKED
+    assert not AccessGrantGroup.objects.filter(grant=grant, source=MEMBERSHIP_SOURCE_USER).exists()
+    assert not AccessGrantPermission.objects.filter(
+        grant=grant, source=MEMBERSHIP_SOURCE_USER
+    ).exists()
+    assert AccessGrantGroup.objects.filter(
+        grant=grant, source=MEMBERSHIP_SOURCE_DEPARTMENT, authorization_group=sales
+    ).exists()
+    cleared_audit = (
+        AuditLog.objects.filter(event_type=DIRECT_GRANT_APPLIED_ACTION, target_id=str(grant.id))
+        .order_by("-id")
+        .first()
+    )
+    assert cleared_audit is not None
+    assert cleared_audit.metadata["authorization_group_keys"] == []
+    assert cleared_audit.metadata["permission_keys"] == []
+    assert cleared_audit.metadata["removed_authorization_group_keys"] == [sales.key]
+    assert cleared_audit.metadata["removed_permission_keys"] == [permission.key]
+
+    remaining_user = UserMirror.objects.create(authentik_user_id="direct-grant-empty-only-user")
+    only_user = client.post(
+        DIRECT_GRANTS_API_URL,
+        data=dumps(
+            _payload(
+                user_id=remaining_user.authentik_user_id,
+                app_key=app.app_key,
+                groups=[sales.key],
+            ),
+        ),
+        content_type="application/json",
+    )
+    revoked = client.post(
+        DIRECT_GRANTS_API_URL,
+        data=dumps(
+            _payload(
+                user_id=remaining_user.authentik_user_id,
+                app_key=app.app_key,
+                reason="收回全部直接授权",
+            ),
+        ),
+        content_type="application/json",
+    )
+    revoked_grant = AccessGrant.objects.get(pk=only_user.json()["data"]["grant"]["id"])
+    assert only_user.status_code == HTTPStatus.CREATED
+    assert revoked.status_code == HTTPStatus.CREATED
+    revoked_grant.refresh_from_db()
+    assert revoked_grant.is_current is False
+    assert revoked_grant.status == GRANT_STATUS_REVOKED
+    assert AccessGrant.objects.filter(user=remaining_user, app=app, is_current=True).count() == 0
 
 
 def test_direct_grants_persists_groups_not_expanded_permissions() -> None:

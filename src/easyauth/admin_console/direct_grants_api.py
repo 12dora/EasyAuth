@@ -5,6 +5,7 @@ from typing import ClassVar
 
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
+from django.utils import timezone
 from pydantic import ConfigDict, Field, ValidationError
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
@@ -19,17 +20,26 @@ from easyauth.admin_console.grant_row_payloads import (
     serialize_access_grant_row,
 )
 from easyauth.admin_console.grant_write_common import (
+    PERMANENT_EXPIRY_MESSAGE,
+    TIMED_EXPIRY_FUTURE_MESSAGE,
+    TIMED_EXPIRY_REQUIRED_MESSAGE,
     AdminGrantLookupError,
     AdminGrantSemanticError,
     AdminGrantWritePayload,
+    ResolvedAdminGrantTargets,
     resolve_admin_grant_targets,
 )
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App
-from easyauth.grants.direct_grant import apply_admin_direct_grant
+from easyauth.grants.direct_grant import DirectGrantEmptyReplaceError, apply_admin_direct_grant
 from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrant
 from easyauth.grants.services import GrantMutationExpiredError
+from easyauth.portal.access_request_payloads import (
+    APP_NOT_REQUESTABLE_MESSAGE,
+    AccessRequestTargetError,
+    app_for_key,
+)
 
 USER_NOT_FOUND_MESSAGE = "用户不存在。"
 USER_INACTIVE_MESSAGE = "用户当前不是在职状态,无法授予权限。"
@@ -58,7 +68,7 @@ def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse
     try:
         payload = DirectGrantRequestPayload.model_validate_json(request.body)
         user = _active_user_for_id(payload.user_id)
-        targets = resolve_admin_grant_targets(payload)
+        targets = _resolve_direct_grant_targets(payload)
         with transaction.atomic():
             grant = apply_admin_direct_grant(user=user, targets=targets, actor_id=actor_id)
             row = serialize_access_grant_row(_grant_for_row(grant))
@@ -71,8 +81,13 @@ def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse
         )
     except AdminGrantLookupError as exc:
         return error_response(exc.code, exc.message, exc.details, status=exc.status)
-    except AdminGrantSemanticError as exc:
-        return _semantic_error_response(exc)
+    except (AdminGrantSemanticError, DirectGrantEmptyReplaceError) as exc:
+        semantic = (
+            exc
+            if isinstance(exc, AdminGrantSemanticError)
+            else AdminGrantSemanticError(str(exc), (str(exc),))
+        )
+        return _semantic_error_response(semantic)
     except GrantMutationExpiredError:
         return _semantic_error_response(
             AdminGrantSemanticError(GRANT_EXPIRED_MESSAGE, (GRANT_EXPIRED_MESSAGE,)),
@@ -87,6 +102,49 @@ def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse
         {"data": {"grant": row}},
         status=HTTPStatus.CREATED,
     )
+
+
+def _resolve_direct_grant_targets(payload: DirectGrantRequestPayload) -> ResolvedAdminGrantTargets:
+    if payload.authorization_group_keys or payload.direct_grants:
+        return resolve_admin_grant_targets(payload)
+    return _resolve_empty_direct_grant_targets(payload)
+
+
+def _resolve_empty_direct_grant_targets(
+    payload: DirectGrantRequestPayload,
+) -> ResolvedAdminGrantTargets:
+    try:
+        app = app_for_key(payload.app_key)
+    except AccessRequestTargetError as exc:
+        if exc.message == APP_NOT_REQUESTABLE_MESSAGE:
+            raise AdminGrantLookupError(
+                APP_NOT_FOUND_MESSAGE,
+                {"app_key": payload.app_key},
+                HTTPStatus.NOT_FOUND,
+                ErrorCode.NOT_FOUND,
+            ) from exc
+        raise AdminGrantSemanticError(exc.message, (exc.message,)) from exc
+    errors = _empty_replace_expiration_errors(payload)
+    if errors:
+        raise AdminGrantSemanticError(errors[0], tuple(errors))
+    return ResolvedAdminGrantTargets(
+        app=app,
+        authorization_groups=(),
+        direct_grants=(),
+        grant_type=payload.grant_type,
+        grant_expires_at=payload.grant_expires_at,
+        reason=payload.reason,
+    )
+
+
+def _empty_replace_expiration_errors(payload: DirectGrantRequestPayload) -> list[str]:
+    if payload.grant_type == "permanent":
+        return [] if payload.grant_expires_at is None else [PERMANENT_EXPIRY_MESSAGE]
+    if payload.grant_expires_at is None:
+        return [TIMED_EXPIRY_REQUIRED_MESSAGE]
+    if payload.grant_expires_at <= timezone.now():
+        return [TIMED_EXPIRY_FUTURE_MESSAGE]
+    return []
 
 
 def _active_user_for_id(user_id: str) -> UserMirror:
