@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from easyauth.applications.builtin_authorization_groups import (
+    RESERVED_AUTHORIZATION_GROUP_REASON,
+    is_reserved_authorization_group_key,
+)
 from easyauth.applications.models import (
     App,
     ApprovalRule,
@@ -14,6 +18,7 @@ from easyauth.applications.models import (
     Permission,
     PermissionGroup,
 )
+from easyauth.applications.models.constants import BUILTIN_SUPER_ADMIN_GROUP_KEY
 from easyauth.applications.permission_template_diff import (
     _approval_rule_input_key,
     _approval_rule_key,
@@ -22,6 +27,7 @@ from easyauth.applications.permission_template_grant_upsert import (
     _upsert_authorization_group_grants,
 )
 from easyauth.applications.permission_template_group_upsert import _upsert_permission_groups
+from easyauth.applications.permission_template_types import PermissionTemplateImportError
 
 if TYPE_CHECKING:
     from easyauth.applications.permission_template_types import AppManifestInput
@@ -115,6 +121,12 @@ def _upsert_authorization_groups(
     manifest: AppManifestInput,
 ) -> dict[str, AuthorizationGroup]:
     incoming = {group.key: group for group in manifest.authorization_groups}
+    if BUILTIN_SUPER_ADMIN_GROUP_KEY in incoming:
+        raise PermissionTemplateImportError(
+            code=RESERVED_AUTHORIZATION_GROUP_REASON,
+            message="不能在 App manifest 中声明平台内置授权组。",
+            subject=BUILTIN_SUPER_ADMIN_GROUP_KEY,
+        )
     group_by_key = {group.key: group for group in AuthorizationGroup.objects.filter(app=app)}
     for key, spec in incoming.items():
         group = group_by_key.get(key) or AuthorizationGroup(app=app, key=key)
@@ -130,6 +142,8 @@ def _upsert_authorization_groups(
         group_by_key[key] = group
     for key, group in group_by_key.items():
         if key not in incoming and group.is_active:
+            if is_reserved_authorization_group_key(key):
+                continue
             group.is_active = False
             group.full_clean()
             group.save(update_fields=["is_active", "updated_at"])

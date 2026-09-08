@@ -34,6 +34,7 @@ from easyauth.admin_console.permission_write_helpers import (
     permission_update_payload,
     resolved_group_reference,
 )
+from easyauth.applications.builtin_authorization_groups import ensure_builtin_super_admin
 from easyauth.applications.catalog_version import bump_catalog_version
 from easyauth.applications.models import AppScope, Permission, PermissionGroup
 
@@ -116,6 +117,7 @@ def _save_new_permission(
             reason="permission_created",
             metadata={"permission_key": permission.key},
         )
+        _ = ensure_builtin_super_admin(app)
     return json_response({"item": permission_item(permission)}, status=HTTPStatus.CREATED)
 
 
@@ -226,6 +228,7 @@ def _save_permission_update(
             reason="permission_updated",
             metadata={"permission_key": permission.key},
         )
+        _ = ensure_builtin_super_admin(app)
     return json_response({"item": permission_item(permission)})
 
 

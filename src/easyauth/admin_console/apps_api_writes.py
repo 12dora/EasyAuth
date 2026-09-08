@@ -16,6 +16,7 @@ from easyauth.admin_console.apps_api_payloads import AppCreatePayload, AppPatchP
 from easyauth.admin_console.apps_api_reads import app_detail_item, visible_app
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.applications.builtin_authorization_groups import ensure_builtin_super_admin
 from easyauth.applications.models import App, AppMembership
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.services import AuditRecord, AuditService
@@ -175,6 +176,7 @@ def _save_created_app(
             for user_id in developer_user_ids
         )
         _ = AppMembership.objects.bulk_create(memberships)
+        _ = ensure_builtin_super_admin(app)
         owner_metadata: list[JsonValue] = list(owner_user_ids)
         developer_metadata: list[JsonValue] = list(developer_user_ids)
         _record_app_event(

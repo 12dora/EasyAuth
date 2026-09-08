@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from django.db import transaction
 
+from easyauth.applications.builtin_authorization_groups import (
+    RESERVED_AUTHORIZATION_GROUP_REASON,
+    ensure_builtin_super_admin,
+    is_reserved_authorization_group_key,
+)
 from easyauth.applications.models import App, PermissionTemplateVersion
+from easyauth.applications.models.constants import BUILTIN_SUPER_ADMIN_GROUP_KEY
 from easyauth.applications.permission_template_flattening import flatten_template
 from easyauth.applications.permission_template_lifecycle import sync_manifest_lifecycle
 from easyauth.applications.permission_template_parsing import (
@@ -65,9 +71,11 @@ def apply_permission_template(
     # 消除"两个导入都读到 latest=1 然后交错落库"的 TOCTOU。
     locked_app = App.objects.select_for_update().get(pk=app.id)
     _reject_duplicate_template_version(app=locked_app, version=template.schema_version)
+    _reject_reserved_authorization_group_declaration(template)
     flattened = flatten_template(template)
     actions = template_actions(locked_app, flattened)
     upsert_manifest(locked_app, template)
+    _ = ensure_builtin_super_admin(locked_app)
     template_version = record_template_version(locked_app, template, actions)
     record_import_event(locked_app, template, template_version, actions)
     bump_manifest_catalog_version(locked_app, template, actions)
@@ -78,6 +86,17 @@ def apply_permission_template(
         actor_type=actor_type,
     )
     return PermissionTemplateImportResult(template_version=template_version, actions=actions)
+
+
+def _reject_reserved_authorization_group_declaration(template: AppManifestInput) -> None:
+    if any(
+        is_reserved_authorization_group_key(group.key) for group in template.authorization_groups
+    ):
+        raise PermissionTemplateImportError(
+            code=RESERVED_AUTHORIZATION_GROUP_REASON,
+            message="不能在 App manifest 中声明平台内置授权组。",
+            subject=BUILTIN_SUPER_ADMIN_GROUP_KEY,
+        )
 
 
 def _reject_duplicate_template_version(*, app: App, version: int) -> None:

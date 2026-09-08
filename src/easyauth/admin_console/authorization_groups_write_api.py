@@ -16,6 +16,7 @@ from easyauth.admin_console.authorization_groups_payloads import (
 )
 from easyauth.admin_console.catalog_write_common import (
     CatalogWriteContext,
+    bad_request,
     conflict_response,
     json_response,
     parse_payload,
@@ -24,6 +25,11 @@ from easyauth.admin_console.catalog_write_common import (
     write_context,
 )
 from easyauth.admin_console.permission_catalog_data import authorization_group_item
+from easyauth.applications.builtin_authorization_groups import (
+    RESERVED_AUTHORIZATION_GROUP_REASON,
+    ensure_builtin_super_admin,
+    is_reserved_authorization_group_key,
+)
 from easyauth.applications.catalog_version import bump_catalog_version
 from easyauth.applications.models import App, AuthorizationGroup
 from easyauth.applications.ownership import ConsoleActor
@@ -90,6 +96,8 @@ def _authorization_group_create_inputs(
             pass
         case JsonResponse() as response:
             return response
+    if is_reserved_authorization_group_key(payload.key):
+        return _reserved_authorization_group_response()
     if AuthorizationGroup.objects.filter(app=app, key=payload.key).exists():
         return conflict_response("授权组 key 已存在。")
     match resolve_grants(app, payload.grants):
@@ -135,6 +143,7 @@ def _save_authorization_group_create(
             reason="authorization_group_created",
             metadata={"authorization_group_key": group.key},
         )
+        _ = ensure_builtin_super_admin(app)
     return json_response({"item": authorization_group_item(group)}, status=HTTPStatus.CREATED)
 
 
@@ -183,6 +192,7 @@ def _save_authorization_group_update(
             reason="authorization_group_updated",
             metadata={"authorization_group_key": group.key},
         )
+        _ = ensure_builtin_super_admin(app)
     return json_response({"item": authorization_group_item(group)})
 
 
@@ -191,6 +201,10 @@ def _apply_authorization_group_update(
     group: AuthorizationGroup,
     payload: AuthorizationGroupPayload,
 ) -> JsonResponse | None:
+    if is_reserved_authorization_group_key(group.key):
+        return _reserved_authorization_group_response()
+    if is_reserved_authorization_group_key(payload.key):
+        return _reserved_authorization_group_response()
     key_conflicts = AuthorizationGroup.objects.filter(app=app, key=payload.key).exists()
     if payload.key != group.key and key_conflicts:
         return conflict_response("授权组 key 已存在。")
@@ -203,3 +217,10 @@ def _apply_authorization_group_update(
     group.requestable = payload.requestable
     group.is_active = payload.is_active
     return None
+
+
+def _reserved_authorization_group_response() -> JsonResponse:
+    return bad_request(
+        "不能修改或占用平台内置授权组。",
+        {"reason": RESERVED_AUTHORIZATION_GROUP_REASON},
+    )

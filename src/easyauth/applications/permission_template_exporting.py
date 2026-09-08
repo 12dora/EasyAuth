@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from easyauth.applications.builtin_authorization_groups import is_reserved_authorization_group_key
 from easyauth.applications.models import (
     App,
     ApprovalRule,
@@ -91,6 +92,7 @@ def export_authorization_groups(app: App) -> list[JsonValue]:
     return [
         _export_authorization_group(group)
         for group in AuthorizationGroup.objects.filter(app=app).order_by("kind", "key")
+        if not is_reserved_authorization_group_key(group.key)
     ]
 
 

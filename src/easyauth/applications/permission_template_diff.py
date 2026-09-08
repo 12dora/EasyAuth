@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from easyauth.applications.builtin_authorization_groups import is_reserved_authorization_group_key
 from easyauth.applications.models import (
     ApprovalRule,
     AppScope,
@@ -212,6 +213,7 @@ def _authorization_group_actions(app: App, manifest: AppManifestInput) -> list[T
     existing = {
         authorization_group.key: authorization_group
         for authorization_group in AuthorizationGroup.objects.filter(app=app)
+        if not is_reserved_authorization_group_key(authorization_group.key)
     }
     grant_sets_by_group_id = _grant_sets_by_group_id(app)
     incoming = {group.key: group for group in manifest.authorization_groups}

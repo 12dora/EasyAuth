@@ -22,6 +22,7 @@ from easyauth.admin_console.catalog_write_common import (
 )
 from easyauth.admin_console.permission_catalog_api import read_context_response
 from easyauth.admin_console.permission_catalog_data import scope_item, scopes_payload
+from easyauth.applications.builtin_authorization_groups import ensure_builtin_super_admin
 from easyauth.applications.catalog_version import bump_catalog_version
 from easyauth.applications.models import App, AppScope
 
@@ -110,6 +111,7 @@ def _create_scope(request: HttpRequest, app_key: str) -> JsonResponse:
                 return response
         _record_scope_event(app, actor, "scope_created", scope)
         _bump_scope_version(app, actor.user_id, "scope_created", scope)
+        _ = ensure_builtin_super_admin(app)
     return json_response({"item": scope_item(scope)}, status=HTTPStatus.CREATED)
 
 
@@ -137,6 +139,7 @@ def _update_scope(request: HttpRequest, app_key: str, scope_key: str | None = No
                 return response
         _record_scope_event(app, actor, "scope_updated", scope)
         _bump_scope_version(app, actor.user_id, "scope_updated", scope)
+        _ = ensure_builtin_super_admin(app)
     return json_response({"item": scope_item(scope)})
 
 

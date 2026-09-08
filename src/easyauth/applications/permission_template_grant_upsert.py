@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from easyauth.applications.builtin_authorization_groups import is_reserved_authorization_group_key
 from easyauth.applications.models import AuthorizationGroupGrant
 
 if TYPE_CHECKING:
@@ -53,6 +54,9 @@ def _upsert_authorization_group_grants(
         grant.full_clean()
         grant.save()
     for key, grant in existing_grants.items():
+        group_key, _permission_key, _scope_key = key
+        if is_reserved_authorization_group_key(group_key):
+            continue
         if key not in incoming_grants and grant.is_active:
             grant.is_active = False
             grant.full_clean()
