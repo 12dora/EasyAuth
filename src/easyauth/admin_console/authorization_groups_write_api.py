@@ -7,6 +7,7 @@ from django.http import HttpRequest, JsonResponse
 
 from easyauth.admin_console.authorization_group_grants import (
     record_group_event,
+    replace_grant_policies,
     replace_grants,
     resolve_grants,
 )
@@ -31,7 +32,7 @@ from easyauth.applications.builtin_authorization_groups import (
     is_reserved_authorization_group_key,
 )
 from easyauth.applications.catalog_version import bump_catalog_version
-from easyauth.applications.models import App, AuthorizationGroup
+from easyauth.applications.models import App, AuthorizationGroup, AuthorizationGroupGrant
 from easyauth.applications.ownership import ConsoleActor
 
 type AuthorizationGroupUpdateInputs = tuple[
@@ -72,6 +73,8 @@ def update_authorization_group(
             pass
         case JsonResponse() as response:
             return response
+    if is_reserved_authorization_group_key(group.key):
+        return _update_reserved_authorization_group(app, actor, group, payload)
     if response := _apply_authorization_group_update(app, group, payload):
         return response
     match resolve_grants(app, payload.grants):
@@ -201,8 +204,6 @@ def _apply_authorization_group_update(
     group: AuthorizationGroup,
     payload: AuthorizationGroupPayload,
 ) -> JsonResponse | None:
-    if is_reserved_authorization_group_key(group.key):
-        return _reserved_authorization_group_response()
     if is_reserved_authorization_group_key(payload.key):
         return _reserved_authorization_group_response()
     key_conflicts = AuthorizationGroup.objects.filter(app=app, key=payload.key).exists()
@@ -217,6 +218,83 @@ def _apply_authorization_group_update(
     group.requestable = payload.requestable
     group.is_active = payload.is_active
     return None
+
+
+def _update_reserved_authorization_group(
+    app: App,
+    actor: ConsoleActor,
+    group: AuthorizationGroup,
+    payload: AuthorizationGroupPayload,
+) -> JsonResponse:
+    if _reserved_group_identity_changed(group, payload):
+        return _reserved_authorization_group_response()
+    match resolve_grants(app, payload.grants):
+        case tuple() as grants:
+            pass
+        case JsonResponse() as response:
+            return response
+    existing_grants = _reserved_grants_or_rejection(group, grants)
+    if isinstance(existing_grants, JsonResponse):
+        return existing_grants
+    return _save_reserved_authorization_group_policy_update(
+        app,
+        actor,
+        group,
+        grants,
+        existing_grants,
+    )
+
+
+def _reserved_group_identity_changed(
+    group: AuthorizationGroup,
+    payload: AuthorizationGroupPayload,
+) -> bool:
+    return (
+        payload.key != group.key
+        or payload.kind != group.kind
+        or payload.name != group.name
+        or payload.name_en != group.name_en
+        or payload.description != group.description
+        or payload.description_en != group.description_en
+        or payload.requestable != group.requestable
+        or payload.is_active != group.is_active
+    )
+
+
+def _reserved_grants_or_rejection(
+    group: AuthorizationGroup,
+    grants: tuple[ResolvedAuthorizationGroupGrant, ...],
+) -> dict[tuple[int, str], AuthorizationGroupGrant] | JsonResponse:
+    existing = {
+        (grant.permission_id, grant.scope_key): grant
+        for grant in AuthorizationGroupGrant.objects.filter(authorization_group=group)
+    }
+    selected: dict[tuple[int, str], AuthorizationGroupGrant] = {}
+    for payload in grants:
+        grant = existing.get((payload.permission.id, payload.scope_key))
+        if grant is None or grant.is_active != payload.is_active:
+            return _reserved_authorization_group_response()
+        selected[(payload.permission.id, payload.scope_key)] = grant
+    return selected
+
+
+def _save_reserved_authorization_group_policy_update(
+    app: App,
+    actor: ConsoleActor,
+    group: AuthorizationGroup,
+    grants: tuple[ResolvedAuthorizationGroupGrant, ...],
+    existing_grants: dict[tuple[int, str], AuthorizationGroupGrant],
+) -> JsonResponse:
+    with transaction.atomic():
+        if response := replace_grant_policies(group, grants, actor, existing_grants):
+            return response
+        _ = bump_catalog_version(
+            app,
+            actor_id=actor.user_id,
+            reason="authorization_group_updated",
+            metadata={"authorization_group_key": group.key},
+        )
+    return json_response({"item": authorization_group_item(group)})
 
 
 def _reserved_authorization_group_response() -> JsonResponse:

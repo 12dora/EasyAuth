@@ -380,7 +380,11 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 - 每个应用有平台内置授权组 `super_admin`（超级管理员）：`kind=role`，
   `requestable=false`，grant 覆盖该应用全部 active、未废弃权限及其受支持的
   active scope。控制台目录会列出该组；门户申请目录因 `requestable=false`
-  不会列出。控制台不得重命名、停用、删除或占用该 key；manifest 不得声明该
+  不会列出。平台用 `is_builtin` 标记该组；已有同 key 的非内置组不会被静默接管。
+  控制台不得重命名、停用、删除、占用该 key，也不得改 grant 成员资格
+  （含 grant 的 `is_active`）。允许 PATCH 该组已有 grant 上的
+  `managed_scope_policy` 覆盖（仅此字段）；平台不会为 `MANAGED_USERS`
+  自动写入策略。内置组同步会保留 grant 行上已有的覆盖。manifest 不得声明该
   key。违规返回 `400 VALIDATION_ERROR`，`details.reason="reserved_authorization_group"`
 
 ### 直接授权

@@ -17,13 +17,18 @@ from easyauth.applications.models import (
     App,
     AppMembership,
     AppScope,
+    AuthorizationGroup,
     AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
 )
 from easyauth.applications.models.constants import BUILTIN_SUPER_ADMIN_GROUP_KEY
 from easyauth.grants.models import AccessGrant, AccessGrantGroup
 from easyauth.grants.query import ExpandedGrant, GroupSnapshot, resolve_user_permissions
-from tests.integration.admin_console.auth_helpers import authenticate_console_admin
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 from tests.integration.portal.helpers import logged_in_client
 from tests.integration.portal.json_helpers import json_object
 
@@ -146,6 +151,154 @@ def test_console_rejects_reserved_authorization_group_mutations() -> None:
     assert group.is_active is True
 
 
+def test_console_allows_builtin_managed_scope_policy_override() -> None:
+    client = _logged_in_owner("builtin-sa-policy-owner")
+    app = _member_app("builtin-sa-policy", "builtin-sa-policy-owner")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="被管理人员")
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.delegate",
+        name="代开发票",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    group = ensure_builtin_super_admin(app)
+    app.refresh_from_db()
+    version = app.catalog_version
+
+    patched = client.patch(
+        _authorization_group_detail_url(app.app_key, group.key),
+        data=dumps(
+            _locked_group_body(
+                group,
+                [
+                    {
+                        "permission": permission.key,
+                        "scope": "MANAGED_USERS",
+                        "is_active": True,
+                        "managed_scope_policy": {
+                            "mode": "override",
+                            "resolver": "dingtalk_manager_chain",
+                            "enabled": True,
+                        },
+                    },
+                ],
+            ),
+        ),
+        content_type="application/json",
+    )
+
+    grant = AuthorizationGroupGrant.objects.get(
+        authorization_group=group,
+        permission=permission,
+        scope_key="MANAGED_USERS",
+    )
+    policy = ManagedScopePolicy.objects.get(
+        app=app,
+        target_type="authorization_group_grant",
+        authorization_group_grant=grant,
+        scope="MANAGED_USERS",
+    )
+    group.refresh_from_db()
+    app.refresh_from_db()
+    assert patched.status_code == HTTPStatus.OK
+    assert policy.resolver == "dingtalk_manager_chain"
+    assert policy.enabled is True
+    assert group.name == "超级管理员"
+    assert group.requestable is False
+    assert app.catalog_version == version + 1
+
+    extra = client.post(
+        f"/console/api/v1/apps/{app.app_key}/permissions",
+        data=dumps(
+            {
+                "key": "invoice.read",
+                "name": "查看发票",
+                "supported_scopes": ["MANAGED_USERS"],
+            },
+        ),
+        content_type="application/json",
+    )
+    policy.refresh_from_db()
+    grant.refresh_from_db()
+    app.refresh_from_db()
+    assert extra.status_code == HTTPStatus.CREATED
+    assert policy.resolver == "dingtalk_manager_chain"
+    assert grant.is_active is True
+    assert app.catalog_version == version + 2
+
+
+def test_console_rejects_builtin_grant_membership_change() -> None:
+    client = _logged_in_owner("builtin-sa-membership-owner")
+    app = _member_app("builtin-sa-membership", "builtin-sa-membership-owner")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="查看发票",
+        supported_scopes=["GLOBAL"],
+    )
+    group = ensure_builtin_super_admin(app)
+    extra = Permission.objects.create(
+        app=app,
+        key="invoice.write",
+        name="开具发票",
+        supported_scopes=["GLOBAL"],
+    )
+
+    added = client.patch(
+        _authorization_group_detail_url(app.app_key, group.key),
+        data=dumps(
+            _locked_group_body(
+                group,
+                [
+                    {
+                        "permission": permission.key,
+                        "scope": "GLOBAL",
+                        "is_active": True,
+                    },
+                    {
+                        "permission": extra.key,
+                        "scope": "GLOBAL",
+                        "is_active": True,
+                    },
+                ],
+            ),
+        ),
+        content_type="application/json",
+    )
+    deactivated = client.patch(
+        _authorization_group_detail_url(app.app_key, group.key),
+        data=dumps(
+            _locked_group_body(
+                group,
+                [
+                    {
+                        "permission": permission.key,
+                        "scope": "GLOBAL",
+                        "is_active": False,
+                    },
+                ],
+            ),
+        ),
+        content_type="application/json",
+    )
+
+    group.refresh_from_db()
+    assert added.status_code == HTTPStatus.BAD_REQUEST
+    assert added.json()["error"]["details"]["reason"] == RESERVED_AUTHORIZATION_GROUP_REASON
+    assert deactivated.status_code == HTTPStatus.BAD_REQUEST
+    assert deactivated.json()["error"]["details"]["reason"] == RESERVED_AUTHORIZATION_GROUP_REASON
+    assert not AuthorizationGroupGrant.objects.filter(
+        authorization_group=group,
+        permission=extra,
+    ).exists()
+    assert AuthorizationGroupGrant.objects.get(
+        authorization_group=group,
+        permission=permission,
+        scope_key="GLOBAL",
+    ).is_active is True
+
+
 def test_console_permission_write_resyncs_super_admin_grants() -> None:
     client = _logged_in_owner("builtin-sa-perm-owner")
     app = _member_app("builtin-sa-perm", "builtin-sa-perm-owner")
@@ -165,7 +318,9 @@ def test_console_permission_write_resyncs_super_admin_grants() -> None:
     )
 
     permission = Permission.objects.get(app=app, key="invoice.read")
+    app.refresh_from_db()
     assert created.status_code == HTTPStatus.CREATED
+    assert app.catalog_version == 2
     assert AuthorizationGroupGrant.objects.filter(
         authorization_group=group,
         permission=permission,
@@ -213,6 +368,22 @@ def _logged_in_superuser(username: str) -> Client:
 
 
 def _logged_in_owner(username: str) -> Client:
-    _ = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    return authenticate_console_admin(client, username)
+    return authenticate_console_user(client, username)
+
+
+def _locked_group_body(
+    group: AuthorizationGroup,
+    grants: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "key": group.key,
+        "kind": group.kind,
+        "name": group.name,
+        "name_en": group.name_en,
+        "description": group.description,
+        "description_en": group.description_en,
+        "requestable": group.requestable,
+        "is_active": group.is_active,
+        "grants": grants,
+    }

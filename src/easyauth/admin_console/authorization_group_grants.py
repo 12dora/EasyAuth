@@ -77,6 +77,19 @@ def replace_grants(
     return _deactivate_missing_grants(group, seen)
 
 
+def replace_grant_policies(
+    group: AuthorizationGroup,
+    grants: tuple[ResolvedAuthorizationGroupGrant, ...],
+    actor: ConsoleActor,
+    existing_grants: dict[tuple[int, str], AuthorizationGroupGrant],
+) -> JsonResponse | None:
+    for payload in grants:
+        grant = existing_grants[(payload.permission.id, payload.scope_key)]
+        if response := _replace_grant_managed_scope_policy(group, grant, payload, actor):
+            return response
+    return None
+
+
 def record_group_event(
     app: App,
     actor: ConsoleActor,
