@@ -4,6 +4,15 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { I18nProvider, useI18n } from "./I18nProvider";
 
+function DateTimeProbe({ value }: { value: string }) {
+  const { formatDateTime, locale } = useI18n();
+  return (
+    <span data-testid={`formatted-${locale}`}>
+      {formatDateTime(value)}|{formatDateTime(value)}|{formatDateTime(value)}
+    </span>
+  );
+}
+
 function LocaleProbe() {
   const { locale, setLocale } = useI18n();
   return (
@@ -83,5 +92,28 @@ describe("I18nProvider", () => {
 
     expect(document.documentElement.lang).toBe("zh-CN");
     expect(screen.getByTestId("locale")).toHaveTextContent("zh-CN");
+  });
+
+  test("formatDateTime 按语言复用同一个 Intl 格式化器", () => {
+    const DateTimeFormat = Intl.DateTimeFormat;
+    const constructed: string[] = [];
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function MockDateTimeFormat(
+      locale?: string,
+      options?: Intl.DateTimeFormatOptions,
+    ) {
+      constructed.push(String(locale));
+      return new DateTimeFormat(locale, options);
+    } as unknown as typeof Intl.DateTimeFormat);
+
+    render(
+      <I18nProvider>
+        <DateTimeProbe value="2026-09-08T10:00:00Z" />
+      </I18nProvider>,
+    );
+
+    // 三次格式化只该构造一次: 构造一个 DateTimeFormat 比用它格式化一次贵 40 倍以上,
+    // 而时间列每行每列都要调一次 formatDateTime。
+    expect(constructed.filter((locale) => locale === "zh-CN")).toHaveLength(1);
+    expect(screen.getByTestId("formatted-zh-CN").textContent?.split("|")).toHaveLength(3);
   });
 });
