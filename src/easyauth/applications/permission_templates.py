@@ -78,13 +78,17 @@ def apply_permission_template(
     _ = ensure_builtin_super_admin(locked_app)
     template_version = record_template_version(locked_app, template, actions)
     record_import_event(locked_app, template, template_version, actions)
-    bump_manifest_catalog_version(locked_app, template, actions)
+    # 必须先把 manifest 的 webhook.events_url 落库, 再提升目录版本并发
+    # catalog.changed。否则同一份 manifest 里首次声明的 events_url 会被当成
+    # 未配置而跳过; URL 从主机 A 改到 B 时会按旧地址落投递行, 提交后
+    # allowlist 只认新主机, 投递被拒绝。
     sync_manifest_lifecycle(
         app=locked_app,
         template=template,
         downstream_base_url=downstream_base_url,
         actor_type=actor_type,
     )
+    bump_manifest_catalog_version(locked_app, template, actions)
     return PermissionTemplateImportResult(template_version=template_version, actions=actions)
 
 
