@@ -86,14 +86,6 @@
   white-space: nowrap;
 }
 
-.org-tree__count {
-  margin-left: auto;
-  color: rgb(var(--ink-faint));
-  font-family: var(--font-mono);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
 .org-tree__children {
   display: grid;
   grid-template-rows: 1fr;

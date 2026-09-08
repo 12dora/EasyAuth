@@ -8,7 +8,6 @@ export const zhCN = {
   "departmentGrants.tree.ariaLabel": "组织架构",
   "departmentGrants.tree.searchLabel": "搜索部门",
   "departmentGrants.tree.searchPlaceholder": "输入部门名称",
-  "departmentGrants.tree.memberCount": "{count} 人",
   "departmentGrants.tree.expand": "展开 {name}",
   "departmentGrants.tree.collapse": "收起 {name}",
   "departmentGrants.tree.noMatch": "没有匹配的部门",
@@ -43,6 +42,7 @@ export const zhCN = {
   "departmentGrants.dialog.editTitle": "编辑授权",
   "departmentGrants.dialog.editInheritedTitle": "编辑 {name} 的授权",
   "departmentGrants.dialog.notice": "将自动授予 {dept} 及其子部门的全部在职人员",
+  "departmentGrants.dialog.preloadedExisting": "已加载该应用现有授权",
   "departmentGrants.dialog.submit": "保存",
   "departmentGrants.dialog.saveFailed": "保存失败",
 
@@ -66,7 +66,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "departmentGrants.tree.ariaLabel": "Organisation",
   "departmentGrants.tree.searchLabel": "Search departments",
   "departmentGrants.tree.searchPlaceholder": "Department name",
-  "departmentGrants.tree.memberCount": "{count} people",
   "departmentGrants.tree.expand": "Expand {name}",
   "departmentGrants.tree.collapse": "Collapse {name}",
   "departmentGrants.tree.noMatch": "No matching department",
@@ -103,6 +102,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "departmentGrants.dialog.editTitle": "Edit grant",
   "departmentGrants.dialog.editInheritedTitle": "Edit the grant of {name}",
   "departmentGrants.dialog.notice": "Applies automatically to every active employee of {dept} and its sub-departments",
+  "departmentGrants.dialog.preloadedExisting": "Loaded the existing grant for this app",
   "departmentGrants.dialog.submit": "Save",
   "departmentGrants.dialog.saveFailed": "Save failed",
 

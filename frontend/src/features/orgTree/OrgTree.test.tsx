@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -10,15 +10,13 @@ import { renderWithAntd } from "../../components/antd/testing";
 const ROOT: OrgTreeNode = {
   dept_id: "1",
   name: "公司",
-  member_count: 5,
   children: [
     {
       dept_id: "12",
       name: "销售部",
-      member_count: 8,
-      children: [{ dept_id: "121", name: "华东销售", member_count: 3, children: [] }],
+      children: [{ dept_id: "121", name: "华东销售", children: [] }],
     },
-    { dept_id: "13", name: "技术部", member_count: 6, children: [] },
+    { dept_id: "13", name: "技术部", children: [] },
   ],
 };
 
@@ -27,12 +25,13 @@ describe("OrgTree", () => {
     vi.unstubAllGlobals();
   });
 
-  test("展开的层级渲染出子部门与直属人数", () => {
+  test("展开的层级渲染出子部门, 行上不带人数", () => {
     renderTree();
 
     expect(screen.getByRole("tree", { name: "组织架构" })).toBeVisible();
     expect(treeItem("1")).toHaveAttribute("aria-expanded", "true");
-    expect(within(treeItem("1")).getByText("5 人")).toBeVisible();
+    // 目录人数与"这条授权影响谁"不是一回事, 树上不再出现。
+    expect(screen.queryByText(/人$/)).toBeNull();
     expect(treeItem("12")).toBeVisible();
     expect(treeItem("13")).toBeVisible();
     // 销售部未展开, 它的子部门不渲染。
@@ -40,6 +39,35 @@ describe("OrgTree", () => {
     expect(queryTreeItem("121")).toBeNull();
     // 叶子节点没有展开状态。
     expect(treeItem("13")).not.toHaveAttribute("aria-expanded");
+  });
+
+  test("点整行既选中该部门, 又就地展开/收起", async () => {
+    const user = userEvent.setup();
+    renderTree();
+
+    await user.click(screen.getByText("销售部"));
+
+    expect(treeItem("12")).toHaveAttribute("aria-selected", "true");
+    expect(treeItem("12")).toHaveAttribute("aria-expanded", "true");
+    expect(treeItem("121")).toBeVisible();
+
+    // 再点一次同一行: 保持选中, 收起子部门。
+    await user.click(screen.getByText("销售部"));
+
+    expect(treeItem("12")).toHaveAttribute("aria-selected", "true");
+    expect(treeItem("12")).toHaveAttribute("aria-expanded", "false");
+    await waitFor(() => expect(queryTreeItem("121")).toBeNull());
+  });
+
+  test("点叶子部门只选中, 不影响其它层级的展开态", async () => {
+    const user = userEvent.setup();
+    renderTree();
+
+    await user.click(screen.getByText("技术部"));
+
+    expect(treeItem("13")).toHaveAttribute("aria-selected", "true");
+    expect(treeItem("13")).not.toHaveAttribute("aria-expanded");
+    expect(treeItem("1")).toHaveAttribute("aria-expanded", "true");
   });
 
   test("点三角展开与收起切换 aria-expanded 并挂载/卸载子部门", async () => {

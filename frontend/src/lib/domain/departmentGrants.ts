@@ -101,7 +101,6 @@ function validateOrgTreeNode(value: unknown, path: string): void {
   contractNonEmptyString(node.dept_id, `${path}.dept_id`);
   // 钉钉根部门在镜像里就是空名字, 展示层用「全公司」兜底(departmentDisplayName), 契约这一层只要求是字符串。
   contractString(node.name, `${path}.name`);
-  contractNumber(node.member_count, `${path}.member_count`);
   contractArray(node.children, `${path}.children`).forEach((child, index) =>
     validateOrgTreeNode(child, `${path}.children[${index}]`),
   );

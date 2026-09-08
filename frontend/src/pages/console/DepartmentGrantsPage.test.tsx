@@ -28,10 +28,9 @@ function treePayload(names: DepartmentNames) {
       root: {
         dept_id: "1",
         name: names["1"],
-        member_count: 5,
         children: [
-          { dept_id: "12", name: names["12"], member_count: 8, children: [] },
-          { dept_id: "13", name: names["13"], member_count: 6, children: [] },
+          { dept_id: "12", name: names["12"], children: [] },
+          { dept_id: "13", name: names["13"], children: [] },
         ],
       },
     },
@@ -363,6 +362,8 @@ describe("DepartmentGrantsPage", () => {
     await screen.findByText("继承自 公司");
     await user.click(screen.getByText("公司"));
     await screen.findByText("本部门");
+    // 点行同时收起了公司, 后面还要点子部门, 用三角展开回来。
+    await user.click(screen.getByRole("button", { name: "展开 公司" }));
 
     await user.click(within(rowByText("全员可查看本人客户")).getByRole("button", { name: "删除" }));
     const dialog = await screen.findByRole("dialog", { name: "删除授权" });
@@ -410,14 +411,14 @@ describe("DepartmentGrantsPage", () => {
 
   test("部门树契约不符时立刻显示错误页, 不会一直停在加载中", async () => {
     stubFetch({
-      // member_count 缺失: 契约错误不是瞬时故障, 不该被重试成"一直在加载"。
+      // dept_id 缺失: 契约错误不是瞬时故障, 不该被重试成"一直在加载"。
       tree: () =>
         jsonResponse({
           data: {
             source_slug: SOURCE_SLUG,
             corp_id: CORP_ID,
             synced_at: "2026-09-01T02:00:00Z",
-            root: { dept_id: "1", name: "", children: [] },
+            root: { name: "", children: [] },
           },
         }),
     });
@@ -425,7 +426,7 @@ describe("DepartmentGrantsPage", () => {
     renderPage();
 
     expect(await screen.findByText("组织架构加载失败")).toBeVisible();
-    expect(screen.getByText("部门树.data.root.member_count 必须为数字")).toBeVisible();
+    expect(screen.getByText("部门树.data.root.dept_id 必须为字符串")).toBeVisible();
     expect(screen.getByRole("button", { name: "重新加载" })).toBeVisible();
     expect(screen.queryByText("正在加载组织架构")).not.toBeInTheDocument();
   });
