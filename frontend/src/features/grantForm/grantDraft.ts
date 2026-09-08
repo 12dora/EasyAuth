@@ -11,6 +11,7 @@ import {
   directGrantSelectionScopeKey,
 } from "../../pages/portal/hooks/accessRequestSelection";
 import type { MessageKey } from "../../i18n/messages";
+import type { AccessGrantRow } from "../../lib/domain/accessGrantRow";
 import type { PortalCatalogAppView, PortalRequestCatalogView } from "../../pages/portal/hooks/accessRequestTypes";
 
 export type GrantTermType = "permanent" | "timed";
@@ -182,6 +183,45 @@ export function grantDraftFromPolicy(input: GrantPolicySnapshot): GrantDraft {
     expiresAtSource: input.expires_at ?? "",
     reason: input.reason,
   };
+}
+
+/**
+ * 把某员工在某应用上的当前授权还原成草稿。
+ *
+ * 只回填本人来源(`source: "user"`)的成员关系: 组织授权下发的那部分由部门策略维护, 提交这份草稿
+ * 会整体替换本人来源的成员关系, 把它一起回填就等于把组织授权抄成个人授权。
+ * 期限由这些成员关系自己决定 —— 全部无到期时间就是长期, 否则取最早的一个到期时间。
+ * 说明不回填: 每次授权都要写清楚这一次的依据。
+ */
+export function grantDraftFromCurrentGrant(grant: AccessGrantRow, draft: GrantDraft): GrantDraft {
+  const groups = grant.authorization_groups.filter((group) => group.source === "user");
+  const permissions = grant.direct_grants.filter((permission) => permission.source === "user");
+  const expiresAt = earliestExpiresAt([
+    ...groups.map((group) => group.expires_at),
+    ...permissions.map((permission) => permission.expires_at),
+  ]);
+  return {
+    ...draft,
+    appKey: grant.app_key,
+    authorizationGroupKeys: groups.map((group) => group.key),
+    selectedPermissionKeys: permissions.map((permission) =>
+      directGrantSelectionKey(permission.permission, permission.scope),
+    ),
+    grantType: expiresAt === null ? "permanent" : "timed",
+    expiresAt: expiresAt === null ? "" : isoToDatetimeLocal(expiresAt),
+    expiresAtSource: expiresAt ?? "",
+  };
+}
+
+/** 最早的到期时间; 全是长期(null)时返回 null。 */
+function earliestExpiresAt(values: (string | null)[]): string | null {
+  return values
+    .filter((value): value is string => value !== null)
+    .reduce<string | null>(
+      (earliest, value) =>
+        earliest === null || new Date(value) < new Date(earliest) ? value : earliest,
+      null,
+    );
 }
 
 function grantDraftTargetIsPresent(draft: GrantDraft): boolean {

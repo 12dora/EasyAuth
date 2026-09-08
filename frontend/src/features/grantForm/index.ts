@@ -5,6 +5,7 @@ export {
   grantCatalogApp,
   grantDraftErrors,
   grantDraftExpiresAtError,
+  grantDraftFromCurrentGrant,
   grantDraftFromPolicy,
   grantDraftIsValid,
 } from "./grantDraft";
@@ -19,3 +20,5 @@ export type {
 export { GrantForm } from "./GrantForm";
 export type { GrantFormProps } from "./GrantForm";
 export { useGrantCatalog } from "./useGrantCatalog";
+export { useCurrentGrant, parseCurrentGrantPayload } from "./useCurrentGrant";
+export { grantDraftWithoutGrantee } from "./grantDraftSelection";

@@ -6,13 +6,16 @@ import { describe, expect, test, vi } from "vitest";
 
 import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../components/antd/testing";
 import type { PortalRequestCatalogView } from "../../pages/portal/hooks/accessRequestTypes";
+import type { AccessGrantRow } from "../../lib/domain/accessGrantRow";
 import {
   EMPTY_GRANT_DRAFT,
   GrantForm,
   buildGrantSubmission,
   grantDraftErrors,
+  grantDraftFromCurrentGrant,
   grantDraftFromPolicy,
   grantDraftIsValid,
+  parseCurrentGrantPayload,
 } from "./index";
 import type { GrantDraft } from "./index";
 
@@ -228,6 +231,95 @@ describe("授权草稿", () => {
         reason: "缺到期时间",
       }),
     ).toThrow(/到期时间/);
+  });
+});
+
+describe("现有授权回填", () => {
+  const CURRENT_GRANT: AccessGrantRow = {
+    id: 6,
+    version: 3,
+    is_current: true,
+    status: "active",
+    user_id: "u-1",
+    user_name: "张三",
+    app_key: "crm",
+    app_name: "CRM",
+    app_alias: "客户管理",
+    grant_type: "mixed",
+    grant_expires_at: "2030-06-30T15:59:59.123456+00:00",
+    authorization_groups: [
+      { key: "sales", kind: "role", name: "销售", expires_at: null, source: "user" },
+      { key: "audit", kind: "role", name: "审计", expires_at: null, source: "department" },
+    ],
+    direct_grants: [
+      {
+        permission: "crm.customer.read",
+        permission_name: "查看客户",
+        scope: "SELF",
+        scope_name: "本人",
+        expires_at: "2031-01-01T00:00:00+00:00",
+        source: "user",
+      },
+      {
+        permission: "crm.customer.export",
+        permission_name: "导出客户",
+        scope: "SELF",
+        scope_name: "本人",
+        expires_at: "2030-06-30T15:59:59.123456+00:00",
+        source: "user",
+      },
+      {
+        permission: "crm.report.view",
+        permission_name: "查看报表",
+        scope: "ALL",
+        scope_name: "全部",
+        expires_at: null,
+        source: "department",
+      },
+    ],
+    groups: [],
+    grants: [],
+  };
+
+  test("只回填本人来源的成员关系, 期限取其中最早的到期时间", () => {
+    const draft = grantDraftFromCurrentGrant(CURRENT_GRANT, { ...EMPTY_GRANT_DRAFT, reason: "补齐权限" });
+
+    // 组织授权下发的审计组与报表权限不进草稿: 提交只替换本人来源的成员关系。
+    expect(draft.appKey).toBe("crm");
+    expect(draft.authorizationGroupKeys).toEqual(["sales"]);
+    expect(draft.selectedPermissionKeys).toEqual([
+      '["crm.customer.read","SELF"]',
+      '["crm.customer.export","SELF"]',
+    ]);
+    expect(draft.grantType).toBe("timed");
+    expect(draft.expiresAtSource).toBe("2030-06-30T15:59:59.123456+00:00");
+    // 说明不回填: 每次授权都要写这一次的依据。
+    expect(draft.reason).toBe("补齐权限");
+    // 回填后原样提交, 秒与微秒都不丢。
+    expect(buildGrantSubmission(draft).grant_expires_at).toBe("2030-06-30T15:59:59.123456+00:00");
+  });
+
+  test("本人来源成员关系全是长期时回填成长期草稿", () => {
+    const draft = grantDraftFromCurrentGrant(
+      {
+        ...CURRENT_GRANT,
+        direct_grants: CURRENT_GRANT.direct_grants.filter((item) => item.source === "department"),
+      },
+      EMPTY_GRANT_DRAFT,
+    );
+
+    expect(draft.authorizationGroupKeys).toEqual(["sales"]);
+    expect(draft.selectedPermissionKeys).toEqual([]);
+    expect(draft.grantType).toBe("permanent");
+    expect(draft.expiresAt).toBe("");
+    expect(draft.expiresAtSource).toBe("");
+  });
+
+  test("当前授权响应: null 表示没有生效授权, 形状不符直接抛错", () => {
+    expect(parseCurrentGrantPayload({ grant: null })).toBeNull();
+    expect(parseCurrentGrantPayload({ grant: CURRENT_GRANT })?.app_key).toBe("crm");
+    expect(() => parseCurrentGrantPayload({})).toThrow(/grant/);
+    expect(() => parseCurrentGrantPayload(null)).toThrow(/对象/);
   });
 });
 

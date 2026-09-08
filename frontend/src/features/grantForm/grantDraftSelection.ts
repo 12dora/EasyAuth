@@ -28,6 +28,21 @@ export function grantDisplaySelectionKeys(draft: GrantDraft, catalogView: Catalo
   ]);
 }
 
+/**
+ * 换被授权人会作废整张草稿的"现状"部分: 目标与期限描述的是上一个人的授权, 换人后一条都不成立。
+ * 说明保留 —— 管理员多半是在给同一批人办同一件事。
+ */
+export function grantDraftWithoutGrantee(draft: GrantDraft): GrantDraft {
+  return {
+    ...draft,
+    authorizationGroupKeys: [],
+    selectedPermissionKeys: [],
+    grantType: "permanent",
+    expiresAt: "",
+    expiresAtSource: "",
+  };
+}
+
 /** 换应用会作废整张目标草稿: 授权组、直接权限一并清空(期限与说明保留)。 */
 export function grantDraftWithAppKey(draft: GrantDraft, appKey: string): GrantDraft {
   return { ...draft, appKey, authorizationGroupKeys: [], selectedPermissionKeys: [] };
