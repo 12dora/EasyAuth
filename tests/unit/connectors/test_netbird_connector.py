@@ -12,6 +12,7 @@ from easyauth.connectors.netbird import connector as connector_module
 from easyauth.connectors.netbird.client import (
     NetBirdApiError,
     NetBirdGroup,
+    NetBirdPeer,
     NetBirdUser,
 )
 from easyauth.connectors.netbird.connector import NetBirdConnector
@@ -33,8 +34,9 @@ def _allow_external_write(
     _user_id: str,
     *,
     require_active_user: bool,
+    allow_unknown_user: bool = False,
 ) -> bool:
-    _ = require_active_user
+    _ = (require_active_user, allow_unknown_user)
     return True
 
 
@@ -43,8 +45,9 @@ def _deny_external_write(
     _user_id: str,
     *,
     require_active_user: bool,
+    allow_unknown_user: bool = False,
 ) -> bool:
-    _ = require_active_user
+    _ = (require_active_user, allow_unknown_user)
     return False
 
 
@@ -61,6 +64,8 @@ class _FakeNetBirdClient:
     fail_create_user_ids: set[str] = field(default_factory=set)
     fail_update_user_ids: set[str] = field(default_factory=set)
     fail_approve_user_ids: set[str] = field(default_factory=set)
+    peers: list[NetBirdPeer] = field(default_factory=list)
+    deleted_peers: list[str] = field(default_factory=list)
 
     def list_users(self) -> list[NetBirdUser]:
         if self.fail_with:
@@ -128,6 +133,17 @@ class _FakeNetBirdClient:
             },
         )
 
+    def list_peers(self) -> list[NetBirdPeer]:
+        if self.fail_with:
+            raise NetBirdApiError(self.fail_with)
+        self.calls.append(("list_peers", ""))
+        return list(self.peers)
+
+    def delete_peer(self, peer_id: str) -> None:
+        self.calls.append(("delete_peer", peer_id))
+        self.deleted_peers.append(peer_id)
+        self.peers = [peer for peer in self.peers if peer.peer_id != peer_id]
+
     def approve_user(self, user_id: str) -> NetBirdUser:
         self.calls.append(("approve_user", user_id))
         if user_id in self.fail_approve_user_ids:
@@ -146,6 +162,10 @@ class _FakeNetBirdClient:
         )
         self.users[user_id] = updated
         return updated
+
+
+def _netbird_peer(peer_id: str, *, user_id: str) -> NetBirdPeer:
+    return NetBirdPeer(peer_id=peer_id, user_id=user_id)
 
 
 def _netbird_user(  # noqa: PLR0913 - 测试夹具按 NetBirdUser 字段铺开。
@@ -341,17 +361,25 @@ def test_reconcile_converged_state_makes_no_writes(fake_client: _FakeNetBirdClie
 def test_reconcile_blocks_ungranted_user_and_strips_managed_groups(
     fake_client: _FakeNetBirdClient,
 ) -> None:
-    # Given: u-2 无授权但持有映射组 g1 与无关组 g9。
+    # Given: u-2 无授权但持有映射组 g1 与无关组 g9; u-stay 仍在 desired。
     fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
     fake_client.users = {
+        "u-stay": _netbird_user("u-stay", auto_group_ids=frozenset({"g1"})),
         "u-2": _netbird_user("u-2", auto_group_ids=frozenset({"g1", "g9"})),
+        "boss": _netbird_user("boss", role="owner", auto_group_ids=frozenset({"g1"})),
     }
-    desired = _desired({}, managed=frozenset({"g1"}))
+    fake_client.peers = [
+        _netbird_peer("p-stay", user_id="u-stay"),
+        _netbird_peer("p-2a", user_id="u-2"),
+        _netbird_peer("p-2b", user_id="u-2"),
+        _netbird_peer("p-boss", user_id="boss"),
+    ]
+    desired = _desired({"u-stay": frozenset({"g1"})}, managed=frozenset({"g1"}))
 
     # When
     report = NetBirdConnector().reconcile(_instance(), desired)
 
-    # Then: 移除映射组、保留 g9、执行 block; 计入逆序用户数据口。
+    # Then: 移除映射组、保留 g9、执行 block, 并只踢该用户的 peer。
     assert fake_client.updated_users == [
         {
             "user_id": "u-2",
@@ -360,7 +388,9 @@ def test_reconcile_blocks_ungranted_user_and_strips_managed_groups(
             "is_blocked": True,
         },
     ]
+    assert fake_client.deleted_peers == ["p-2a", "p-2b"]
     assert report.stats["users_blocked"] == 1
+    assert report.stats["peers_removed"] == 2
     assert report.ungranted_user_ids == ("u-2",)
 
 
@@ -393,6 +423,10 @@ def test_reconcile_respects_block_opt_out(fake_client: _FakeNetBirdClient) -> No
         "u-2": _netbird_user("u-2", auto_group_ids=frozenset({"g1"})),
         "u-3": _netbird_user("u-3", auto_group_ids=frozenset({"g9"})),
     }
+    fake_client.peers = [
+        _netbird_peer("p-2", user_id="u-2"),
+        _netbird_peer("p-3", user_id="u-3"),
+    ]
     desired = _desired({}, managed=frozenset({"g1"}))
 
     # When
@@ -401,7 +435,7 @@ def test_reconcile_respects_block_opt_out(fake_client: _FakeNetBirdClient) -> No
         desired,
     )
 
-    # Then: 仍移除映射组但不 block; 完全无映射组的用户不产生任何调用。
+    # Then: 仍移除映射组但不 block、不删 peer; 完全无映射组的用户不产生任何调用。
     assert fake_client.updated_users == [
         {
             "user_id": "u-2",
@@ -410,7 +444,9 @@ def test_reconcile_respects_block_opt_out(fake_client: _FakeNetBirdClient) -> No
             "is_blocked": False,
         },
     ]
+    assert fake_client.deleted_peers == []
     assert "users_blocked" not in report.stats
+    assert "peers_removed" not in report.stats
     assert set(report.ungranted_user_ids) == {"u-2", "u-3"}
 
 
@@ -540,9 +576,14 @@ def test_on_user_offboarded_blocks_only_regular_users(
         "u-1": _netbird_user("u-1", auto_group_ids=frozenset({"g1"})),
         "boss": _netbird_user("boss", role="owner"),
     }
+    fake_client.peers = [
+        _netbird_peer("p-1", user_id="u-1"),
+        _netbird_peer("p-other", user_id="u-other"),
+        _netbird_peer("p-boss", user_id="boss"),
+    ]
     connector = NetBirdConnector()
 
-    # When: 普通用户立即 block(组保持原样, 清理交给周期对账)。
+    # When: 普通用户立即 block 并踢掉自己的 peer(组保持原样, 清理交给周期对账)。
     handled = connector.on_user_offboarded(
         _instance(),
         UserMirror(authentik_user_id="u-1"),
@@ -553,12 +594,15 @@ def test_on_user_offboarded_blocks_only_regular_users(
     assert fake_client.updated_users == [
         {"user_id": "u-1", "role": "user", "auto_group_ids": ["g1"], "is_blocked": True},
     ]
+    assert fake_client.deleted_peers == ["p-1"]
 
     # owner 与不存在的用户都视为已处理但零调用。
     fake_client.updated_users.clear()
+    fake_client.deleted_peers.clear()
     assert connector.on_user_offboarded(_instance(), UserMirror(authentik_user_id="boss"))
     assert connector.on_user_offboarded(_instance(), UserMirror(authentik_user_id="ghost"))
     assert fake_client.updated_users == []
+    assert fake_client.deleted_peers == []
 
 
 def test_on_user_offboarded_stops_when_fence_is_lost(
@@ -579,6 +623,47 @@ def test_on_user_offboarded_stops_when_fence_is_lost(
 
     assert handled is False
     assert fake_client.updated_users == []
+    assert fake_client.deleted_peers == []
+
+
+def test_reconcile_blocks_ungranted_jit_user_without_local_mirror(
+    fake_client: _FakeNetBirdClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def write_allowed(
+        _instance: ConnectorInstance,
+        user_id: str,
+        *,
+        require_active_user: bool,
+        allow_unknown_user: bool = False,
+    ) -> bool:
+        _ = (_instance, require_active_user)
+        if user_id == "jit-1":
+            return allow_unknown_user
+        return True
+
+    monkeypatch.setattr(connector_module, "_external_write_allowed", write_allowed)
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "jit-1": _netbird_user("jit-1", auto_group_ids=frozenset({"g1"})),
+    }
+    fake_client.peers = [_netbird_peer("p-jit", user_id="jit-1")]
+
+    report = NetBirdConnector().reconcile(_instance(), _desired({}, managed=frozenset({"g1"})))
+
+    assert report.status == "success"
+    assert fake_client.updated_users == [
+        {
+            "user_id": "jit-1",
+            "role": "user",
+            "auto_group_ids": [],
+            "is_blocked": True,
+        },
+    ]
+    assert fake_client.deleted_peers == ["p-jit"]
+    assert report.stats["users_blocked"] == 1
+    assert report.stats["peers_removed"] == 1
+    assert "users_fenced" not in report.stats
 
 
 def test_test_connection_reports_probe_result(fake_client: _FakeNetBirdClient) -> None:

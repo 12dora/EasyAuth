@@ -4,17 +4,25 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pytest
+from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, AuthorizationGroup
+from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 from easyauth.connectors import dispatch as dispatch_module
 from easyauth.connectors.dispatch import (
     OFFBOARD_TASK_NAME,
     RECONCILE_TASK_NAME,
     dispatch_user_offboarded,
+    request_instance_reconcile,
 )
-from easyauth.connectors.models import ConnectorInstance
-from easyauth.grants.services import AuthorizationGroupGrantInput, GrantMutationInput, GrantService
+from easyauth.connectors.models import SYNC_TRIGGER_EVENT, ConnectorInstance
+from easyauth.grants.models import AccessGrant, AccessGrantPermission
+from easyauth.grants.services import (
+    AuthorizationGroupGrantInput,
+    GrantExpirationInput,
+    GrantMutationInput,
+    GrantService,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -53,7 +61,7 @@ class _SendTaskRecorder:
         countdown: float = 0,
     ) -> object:
         _ = (event_key, kwargs)
-        self.calls.append((task_name, tuple(args), countdown or None))
+        self.calls.append((task_name, tuple(args), countdown))
         return object()
 
 
@@ -209,7 +217,7 @@ def test_dispatch_user_offboarded_enqueues_single_task(
         dispatch_user_offboarded(user)
 
     # Then
-    assert sent_tasks.calls == [(OFFBOARD_TASK_NAME, (user.authentik_user_id,), None)]
+    assert sent_tasks.calls == [(OFFBOARD_TASK_NAME, (user.authentik_user_id,), 0)]
 
 
 def test_dispatch_user_offboarded_without_enabled_instance_is_noop(
@@ -225,3 +233,53 @@ def test_dispatch_user_offboarded_without_enabled_instance_is_noop(
 
     # Then
     assert sent_tasks.calls == []
+
+
+def test_urgent_reconcile_uses_zero_countdown(sent_tasks: _SendTaskRecorder) -> None:
+    app = App.objects.create(app_key="conn-urgent", name="X")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+
+    queued = request_instance_reconcile(
+        instance.id,
+        trigger=SYNC_TRIGGER_EVENT,
+        urgent=True,
+    )
+
+    assert queued is True
+    assert sent_tasks.calls == [(RECONCILE_TASK_NAME, (instance.id,), 0)]
+
+
+def test_expired_grant_dispatches_urgent_reconcile(
+    sent_tasks: _SendTaskRecorder,
+    django_capture_on_commit_callbacks: DjangoCaptureOnCommitCallbacks,
+) -> None:
+    app = App.objects.create(app_key="conn-expire", name="X")
+    user = UserMirror.objects.create(authentik_user_id="conn-expire-u1")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AppScope.objects.get_or_create(app=app, key="GLOBAL", defaults={"name": "Global"})
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.expiring",
+        name="Expiring invoice",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key="GLOBAL",
+        expires_at=timezone.now(),
+    )
+
+    with django_capture_on_commit_callbacks(execute=True):
+        expired = GrantService.expire_grant(
+            GrantExpirationInput(
+                user=user,
+                app=app,
+                actor_type="system",
+                actor_id="grant-expiration-cleanup",
+            ),
+        )
+
+    assert expired is not None
+    assert sent_tasks.calls == [(RECONCILE_TASK_NAME, (instance.id,), 0)]

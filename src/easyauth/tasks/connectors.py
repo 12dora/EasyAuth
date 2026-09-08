@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -7,6 +8,7 @@ from celery import shared_task
 from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
+from easyauth.connectors.base import ConnectorError
 from easyauth.connectors.dispatch import (
     OFFBOARD_TASK_NAME,
     RECONCILE_TASK_NAME,
@@ -18,13 +20,18 @@ from easyauth.connectors.models import (
     ConnectorInstance,
     ConnectorSyncRun,
 )
+from easyauth.connectors.registry import get_connector
 from easyauth.connectors.services import (
     RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS,
     RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS,
     RECONCILE_TASK_TIME_LIMIT_SECONDS,
+    claim_instance_lease,
     reconcile_instance,
     refresh_external_groups,
+    release_instance_lease,
 )
+
+logger = logging.getLogger(__name__)
 
 SCHEDULE_RECONCILES_TASK_NAME: Final = "easyauth.connectors.schedule_reconciles"
 PRUNE_SYNC_RUNS_TASK_NAME: Final = "easyauth.connectors.prune_sync_runs"
@@ -133,15 +140,36 @@ def prune_connector_sync_runs_task() -> int:
 
 @shared_task(name=OFFBOARD_TASK_NAME, acks_late=True)
 def offboard_user_task(authentik_user_id: str) -> int:
-    """离职与普通对账共用 generation/lease 状态机, 禁止旁路写外部系统。"""
+    """认领租约后走连接器离职快路径, 再投递 countdown=0 的全量对账。"""
     user = UserMirror.objects.filter(authentik_user_id=authentik_user_id).first()
     if user is None:
         return 0
-    instances = list(ConnectorInstance.objects.filter(enabled=True).only("id"))
+    instances = list(ConnectorInstance.objects.filter(enabled=True))
     for instance in instances:
+        _run_offboard_fast_path(instance, user)
         _ = request_instance_reconcile(
             instance.id,
             trigger=SYNC_TRIGGER_OFFBOARD,
             countdown=0,
         )
     return len(instances)
+
+
+def _run_offboard_fast_path(instance: ConnectorInstance, user: UserMirror) -> None:
+    connector = get_connector(instance.connector_key)
+    if connector is None:
+        return
+    claimed = claim_instance_lease(instance.id)
+    if claimed is None:
+        return
+    try:
+        _ = connector.on_user_offboarded(claimed, user)
+    except ConnectorError:
+        logger.exception(
+            "连接器 %s 离职快路径失败 user_id=%s instance_id=%s",
+            instance.connector_key,
+            user.authentik_user_id,
+            instance.id,
+        )
+    finally:
+        release_instance_lease(claimed)

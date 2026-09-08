@@ -6,6 +6,7 @@ from django.db import transaction
 
 from easyauth.connectors.models import SYNC_TRIGGER_EVENT, ConnectorInstance
 from easyauth.connectors.services import mark_reconcile_dirty
+from easyauth.grants.models import GRANT_STATUS_EXPIRED
 from easyauth.outbox.services import enqueue_task
 from easyauth.webhooks.events import emit_grant_changed
 
@@ -23,15 +24,30 @@ def notify_grant_mutation(grant: AccessGrant) -> None:
     """GrantService 事务内的唯一挂点(F2): 授权事实与分发事件一同提交。"""
     app_id = grant.app_id
     user_id = grant.user.authentik_user_id
-    dispatch_grant_event(app_id=app_id, user_id=user_id, action="grant_mutated")
+    dispatch_grant_event(
+        app_id=app_id,
+        user_id=user_id,
+        action="grant_mutated",
+        urgent=grant.status == GRANT_STATUS_EXPIRED,
+    )
     emit_grant_changed(grant)
 
 
-def dispatch_grant_event(*, app_id: int, user_id: str, action: str) -> None:
+def dispatch_grant_event(
+    *,
+    app_id: int,
+    user_id: str,
+    action: str,
+    urgent: bool = False,
+) -> None:
     # user_id/action 仅供观测; 对账是全量幂等的, 不依赖事件载荷。
     _ = (user_id, action)
     for instance in ConnectorInstance.objects.filter(app_id=app_id, enabled=True).only("id"):
-        _ = request_instance_reconcile(instance.id, trigger=SYNC_TRIGGER_EVENT)
+        _ = request_instance_reconcile(
+            instance.id,
+            trigger=SYNC_TRIGGER_EVENT,
+            urgent=urgent,
+        )
 
 
 def request_instance_reconcile(
@@ -39,8 +55,10 @@ def request_instance_reconcile(
     *,
     trigger: str,
     countdown: int = RECONCILE_COALESCE_SECONDS,
+    urgent: bool = False,
 ) -> bool:
     """持久推进 generation, 并在没有活跃 worker 时投递唯一任务。"""
+    delay = 0 if urgent else countdown
     with transaction.atomic():
         if not mark_reconcile_dirty(instance_id, trigger=trigger):
             return False
@@ -49,7 +67,7 @@ def request_instance_reconcile(
             event_key=f"connector-reconcile:{instance_id}:{instance.reconcile_generation}",
             task_name=RECONCILE_TASK_NAME,
             args=[instance_id],
-            countdown=countdown,
+            countdown=delay,
         )
     return True
 

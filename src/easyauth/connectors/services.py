@@ -531,16 +531,69 @@ def _bind_external_account(instance: ConnectorInstance, connector: BaseConnector
     instance.external_account_id = detected
 
 
+def claim_instance_lease(instance_id: int) -> ConnectorInstance | None:
+    """认领实例租约供快路径写入; 已有活跃租约时不抢占, 返回 None。"""
+    now = timezone.now()
+    with transaction.atomic():
+        instance = (
+            ConnectorInstance.objects.select_for_update()
+            .select_related("app")
+            .filter(id=instance_id)
+            .filter(Q(enabled=True) | Q(tombstoned=True))
+            .first()
+        )
+        if instance is None or _reconcile_lease_is_active(instance, now):
+            return None
+        instance.reconcile_worker_queued = False
+        instance.reconcile_worker_queued_at = None
+        instance.reconcile_lease_token = uuid.uuid4()
+        instance.reconcile_lease_expires_at = now + timedelta(seconds=RECONCILE_LEASE_SECONDS)
+        # 快路径写入与对账相同, 要求 dirty=False 才能通过 external_write_allowed。
+        instance.reconcile_dirty = False
+        instance.save(
+            update_fields=[
+                "reconcile_worker_queued",
+                "reconcile_worker_queued_at",
+                "reconcile_lease_token",
+                "reconcile_lease_expires_at",
+                "reconcile_dirty",
+                "updated_at",
+            ],
+        )
+        return instance
+
+
+def release_instance_lease(instance: ConnectorInstance) -> None:
+    """释放本任务持有的租约, 让后续对账可以认领。"""
+    with transaction.atomic():
+        locked = (
+            ConnectorInstance.objects.select_for_update()
+            .filter(id=instance.id, reconcile_lease_token=instance.reconcile_lease_token)
+            .first()
+        )
+        if locked is None:
+            return
+        locked.reconcile_lease_token = None
+        locked.reconcile_lease_expires_at = None
+        locked.save(
+            update_fields=["reconcile_lease_token", "reconcile_lease_expires_at", "updated_at"],
+        )
+
+
 def external_write_allowed(
     instance: ConnectorInstance,
     *,
     user_id: str,
     require_active_user: bool,
+    allow_unknown_user: bool = False,
 ) -> bool:
     """外部写入前续租并检查 lease_token + generation fencing。"""
-    if not UserMirror.objects.filter(authentik_user_id=user_id).exists():
-        return False
-    if (
+    user_exists = UserMirror.objects.filter(authentik_user_id=user_id).exists()
+    if not user_exists:
+        # 外部存在、本地无镜像的 JIT 用户按定义无授权; 只允许收缩/封禁, 扩权仍拒绝。
+        if not allow_unknown_user or require_active_user:
+            return False
+    elif (
         require_active_user
         and not UserMirror.objects.filter(
             authentik_user_id=user_id,

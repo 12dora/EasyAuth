@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from email.message import Message
 from typing import TYPE_CHECKING, Protocol, Self, final
+from urllib.error import HTTPError
 
 import pytest
 
@@ -9,6 +11,7 @@ from easyauth.connectors.netbird.client import (
     GROUP_PAGE_SIZE,
     MAX_GROUP_PAGES,
     MAX_RESPONSE_BYTES,
+    PEER_PAGE_SIZE,
     NetBirdApiError,
     NetBirdClient,
 )
@@ -237,3 +240,79 @@ def test_approve_user_posts_to_approve_and_parses_user(
     assert user.is_blocked is False
     assert user.pending_approval is False
     assert user.auto_group_ids == frozenset({"g1"})
+
+
+def test_list_peers_parses_user_id_and_stops_on_short_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_paths: list[str] = []
+
+    def open_response(request: _UrlRequest, *, timeout: float) -> _Response:
+        _ = timeout
+        seen_paths.append(request.full_url)
+        return _Response([b'[{"id":"p1","user_id":"u1"},{"id":"p2","user_id":"u2"}]'])
+
+    monkeypatch.setattr(client_module, "urlopen", open_response)
+
+    peers = _client().list_peers()
+
+    assert [(peer.peer_id, peer.user_id) for peer in peers] == [("p1", "u1"), ("p2", "u2")]
+    assert seen_paths == [
+        f"https://netbird.example.com/api/peers?page=1&page_size={PEER_PAGE_SIZE}",
+    ]
+
+
+def test_list_peers_allows_missing_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _Response([b'[{"id":"p-setup"}]'])
+    monkeypatch.setattr(client_module, "urlopen", _static_response(response))
+
+    peers = _client().list_peers()
+
+    assert [(peer.peer_id, peer.user_id) for peer in peers] == [("p-setup", "")]
+
+
+def test_delete_peer_sends_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str, str]] = []
+
+    def open_response(request: _UrlRequest, *, timeout: float) -> _Response:
+        _ = timeout
+        seen.append((request.get_method(), request.full_url))
+        return _Response([b""])
+
+    monkeypatch.setattr(client_module, "urlopen", open_response)
+
+    _client().delete_peer("peer-1")
+
+    assert seen == [("DELETE", "https://netbird.example.com/api/peers/peer-1")]
+
+
+def test_delete_peer_treats_404_as_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    def open_response(request: _UrlRequest, *, timeout: float) -> _Response:
+        _ = timeout
+        raise HTTPError(
+            request.full_url,
+            404,
+            "Not Found",
+            hdrs=Message(),
+            fp=None,
+        )
+
+    monkeypatch.setattr(client_module, "urlopen", open_response)
+
+    _client().delete_peer("already-gone")
+
+
+def test_delete_peer_is_not_retried_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+
+    def open_response(request: _UrlRequest, *, timeout: float) -> _Response:
+        _ = (request, timeout)
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError(TRANSIENT_ERROR_MESSAGE)
+
+    monkeypatch.setattr(client_module, "urlopen", open_response)
+
+    with pytest.raises(NetBirdApiError, match="不可达"):
+        _client().delete_peer("peer-1")
+    assert attempts == 1

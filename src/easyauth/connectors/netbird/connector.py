@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Final, final, override
 
@@ -19,6 +20,7 @@ from easyauth.connectors.netbird.client import (
     USER_ROLE_USER,
     NetBirdApiError,
     NetBirdClient,
+    NetBirdPeer,
     NetBirdUser,
 )
 
@@ -37,6 +39,7 @@ MISSING_MANAGED_GROUPS_MESSAGE: Final = (
     "映射的 NetBird 组不存在(external_ref 为不可变组 ID, 不支持自动创建): {refs}。"
 )
 FENCE_LOST_MESSAGE: Final = "连接器对账失去租约或 generation fence, 本轮已停止外部写入。"
+logger = logging.getLogger(__name__)
 
 
 class _ApiBudgetExceededError(Exception):
@@ -59,6 +62,12 @@ class _ApiBudget:
         self.used += 1
 
 
+@final
+class _PeerCache:
+    def __init__(self) -> None:
+        self.items: list[NetBirdPeer] | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class _ReconcileContext:
     client: NetBirdClient
@@ -69,6 +78,7 @@ class _ReconcileContext:
     managed_group_ids: frozenset[str]
     actual_users: dict[str, NetBirdUser]
     object_errors: list[str]
+    peers: _PeerCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,7 +226,7 @@ class NetBirdConnector(BaseConnector):
 
     @override
     def on_user_offboarded(self, instance: ConnectorInstance, user: UserMirror) -> bool:
-        # 离职快路径: 立即 block 秒级断连; 组清理交给后续周期对账(方案 §3.8)。
+        # 离职快路径: 立即 block 并踢掉该用户全部 peer; 组清理交给后续周期对账。
         client = _client_from_config(instance.config)
         target_id = user.authentik_user_id
         target = next(
@@ -227,17 +237,19 @@ class NetBirdConnector(BaseConnector):
             ),
             None,
         )
-        if target is None or target.role != USER_ROLE_USER or target.is_blocked:
-            # 不存在/已封禁无事可做; owner/admin 是护栏豁免账号, 同样不触碰。
+        if target is None or target.role != USER_ROLE_USER:
+            # 不存在无事可做; owner/admin 是护栏豁免账号, 同样不触碰。
             return True
         if not _external_write_allowed(instance, target.user_id, require_active_user=False):
             return False
-        client.update_user(
-            user_id=target.user_id,
-            role=target.role,
-            auto_group_ids=sorted(target.auto_group_ids),
-            is_blocked=True,
-        )
+        if not target.is_blocked:
+            client.update_user(
+                user_id=target.user_id,
+                role=target.role,
+                auto_group_ids=sorted(target.auto_group_ids),
+                is_blocked=True,
+            )
+        _kick_peers_for_user(client, target.user_id)
         return True
 
 
@@ -289,6 +301,7 @@ def _prepare_reconcile_context(
         managed_group_ids=desired.managed_group_refs & actual_group_ids,
         actual_users=actual_users,
         object_errors=object_errors,
+        peers=_PeerCache(),
     )
 
 
@@ -516,29 +529,34 @@ def _revoke_ungranted_user(
 ) -> None:
     managed_current = current.auto_group_ids & context.managed_group_ids
     should_block = block_users_without_grant and not current.is_blocked
-    if not managed_current and not should_block:
+    should_kick = block_users_without_grant
+    if not managed_current and not should_block and not should_kick:
         return
     if not _external_write_allowed(
         context.instance,
         current.user_id,
         require_active_user=False,
+        allow_unknown_user=True,
     ):
         _bump(context.stats, "users_fenced")
         raise _FenceLostError
-    context.budget.charge()
-    try:
-        context.client.update_user(
-            user_id=current.user_id,
-            role=current.role,
-            auto_group_ids=sorted(current.auto_group_ids - context.managed_group_ids),
-            is_blocked=current.is_blocked or block_users_without_grant,
-        )
-    except NetBirdApiError as error:
-        context.object_errors.append(f"用户 {current.user_id} 撤权失败: {error}")
-        return
-    _bump(context.stats, "groups_removed", len(managed_current))
-    if should_block:
-        _bump(context.stats, "users_blocked")
+    if managed_current or should_block:
+        context.budget.charge()
+        try:
+            context.client.update_user(
+                user_id=current.user_id,
+                role=current.role,
+                auto_group_ids=sorted(current.auto_group_ids - context.managed_group_ids),
+                is_blocked=current.is_blocked or block_users_without_grant,
+            )
+        except NetBirdApiError as error:
+            context.object_errors.append(f"用户 {current.user_id} 撤权失败: {error}")
+            return
+        _bump(context.stats, "groups_removed", len(managed_current))
+        if should_block:
+            _bump(context.stats, "users_blocked")
+    if should_kick:
+        _kick_cached_user_peers(context, current.user_id)
 
 
 def _expansion_allowed(instance: ConnectorInstance, user_id: str) -> bool:
@@ -553,6 +571,7 @@ def _external_write_allowed(
     user_id: str,
     *,
     require_active_user: bool,
+    allow_unknown_user: bool = False,
 ) -> bool:
     # 局部导入避免框架加载连接器注册表时形成循环依赖。
     from easyauth.connectors.services import external_write_allowed  # noqa: PLC0415
@@ -561,7 +580,73 @@ def _external_write_allowed(
         instance,
         user_id=user_id,
         require_active_user=require_active_user,
+        allow_unknown_user=allow_unknown_user,
     )
+
+
+def _kick_cached_user_peers(context: _ReconcileContext, user_id: str) -> None:
+    peers = _load_peers(context)
+    if peers is None:
+        return
+    removed = _delete_matching_peers(
+        context.client,
+        user_id,
+        peers,
+        budget=context.budget,
+        object_errors=context.object_errors,
+    )
+    _bump(context.stats, "peers_removed", removed)
+
+
+def _load_peers(context: _ReconcileContext) -> list[NetBirdPeer] | None:
+    if context.peers.items is not None:
+        return context.peers.items
+    context.budget.charge()
+    try:
+        loaded = context.client.list_peers()
+    except NetBirdApiError as error:
+        context.object_errors.append(f"列出 NetBird peer 失败: {error}")
+        context.peers.items = []
+        return None
+    context.peers.items = loaded
+    return loaded
+
+
+def _kick_peers_for_user(client: NetBirdClient, user_id: str) -> None:
+    try:
+        peers = client.list_peers()
+    except NetBirdApiError as error:
+        logger.warning("列出用户 %s 的 NetBird peer 失败: %s", user_id, error)
+        return
+    errors: list[str] = []
+    _ = _delete_matching_peers(client, user_id, peers, budget=None, object_errors=errors)
+    for message in errors:
+        logger.warning("%s", message)
+
+
+def _delete_matching_peers(
+    client: NetBirdClient,
+    user_id: str,
+    peers: list[NetBirdPeer],
+    *,
+    budget: _ApiBudget | None,
+    object_errors: list[str],
+) -> int:
+    removed = 0
+    for peer in peers:
+        if peer.user_id != user_id:
+            continue
+        if budget is not None:
+            budget.charge()
+        try:
+            client.delete_peer(peer.peer_id)
+        except NetBirdApiError as error:
+            object_errors.append(f"删除用户 {user_id} 的 peer {peer.peer_id} 失败: {error}")
+            continue
+        removed += 1
+    if removed:
+        logger.info("已踢出用户 %s 的 %s 个 NetBird peer。", user_id, removed)
+    return removed
 
 
 def _bump(stats: dict[str, int], key: str, amount: int = 1) -> None:

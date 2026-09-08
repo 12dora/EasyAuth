@@ -602,6 +602,32 @@ def test_external_write_requires_current_generation_token_and_clean_dirty_state(
     )
 
 
+def test_block_write_allows_unknown_external_user_when_lease_held() -> None:
+    app, _mapped, _unmapped = _app_with_groups("conn-write-jit")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    assert mark_reconcile_dirty(instance.id, trigger=SYNC_TRIGGER_MANUAL)
+    claim = _claim_generation(instance.id)
+    assert claim is not None
+
+    assert external_write_allowed(
+        claim,
+        user_id="unknown-jit",
+        require_active_user=False,
+        allow_unknown_user=True,
+    )
+    assert not external_write_allowed(
+        claim,
+        user_id="unknown-jit",
+        require_active_user=False,
+    )
+    assert not external_write_allowed(
+        claim,
+        user_id="unknown-jit",
+        require_active_user=True,
+        allow_unknown_user=True,
+    )
+
+
 def test_non_active_user_is_never_projected_for_unblock() -> None:
     app, mapped, _unmapped = _app_with_groups("conn-departed")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)

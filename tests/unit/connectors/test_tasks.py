@@ -101,9 +101,9 @@ def test_offboard_task_uses_same_serial_worker_as_reconcile(
     # When
     handled = offboard_user_task(user.authentik_user_id)
 
-    # Then: 只推进持久 generation 并投递统一 worker, 不再旁路写外部系统。
+    # Then: 认领租约后走快路径, 再投递 countdown=0 的全量对账。
     assert handled == 1
-    assert FakeConnector.offboarded_user_ids == []
+    assert FakeConnector.offboarded_user_ids == [user.authentik_user_id]
     assert not ConnectorSyncRun.objects.filter(instance=instance).exists()
     assert sent_tasks.calls == [
         ("easyauth.connectors.reconcile_instance", (instance.id,)),
@@ -111,6 +111,7 @@ def test_offboard_task_uses_same_serial_worker_as_reconcile(
     instance.refresh_from_db()
     assert instance.reconcile_generation == 1
     assert instance.reconcile_dirty is True
+    assert instance.reconcile_lease_token is None
     assert instance.reconcile_pending_trigger == SYNC_TRIGGER_OFFBOARD
 
 
@@ -179,7 +180,7 @@ def test_refresh_external_groups_task_writes_local_snapshot() -> None:
 def test_offboard_during_active_lease_keeps_dirty_without_duplicate_worker(
     sent_tasks: _SendTaskRecorder,
 ) -> None:
-    # Given: 连接器未实现快路径。
+    # Given: 已有活跃对账租约, 快路径不得抢占。
     app = App.objects.create(app_key="conn-task-fb", name="X")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
     user = UserMirror.objects.create(authentik_user_id="conn-task-fb-u1")
@@ -192,8 +193,9 @@ def test_offboard_during_active_lease_keeps_dirty_without_duplicate_worker(
     # When
     handled = offboard_user_task(user.authentik_user_id)
 
-    # Then: 回退为触发一次对账。
+    # Then: 跳过快路径, 只记 dirty, 不重复投递 worker。
     assert handled == 1
+    assert FakeConnector.offboarded_user_ids == []
     assert sent_tasks.calls == []
     instance.refresh_from_db()
     assert instance.reconcile_dirty is True

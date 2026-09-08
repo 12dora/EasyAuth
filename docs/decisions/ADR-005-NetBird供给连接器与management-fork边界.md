@@ -104,3 +104,18 @@ NetBird 是第一个由 EasyAuth 反向**供给**（provisioning）的外部系�
   补丁实现、部署基线清单与联调场景矩阵留在 fork 仓库
   （`12dora/netbird`，commit `0c83bc5fd` 预创建 API、`e931f0897` 可配置文案，
   配套 `infrastructure_files/jiefakj-lab/` 与其 `PRODUCTION.md`）。
+
+## 修正（2026-09-09）
+
+账户已关闭 NetBird peer login expiration，VPN 会话不会自行过期。原决策第 5 条
+「撤权靠对账移组 + peer login expiration 兜底（建议 12–24h）」不再作为安全网。
+
+新规则：
+
+- EasyAuth 在把普通用户 `is_blocked=true` 之后，立即 `DELETE /api/peers/{id}`，
+  踢掉该用户全部 peer。对账统计计入 `peers_removed`。
+- 触发封禁并踢线的情形：授权撤销/过期、目录离职/停用、以及其它失权
+  （`block_users_without_grant` 默认开启）。
+- `block_users_without_grant=false` 时仍只剥映射组，不封禁、不删 peer。
+- 服务账号与 owner/admin 仍不封禁、不删 peer；仍在 desired 中的用户不删 peer。
+- 管理 API Token 需要对 `GET /api/peers` 与 `DELETE /api/peers/{id}` 有权限。
