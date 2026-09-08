@@ -53,7 +53,8 @@ export function DepartmentGrantsPage() {
               type="button"
               variant="primary"
               icon={<Plus size={16} />}
-              disabled={!page.selectedDeptId}
+              // 当前部门的授权没到位就不能新增: 否则认不出"这个应用已经授过了", 会建出重复策略。
+              disabled={!page.policiesAreCurrent}
               onClick={() => page.openEditor(null)}
             >
               {t("departmentGrants.create")}
@@ -148,6 +149,7 @@ export function DepartmentGrantsPage() {
                 <DepartmentGrantPolicyTable
                   policies={policies}
                   loading={policiesQuery.isFetching}
+                  actionsDisabled={!page.policiesAreCurrent}
                   onEdit={page.openEditor}
                   onDelete={page.setDeleteTarget}
                 />

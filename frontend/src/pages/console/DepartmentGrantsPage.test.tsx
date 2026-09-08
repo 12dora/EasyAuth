@@ -446,6 +446,46 @@ describe("DepartmentGrantsPage", () => {
     expect(screen.getByText("销售部季度支持")).toBeVisible();
   });
 
+  test("切部门期间上一部门的行不能被编辑或删除", async () => {
+    const { fetchMock, releasePolicies } = stubFetch({ pausePoliciesFor: "12" });
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await screen.findByText("客户管理 (CRM)");
+
+    await user.click(screen.getByText("销售部"));
+
+    // 表格里还是公司的行: 加载遮罩只挡鼠标, 因此按钮本身必须是禁用的。
+    const staleRow = rowByText("全员可查看本人客户");
+    expect(within(staleRow).getByRole("button", { name: "编辑" })).toBeDisabled();
+    expect(within(staleRow).getByRole("button", { name: "删除" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "新增授权" })).toBeDisabled();
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
+
+    releasePolicies();
+
+    expect(await screen.findByText("直属 8 人 · 含子部门 8 人")).toBeVisible();
+    expect(screen.getByRole("button", { name: "新增授权" })).toBeEnabled();
+    expect(within(rowByText("销售部季度支持")).getByRole("button", { name: "编辑" })).toBeEnabled();
+  });
+
+  test("当前部门的授权还没取到时不能新增授权", async () => {
+    const { releasePolicies } = stubFetch({ pausePoliciesFor: "1" });
+
+    renderPage();
+
+    // 树已经到了、部门也选上了, 但授权还在路上: 此时新建认不出"这个应用已经授过了"。
+    await screen.findByRole("treeitem", { name: /公司/ });
+    expect(screen.getByRole("button", { name: "新增授权" })).toBeDisabled();
+
+    releasePolicies();
+
+    expect(await screen.findByText("客户管理 (CRM)")).toBeVisible();
+    expect(screen.getByRole("button", { name: "新增授权" })).toBeEnabled();
+  });
+
   test("新增授权选中已有授权的应用时载入现有策略, 保存即更新而不是再建一条", async () => {
     const { fetchMock } = stubFetch();
     const user = userEvent.setup({ delay: null });

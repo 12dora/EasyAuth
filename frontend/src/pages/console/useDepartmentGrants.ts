@@ -71,7 +71,7 @@ export function useDepartmentGrants() {
   const [expandedDeptIds, setExpandedDeptIds] = useState<string[]>([]);
   const [treeFilter, setTreeFilter] = useState("");
   const [editor, setEditor] = useState<DepartmentGrantEditorState | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<DepartmentGrantPolicy | null>(null);
+  const [deleteTarget, setDeleteTargetState] = useState<DepartmentGrantPolicy | null>(null);
 
   const treeQuery = useQuery({
     queryKey: DEPARTMENT_TREE_QUERY_KEY,
@@ -108,6 +108,16 @@ export function useDepartmentGrants() {
   // 留存的数据可能还是上一个部门的; 人数与"本部门已有策略"这类口径必须等载荷对得上才算数。
   const loadedList = policiesQuery.data;
   const currentList = loadedList && loadedList.department.dept_id === selectedDeptId ? loadedList : undefined;
+
+  /**
+   * 这一行是不是当前部门这一份载荷里的。
+   *
+   * keepPreviousData 会让上一部门的行继续挂在表格里等新数据; antd 的加载遮罩只挡鼠标, 挡不住
+   * 键盘 —— 焦点仍能落到旧行的「编辑」上。放任下去就会把上一部门的策略当成当前部门的改掉,
+   * 因此所有写入入口都先认这一关。
+   */
+  const isCurrentPolicy = (policy: DepartmentGrantPolicy) =>
+    Boolean(currentList?.items.some((item) => item.id === policy.id));
 
   const selectedPath = useMemo(
     () => (tree ? departmentPathTo(tree.root, selectedDeptId) : []),
@@ -156,7 +166,7 @@ export function useDepartmentGrants() {
     mutationFn: (policy: DepartmentGrantPolicy) =>
       apiRequest(`/console/api/v1/department-grant-policies/${policy.id}`, { method: "DELETE" }),
     onSuccess: () => {
-      setDeleteTarget(null);
+      setDeleteTargetState(null);
       toast.success(t("departmentGrants.toast.deleted"));
       invalidateDepartments();
     },
@@ -171,6 +181,8 @@ export function useDepartmentGrants() {
     policiesQuery,
     department: currentList?.department,
     policies: loadedList?.items ?? [],
+    /** 当前部门的授权已经取到; 未就绪时新增与行内操作一律关闭。 */
+    policiesAreCurrent: Boolean(currentList),
     /** 定义在本部门上的策略(不含继承); 新增授权时据此认出"这个应用已经授过了"。 */
     ownPolicies: currentList ? currentList.items.filter((policy) => !policy.inherited) : [],
     selectedPath,
@@ -182,12 +194,20 @@ export function useDepartmentGrants() {
     setTreeFilter,
     editor,
     openEditor: (policy: DepartmentGrantPolicy | null) => {
+      if (!currentList || (policy && !isCurrentPolicy(policy))) {
+        return;
+      }
       saveMutation.reset();
       setEditor({ policy });
     },
     closeEditor: () => setEditor(null),
     deleteTarget,
-    setDeleteTarget,
+    setDeleteTarget: (policy: DepartmentGrantPolicy | null) => {
+      if (policy && !isCurrentPolicy(policy)) {
+        return;
+      }
+      setDeleteTargetState(policy);
+    },
     saveMutation,
     deleteMutation,
     /** policyId 为空即新建; 弹窗在新建态载入了本部门已有策略时会带上它的 id, 提交即更新那一条。 */

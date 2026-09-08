@@ -57,7 +57,6 @@ export function DepartmentGrantEditorDialog({
   const [draftErrors, setDraftErrors] = useState<GrantDraftError[]>([]);
   // 新建态选中"本部门已经授过"的应用时回填的那条策略; 提交走更新, 不再新增一条同应用的授权。
   const [preloadedPolicy, setPreloadedPolicy] = useState<DepartmentGrantPolicy | null>(null);
-  const targetPolicy = policy ?? preloadedPolicy;
 
   const title = policy
     ? policy.inherited
@@ -72,7 +71,10 @@ export function DepartmentGrantEditorDialog({
     const errors = grantDraftErrors(draft, catalogQuery.data);
     setDraftErrors(errors);
     if (errors.length === 0) {
-      onSubmit(buildGrantSubmission(draft), targetPolicy ? targetPolicy.id : null);
+      // 提交这一刻再认一次目标: 选完应用之后本部门的策略可能才刚取到(或被别人改过),
+      // 同一个应用只能有一条部门策略, 认漏了就会建出重复的第二条。
+      const target = policy ?? existingPolicyFor(ownPolicies, draft.appKey);
+      onSubmit(buildGrantSubmission(draft), target ? target.id : null);
     }
   };
   const canSubmit = grantDraftIsValid(draft, catalogQuery.data) && !isSubmitting;

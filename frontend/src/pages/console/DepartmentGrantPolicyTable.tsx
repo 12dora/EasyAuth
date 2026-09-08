@@ -16,6 +16,8 @@ interface DepartmentGrantPolicyTableProps {
   policies: DepartmentGrantPolicy[];
   /** 取的是 isFetching: 换部门时上一份行留在原地转圈, 而不是先清空再重画。 */
   loading: boolean;
+  /** 留在表格里的还是上一部门的行时为 true: 行内操作必须关掉, 加载遮罩挡不住键盘。 */
+  actionsDisabled: boolean;
   onEdit: (policy: DepartmentGrantPolicy) => void;
   onDelete: (policy: DepartmentGrantPolicy) => void;
 }
@@ -23,6 +25,7 @@ interface DepartmentGrantPolicyTableProps {
 export function DepartmentGrantPolicyTable({
   policies,
   loading,
+  actionsDisabled,
   onEdit,
   onDelete,
 }: DepartmentGrantPolicyTableProps) {
@@ -85,17 +88,22 @@ export function DepartmentGrantPolicyTable({
         width: 150,
         render: (policy) => (
           <>
-            <RowActionButton type="button" onClick={() => onEdit(policy)}>
+            <RowActionButton type="button" disabled={actionsDisabled} onClick={() => onEdit(policy)}>
               {t("common.edit")}
             </RowActionButton>
-            <RowActionButton type="button" variant="ghost-danger" onClick={() => onDelete(policy)}>
+            <RowActionButton
+              type="button"
+              variant="ghost-danger"
+              disabled={actionsDisabled}
+              onClick={() => onDelete(policy)}
+            >
               {t("common.delete")}
             </RowActionButton>
           </>
         ),
       }),
     ],
-    [formatDateTime, onDelete, onEdit, t],
+    [actionsDisabled, formatDateTime, onDelete, onEdit, t],
   );
 
   return (
