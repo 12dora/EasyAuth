@@ -82,6 +82,9 @@ export function DirectGrantPage() {
       setDraftErrorKeys([]);
       // 被授权人保持选中: 连续给同一个人授权是最常见的操作。
       setDraft(EMPTY_GRANT_DRAFT);
+      // 现状已经被这次授权改写: 作废缓存并允许重新回填, 否则再选回同一个应用会拿到过期的现状。
+      prefilledPairRef.current = "";
+      void queryClient.invalidateQueries({ queryKey: ["console", "current-grant"] });
       void queryClient.invalidateQueries({ queryKey: ["console", "operations", "access-grants"] });
     },
   });
@@ -119,6 +122,8 @@ export function DirectGrantPage() {
     setGrantee(null);
     setDraft(EMPTY_GRANT_DRAFT);
     setDraftErrorKeys([]);
+    prefilledPairRef.current = "";
+    reportedErrorPairRef.current = "";
     grantMutation.reset();
   };
 
