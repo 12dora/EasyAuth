@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import TYPE_CHECKING, ClassVar, cast, override
 
 from django.db.models import Prefetch, QuerySet
 from django.http import HttpRequest, JsonResponse
@@ -49,18 +49,24 @@ from easyauth.applications.dependency_health_checks import run_dependency_health
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.grants.models import (
+    MEMBERSHIP_SOURCE_DEPARTMENT,
+    AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
 from easyauth.grants.services import GrantService
 
 if TYPE_CHECKING:
     from django.http import QueryDict
 
     from easyauth.grants.managed_users import ManagedUsersDirectoryCache
-    from easyauth.grants.models import AccessGrant
 
 USER_NOT_FOUND_MESSAGE = "用户不存在。"
 APP_NOT_FOUND_MESSAGE = "应用不存在。"
 FAILURE_REASON_CONTRACT_MESSAGE = "授权失败原因事实缺失或无效。"
 ACTIVE_GRANT_NOT_FOUND_MESSAGE = "当前有效授权不存在, 紧急撤权未执行。"
+DEPARTMENT_SOURCED_GRANT_MESSAGE = "该用户在此应用的权限来自组织授权，请在组织授权中调整。"  # noqa: RUF001
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +173,7 @@ def _execute_emergency_revoke(
     payload = _EmergencyRevokePayload.model_validate_json(request.body)
     user = _user_for_id(payload.user_id)
     app = _app_for_key(payload.app_key)
+    _reject_department_sourced_grant(user=user, app=app, payload=payload)
     revoked_grant = GrantService.revoke_grant(
         user=user,
         app=app,
@@ -185,6 +192,52 @@ def _execute_emergency_revoke(
         )
     revoked_count = 1
     return _EmergencyRevokeResult(payload=payload, revoked_count=revoked_count)
+
+
+def _reject_department_sourced_grant(
+    *,
+    user: UserMirror,
+    app: App,
+    payload: _EmergencyRevokePayload,
+) -> None:
+    grant = AccessGrant.objects.filter(user=user, app=app, is_current=True).first()
+    if grant is None:
+        return
+    group_policy_ids, has_department_groups = _membership_department_policy_ids(
+        AccessGrantGroup.objects.filter(grant=grant, source=MEMBERSHIP_SOURCE_DEPARTMENT),
+    )
+    permission_policy_ids, has_department_permissions = _membership_department_policy_ids(
+        AccessGrantPermission.objects.filter(grant=grant, source=MEMBERSHIP_SOURCE_DEPARTMENT),
+    )
+    if not has_department_groups and not has_department_permissions:
+        return
+    policy_ids: list[JsonValue] = []
+    policy_ids.extend(sorted(group_policy_ids | permission_policy_ids))
+    raise ConsoleOperationsSemanticError(
+        DEPARTMENT_SOURCED_GRANT_MESSAGE,
+        {
+            "reason": "department_sourced_grant",
+            "user_id": payload.user_id,
+            "app_key": payload.app_key,
+            "department_policy_ids": policy_ids,
+        },
+    )
+
+
+def _membership_department_policy_ids(
+    queryset: QuerySet[AccessGrantGroup] | QuerySet[AccessGrantPermission],
+) -> tuple[set[int], bool]:
+    policy_ids: set[int] = set()
+    has_department = False
+    rows = cast(
+        "tuple[object, ...]",
+        tuple(queryset.values_list("department_policy_id", flat=True)),
+    )
+    for raw_policy_id in rows:
+        has_department = True
+        if isinstance(raw_policy_id, int):
+            policy_ids.add(raw_policy_id)
+    return policy_ids, has_department
 
 
 def _emergency_revoke_response_payload(
