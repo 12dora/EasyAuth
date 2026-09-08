@@ -24,7 +24,6 @@ export interface AccessRequestFormResultInput {
   canSubmit: boolean;
   expiresAtError: boolean;
   actions: AccessRequestActions;
-  currentGrantsTruncated: boolean;
   prefillErrorMessageKey: MessageKey | "";
 }
 
@@ -108,7 +107,7 @@ function submissionStatus(input: AccessRequestFormResultInput): SubmissionStatus
   const { submitMutation } = input;
   return {
     catalogIsLoading: input.catalogIsLoading,
-    catalogErrorMessage: catalogErrorMessage(input.catalogError, input.currentGrantsTruncated),
+    catalogErrorMessage: input.catalogError ? input.catalogError.message : "",
     submitErrorMessage: submitMutation.error ? submitMutation.error.message : "",
     noticeMessageKey: accessRequestNoticeMessageKey(
       input.fields,
@@ -120,13 +119,6 @@ function submissionStatus(input: AccessRequestFormResultInput): SubmissionStatus
     expiresAtError: input.expiresAtError,
     isSubmitting: submitMutation.isPending,
   };
-}
-
-function catalogErrorMessage(catalogError: Error | null, currentGrantsTruncated: boolean): string {
-  if (currentGrantsTruncated) {
-    return "当前授权超过 100 条，不能在申请表中截断选择。";
-  }
-  return catalogError ? catalogError.message : "";
 }
 
 type FormHandlers = Pick<

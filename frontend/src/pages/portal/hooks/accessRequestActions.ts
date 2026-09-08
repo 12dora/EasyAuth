@@ -95,12 +95,12 @@ function buildTargetActions(fields: AccessRequestFields, currentGrants: PortalGr
 }
 
 /**
- * 把一条现有授权带进草稿: 选基础授权与选应用走的是同一段回填。
+ * 把一条现有授权带进草稿: 选基础授权、选应用与"授权列表迟到"的重算走的是同一段回填。
  *
  * 一条授权可以挂多个权限组(入职、交接、控制台授权都会写 AccessGrantGroup), 必须整套带进草稿:
  * 少带一个, 提交出去的变更就会把它当成"要撤掉"。
  */
-function applyBaseGrantToDraft(fields: AccessRequestFields, grant: PortalGrantRow): void {
+export function applyBaseGrantToDraft(fields: AccessRequestFields, grant: PortalGrantRow): void {
   fields.setBaseGrantRevision(grant.grant_revision);
   fields.setAppKey(grant.app_key ?? "");
   fields.setAuthorizationGroupKeys(grant.groups.map((group) => group.key));

@@ -866,6 +866,79 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     expect(view.result.current.noticeMessageKey).toBe("portal.request.groupMaterialized");
   });
 
+  test("授权列表晚到: 到齐后把已经选中的应用重新判成变更申请", async () => {
+    let releaseGrants = () => {};
+    const grantsArrived = new Promise<void>((resolve) => {
+      releaseGrants = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse(lifecycleCatalog());
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        await grantsArrived;
+        return jsonResponse(lifecycleGrantList());
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    const view = await renderReadyForm();
+
+    // 应用选择器比"我的授权"先可用: 这一刻还看不出这个应用已经有生效授权。
+    act(() => view.result.current.changeAppKey("crm"));
+    expect(view.result.current.requestType).toBe("grant");
+
+    await act(async () => {
+      releaseGrants();
+      await grantsArrived;
+    });
+
+    // 列表到齐后必须重算, 否则留下的是一份后端必拒的新增申请。
+    await waitFor(() => expect(view.result.current.requestType).toBe("change"));
+    expect(view.result.current.baseGrantId).toBe("7");
+    expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+  });
+
+  test("我的授权分页时读全每一页: 后面几页里的应用照样能认出来", async () => {
+    const firstPage = {
+      data: Array.from({ length: 100 }, (_, index) => ({
+        ...lifecycleGrantList().data[0],
+        grant_id: 100 + index,
+        app_key: `other-${index}`,
+        app_name: `其他 ${index}`,
+        groups: [],
+        grants: [],
+      })),
+      pagination: { page: 1, page_size: 100, total_items: 101, total_pages: 2 },
+    };
+    const secondPage = {
+      data: lifecycleGrantList().data,
+      pagination: { page: 2, page_size: 100, total_items: 101, total_pages: 2 },
+    };
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse(lifecycleCatalog());
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(firstPage);
+      }
+      if (url === "/portal/api/v1/me/grants?page=2&page_size=100") {
+        return jsonResponse(secondPage);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    const view = await renderReadyForm();
+    await waitFor(() => expect(view.result.current.currentGrants).toHaveLength(101));
+
+    act(() => view.result.current.changeAppKey("crm"));
+    expect(view.result.current.requestType).toBe("change");
+    expect(view.result.current.baseGrantId).toBe("7");
+    // 读全之后不再有"截断"这回事: 申请照常可提交。
+    expect(view.result.current.catalogErrorMessage).toBe("");
+  });
+
   test("选中没有生效授权的应用: 保持新增申请, 已选的变更类型回落成新增", async () => {
     vi.stubGlobal("fetch", catalogOnlyFetch(lifecycleCatalog()));
     const view = await renderReadyForm();

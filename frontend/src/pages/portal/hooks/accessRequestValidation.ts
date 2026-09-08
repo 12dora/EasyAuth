@@ -15,7 +15,6 @@ export interface AccessRequestSubmitGate {
   values: AccessRequestPayloadValues;
   catalogView: CatalogView;
   selectedBaseGrant: PortalGrantRow | undefined;
-  currentGrantsTruncated: boolean;
   isSubmitting: boolean;
   currentUserId: string;
   /** 与 accessRequestExpiresAtError 共享的同一次时钟读数, 避免两者对"是否已过期"给出互相矛盾的结论。 */
@@ -32,7 +31,7 @@ export function accessRequestCanSubmit(gate: AccessRequestSubmitGate): boolean {
   return (
     hasRequestTarget(gate.values)
     && authorizationGroupCountIsWithinLimit(gate.values)
-    && lifecycleSelectionIsComplete(gate.values, gate.selectedBaseGrant, gate.currentGrantsTruncated)
+    && lifecycleSelectionIsComplete(gate.values, gate.selectedBaseGrant)
     && revokeTargetReducesBaseGrant(gate.values, gate.selectedBaseGrant)
     && selectedScopesAreComplete
     && !managedUsersTargetHasMissingDirectManager
@@ -116,11 +115,7 @@ function revokeTargetReducesBaseGrant(
 function lifecycleSelectionIsComplete(
   values: AccessRequestPayloadValues,
   selectedBaseGrant: PortalGrantRow | undefined,
-  currentGrantsTruncated: boolean,
 ): boolean {
-  if (currentGrantsTruncated) {
-    return false;
-  }
   if (values.requestType === "grant") {
     return true;
   }

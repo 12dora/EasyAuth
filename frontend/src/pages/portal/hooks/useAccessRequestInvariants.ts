@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { PortalGrantRow } from "../portalListPayload";
+import { applyBaseGrantToDraft } from "./accessRequestActions";
 import { buildDefaultApproverUserIds } from "./accessRequestApprovers";
 import { groupCoveredSelectionKeySet, nextDefaultPermissionScopes } from "./accessRequestCatalog";
 import { directGrantSelectionKey, listsAreEqual } from "./accessRequestSelection";
@@ -53,6 +54,42 @@ export function useDefaultApprovers(fields: AccessRequestFields, catalogView: Ca
       listsAreEqual(current, defaultApproverUserIds) ? current : defaultApproverUserIds,
     );
   }, [approverSelectionWasEdited, defaultApproverUserIds, setSelectedApproverUserIds]);
+}
+
+/**
+ * 授权列表到齐之后重新判定申请类型。
+ *
+ * 应用选择器在"我的授权"到达之前就能用: 那一刻列表还是空的, "这个应用没有生效授权"的结论可能是错的,
+ * 于是表单会停在一份后端必拒的新增申请上(submission_validation._validate_no_current_grant)。
+ * 列表到齐后按同一条规则重算一次: 有生效授权就转成变更申请并带出现状, 没有就回落成新增申请。
+ * 已经选好基础授权(含撤销/续期)的草稿不动。
+ */
+export function useCurrentGrantForAppInvariant(
+  fields: AccessRequestFields,
+  currentGrants: PortalGrantRow[],
+  currentGrantsAreLoaded: boolean,
+): void {
+  const { appKey, baseGrantId, requestType } = fields;
+  useEffect(() => {
+    if (!currentGrantsAreLoaded || appKey === "" || baseGrantId !== "") {
+      return;
+    }
+    if (requestType !== "grant" && requestType !== "change") {
+      return;
+    }
+    const grant = currentGrants.find((item) => item.app_key === appKey);
+    if (!grant) {
+      if (requestType === "change") {
+        fields.setRequestType("grant");
+      }
+      return;
+    }
+    fields.setRequestType("change");
+    fields.setBaseGrantId(String(grant.grant_id));
+    applyBaseGrantToDraft(fields, grant);
+    // fields 每次渲染都是新对象, 但其中的 setter 是稳定的: 依赖只列真正会变的那几项。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentGrantsAreLoaded, currentGrants, appKey, baseGrantId, requestType]);
 }
 
 export function useLifecycleGrantInvariant(fields: AccessRequestFields, selectedBaseGrant: PortalGrantRow | undefined): void {
