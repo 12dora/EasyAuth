@@ -55,6 +55,8 @@
 
 ### Changed
 
+- FastAPI `easyauth_events_router` 在协程中读取请求体后, 将同步的
+  `events_http_response` 与 APP 回调放到线程池执行, 避免阻塞事件循环。
 - Python 源码中的中文文案标点统一使用半角逗号加空格，包括
   `CALLBACK_FAILED_MESSAGE = "交接回调执行失败, 请查看应用日志"`。
 - webhook 缺少签名密钥的 reason 常量标识符由 `REASON_MISSING_SECRET` 改名为

@@ -128,8 +128,10 @@ def easyauth_events_router(
     ``callbacks.on_catalog_changed`` (将该应用全部缓存快照标为过期)。
     ``secret_provider`` 在每次请求时取密钥。默认路径为
     ``/api/v1/easyauth/events``; 签名失败默认 **401**。
+    请求体在协程中有界读取, 同步处理经 ``run_in_threadpool`` 执行。
     """
     from fastapi import APIRouter, Request, Response
+    from starlette.concurrency import run_in_threadpool
 
     _validate_signature_failure_status(signature_failure_status)
 
@@ -142,9 +144,13 @@ def easyauth_events_router(
         except BodyTooLargeError:
             status_code, headers, body = body_too_large_response(max_body_bytes)
             return _as_response(status_code, headers, body)
-        status_code, headers, body = events_http_response(
+        request_headers = dict(request.headers)
+        # 验签与 APP 同步回调(常见于阻塞式拉取快照)放到线程池, 避免卡住事件循环。
+        # events_http_response 对非 FastAPI 调用方仍保持同步。
+        status_code, headers, body = await run_in_threadpool(
+            events_http_response,
             secret_provider=secret_provider,
-            headers=dict(request.headers),
+            headers=request_headers,
             raw_body=raw_body,
             callbacks=callbacks,
             signature_failure_status=signature_failure_status,
