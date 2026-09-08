@@ -12,6 +12,7 @@ from .app import App
 from .constants import (
     APP_SCOPE_KEY_PATTERN,
     AUTHORIZATION_GROUP_KINDS,
+    BUILTIN_SUPER_ADMIN_GROUP_KEY,
     PERMISSION_RISK_LEVELS,
     JsonValue,
 )
@@ -188,6 +189,7 @@ class AuthorizationGroup(models.Model):
     description_en: models.TextField[str, str] = models.TextField(blank=True, default="")
     requestable: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
+    is_builtin: models.BooleanField[bool, bool] = models.BooleanField(default=False)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -217,6 +219,14 @@ class AuthorizationGroup(models.Model):
         super().clean()
         if self.kind not in AUTHORIZATION_GROUP_KINDS:
             raise ValidationError({"kind": "Authorization group kind must be role or bundle."})
+        if self.key == BUILTIN_SUPER_ADMIN_GROUP_KEY and not self.is_builtin:
+            raise ValidationError(
+                {"key": "Reserved authorization group key is owned by the platform."},
+            )
+        if self.is_builtin and self.key != BUILTIN_SUPER_ADMIN_GROUP_KEY:
+            raise ValidationError(
+                {"is_builtin": "Builtin marker is only valid for the reserved super_admin group."},
+            )
 
 
 class AuthorizationGroupGrant(models.Model):

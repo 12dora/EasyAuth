@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final, cast, final
 
 from django.db import transaction
 
@@ -35,10 +35,30 @@ __all__ = [
     "BUILTIN_SUPER_ADMIN_NAME",
     "BUILTIN_SUPER_ADMIN_NAME_EN",
     "RESERVED_AUTHORIZATION_GROUP_REASON",
+    "ReservedAuthorizationGroupCollisionError",
     "ensure_builtin_super_admin",
     "is_reserved_authorization_group_key",
+    "reserved_authorization_group_collision_message",
     "super_admin_grant_targets",
 ]
+
+
+@final
+class ReservedAuthorizationGroupCollisionError(RuntimeError):
+    """应用已有非内置的 reserved key 授权组, 禁止静默接管。"""
+
+    app_key: str
+
+    def __init__(self, app_key: str) -> None:
+        self.app_key = app_key
+        super().__init__(reserved_authorization_group_collision_message(app_key))
+
+
+def reserved_authorization_group_collision_message(app_key: str) -> str:
+    return (
+        f"应用 {app_key} 已存在 key={BUILTIN_SUPER_ADMIN_GROUP_KEY} 的非平台内置授权组。"
+        "请先手工处理该组后再继续。"
+    )
 
 
 def is_reserved_authorization_group_key(key: str) -> bool:
@@ -64,7 +84,11 @@ def super_admin_grant_targets(
 
 @transaction.atomic
 def ensure_builtin_super_admin(app: App) -> AuthorizationGroup:
-    """幂等写入平台内置 super_admin 授权组及其 grant, 并清掉过期 grant。"""
+    """幂等写入平台内置 super_admin 授权组及其 grant, 并清掉过期 grant。
+
+    只接管 is_builtin=True 的组; 不会改 catalog_version, 也不会改写 grant 上已有的
+    managed_scope_policy 覆盖。
+    """
     group = _upsert_super_admin_group(app)
     _sync_super_admin_grants(app, group)
     return group
@@ -77,7 +101,13 @@ def _upsert_super_admin_group(app: App) -> AuthorizationGroup:
         .first()
     )
     if group is None:
-        group = AuthorizationGroup(app=app, key=BUILTIN_SUPER_ADMIN_GROUP_KEY)
+        group = AuthorizationGroup(
+            app=app,
+            key=BUILTIN_SUPER_ADMIN_GROUP_KEY,
+            is_builtin=True,
+        )
+    elif not group.is_builtin:
+        raise ReservedAuthorizationGroupCollisionError(app.app_key)
     group.kind = BUILTIN_SUPER_ADMIN_KIND
     group.name = BUILTIN_SUPER_ADMIN_NAME
     group.name_en = BUILTIN_SUPER_ADMIN_NAME_EN
@@ -85,12 +115,14 @@ def _upsert_super_admin_group(app: App) -> AuthorizationGroup:
     group.description_en = BUILTIN_SUPER_ADMIN_DESCRIPTION_EN
     group.requestable = False
     group.is_active = True
+    group.is_builtin = True
     group.full_clean()
     group.save()
     return group
 
 
 def _sync_super_admin_grants(app: App, group: AuthorizationGroup) -> None:
+    # 只对齐 grant 成员与 is_active; 不创建、不删除、不改写 ManagedScopePolicy 覆盖。
     desired = _desired_grant_targets(app)
     existing = {
         (grant.permission_id, grant.scope_key): grant

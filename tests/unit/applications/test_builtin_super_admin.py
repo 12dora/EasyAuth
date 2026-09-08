@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import importlib
 from json import dumps
 from typing import Any, Final
 
 import pytest
+from django.apps import apps as django_apps
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from easyauth.applications.builtin_authorization_groups import (
@@ -13,6 +16,7 @@ from easyauth.applications.builtin_authorization_groups import (
     BUILTIN_SUPER_ADMIN_NAME,
     BUILTIN_SUPER_ADMIN_NAME_EN,
     RESERVED_AUTHORIZATION_GROUP_REASON,
+    ReservedAuthorizationGroupCollisionError,
     ensure_builtin_super_admin,
 )
 from easyauth.applications.models import (
@@ -20,6 +24,7 @@ from easyauth.applications.models import (
     AppScope,
     AuthorizationGroup,
     AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
 )
 from easyauth.applications.models.constants import BUILTIN_SUPER_ADMIN_GROUP_KEY
@@ -50,8 +55,12 @@ def test_ensure_builtin_super_admin_creates_empty_group_for_fresh_app() -> None:
     assert group.description_en == BUILTIN_SUPER_ADMIN_DESCRIPTION_EN
     assert group.requestable is False
     assert group.is_active is True
+    assert group.is_builtin is True
     assert AuthorizationGroup.objects.filter(app=app).count() == 1
     assert AuthorizationGroupGrant.objects.filter(authorization_group=group).count() == 0
+    assert app.catalog_version == 1
+    app.refresh_from_db()
+    assert app.catalog_version == 1
 
 
 def test_ensure_builtin_super_admin_resyncs_grants_when_catalog_changes() -> None:
@@ -109,6 +118,175 @@ def test_ensure_builtin_super_admin_resyncs_grants_when_catalog_changes() -> Non
         scope_key="GLOBAL",
         is_active=False,
     ).exists()
+    app.refresh_from_db()
+    assert app.catalog_version == 1
+
+
+def test_ensure_builtin_super_admin_rejects_non_builtin_reserved_key() -> None:
+    app = App.objects.create(app_key=f"{APP_KEY}-collision", name="碰撞应用")
+    colliding = AuthorizationGroup.objects.create(
+        app=app,
+        key=BUILTIN_SUPER_ADMIN_GROUP_KEY,
+        kind="role",
+        name="假超管",
+        is_builtin=False,
+    )
+
+    with pytest.raises(ReservedAuthorizationGroupCollisionError) as raised:
+        _ = ensure_builtin_super_admin(app)
+
+    colliding.refresh_from_db()
+    assert raised.value.app_key == app.app_key
+    assert app.app_key in str(raised.value)
+    assert colliding.is_builtin is False
+    assert colliding.name == "假超管"
+    assert colliding.is_active is True
+
+
+def test_authorization_group_clean_rejects_non_builtin_reserved_key() -> None:
+    app = App.objects.create(app_key=f"{APP_KEY}-clean", name="校验")
+    colliding = AuthorizationGroup(
+        app=app,
+        key=BUILTIN_SUPER_ADMIN_GROUP_KEY,
+        kind="role",
+        name="假超管",
+        is_builtin=False,
+    )
+    forged_marker = AuthorizationGroup(
+        app=app,
+        key="not-super-admin",
+        kind="role",
+        name="伪造内置",
+        is_builtin=True,
+    )
+
+    with pytest.raises(ValidationError) as reserved:
+        colliding.clean()
+    with pytest.raises(ValidationError) as marker:
+        forged_marker.clean()
+
+    assert reserved.value.message_dict == {
+        "key": ["Reserved authorization group key is owned by the platform."],
+    }
+    assert marker.value.message_dict == {
+        "is_builtin": ["Builtin marker is only valid for the reserved super_admin group."],
+    }
+
+
+def test_ensure_builtin_super_admin_preserves_managed_scope_policy_overrides() -> None:
+    app = App.objects.create(app_key=f"{APP_KEY}-policy", name="策略")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="被管理人员")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    managed = Permission.objects.create(
+        app=app,
+        key="invoice.delegate",
+        name="代开发票",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    group = ensure_builtin_super_admin(app)
+    grant = AuthorizationGroupGrant.objects.get(
+        authorization_group=group,
+        permission=managed,
+        scope_key="MANAGED_USERS",
+    )
+    policy = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="authorization_group_grant",
+        authorization_group_grant=grant,
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+        enabled=True,
+    )
+    extra = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="查看发票",
+        supported_scopes=["GLOBAL"],
+    )
+
+    _ = ensure_builtin_super_admin(app)
+
+    policy.refresh_from_db()
+    grant.refresh_from_db()
+    assert grant.is_active is True
+    assert policy.authorization_group_grant_id == grant.id
+    assert policy.resolver == "dingtalk_manager_chain"
+    assert policy.enabled is True
+    assert _active_grant_pairs(group) == {
+        (managed.id, "MANAGED_USERS"),
+        (extra.id, "GLOBAL"),
+    }
+    assert (
+        ManagedScopePolicy.objects.filter(
+            authorization_group_grant=grant,
+            scope="MANAGED_USERS",
+        ).count()
+        == 1
+    )
+
+
+def test_backfill_fails_fast_when_reserved_key_already_exists() -> None:
+    app = App.objects.create(app_key=f"{APP_KEY}-migrate-collision", name="迁移碰撞")
+    colliding = AuthorizationGroup.objects.create(
+        app=app,
+        key=BUILTIN_SUPER_ADMIN_GROUP_KEY,
+        kind="role",
+        name="假超管",
+        is_builtin=False,
+    )
+
+    with pytest.raises(_backfill_error_type()) as raised:
+        _run_backfill()
+
+    colliding.refresh_from_db()
+    assert colliding.is_builtin is False
+    assert colliding.name == "假超管"
+    assert app.app_key in str(raised.value)
+
+
+def test_backfill_bumps_catalog_version_only_when_group_or_grants_change() -> None:
+    fresh = App.objects.create(app_key=f"{APP_KEY}-migrate-fresh", name="待回填")
+    synced = App.objects.create(app_key=f"{APP_KEY}-migrate-synced", name="已对齐")
+    _ = AppScope.objects.create(app=synced, key="GLOBAL", name="全局")
+    permission = Permission.objects.create(
+        app=synced,
+        key="invoice.read",
+        name="查看发票",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = ensure_builtin_super_admin(synced)
+    synced.refresh_from_db()
+    assert fresh.catalog_version == 1
+    assert synced.catalog_version == 1
+
+    _run_backfill()
+    fresh.refresh_from_db()
+    synced.refresh_from_db()
+    assert fresh.catalog_version == 2
+    assert AuthorizationGroup.objects.get(app=fresh, key=BUILTIN_SUPER_ADMIN_GROUP_KEY).is_builtin
+    assert synced.catalog_version == 1
+    assert _active_grant_pairs(
+        AuthorizationGroup.objects.get(app=synced, key=BUILTIN_SUPER_ADMIN_GROUP_KEY),
+    ) == {(permission.id, "GLOBAL")}
+
+    _run_backfill()
+    fresh.refresh_from_db()
+    synced.refresh_from_db()
+    assert fresh.catalog_version == 2
+    assert synced.catalog_version == 1
+
+    extra = Permission.objects.create(
+        app=synced,
+        key="invoice.write",
+        name="开具发票",
+        supported_scopes=["GLOBAL"],
+    )
+    _run_backfill()
+    synced.refresh_from_db()
+    assert synced.catalog_version == 2
+    assert _active_grant_pairs(
+        AuthorizationGroup.objects.get(app=synced, key=BUILTIN_SUPER_ADMIN_GROUP_KEY),
+    ) == {(permission.id, "GLOBAL"), (extra.id, "GLOBAL")}
 
 
 def test_manifest_import_cannot_remove_or_declare_super_admin() -> None:
@@ -190,6 +368,24 @@ def _active_grant_pairs(group: AuthorizationGroup) -> set[tuple[int, str]]:
             is_active=True,
         )
     }
+
+
+def _run_backfill() -> None:
+    module = importlib.import_module(
+        "easyauth.applications.migrations.0034_backfill_builtin_super_admin",
+    )
+    module.backfill_builtin_super_admin(django_apps, None)
+
+
+def _backfill_error_type() -> type[BaseException]:
+    module = importlib.import_module(
+        "easyauth.applications.migrations.0034_backfill_builtin_super_admin",
+    )
+    error_type = module.BuiltinSuperAdminMigrationError
+    if not issubclass(error_type, BaseException):
+        message = "BuiltinSuperAdminMigrationError 必须是异常类型。"
+        raise TypeError(message)
+    return error_type
 
 
 def _parsed_manifest(*, schema_version: int) -> AppManifestInput:
