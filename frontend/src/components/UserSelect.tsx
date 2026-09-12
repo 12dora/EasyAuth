@@ -96,11 +96,8 @@ export function UserSearchInput({
           onRetry={() => void optionsQuery.refetch()}
         />
       ) : null}
-      {selected ? (
-        <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs leading-5 text-ink-faint">
-          {selected.department ? <span>{selected.department}</span> : null}
-          <code>{selected.user_id}</code>
-        </p>
+      {selected?.department ? (
+        <p className="mt-1 text-xs leading-5 text-ink-faint">{selected.department}</p>
       ) : null}
     </div>
   );

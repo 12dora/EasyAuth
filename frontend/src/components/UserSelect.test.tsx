@@ -74,7 +74,7 @@ describe("UserSelect", () => {
     });
   });
 
-  test("选中候选后输入框显示姓名, 部门与用户 ID 落到次要行", async () => {
+  test("选中候选后输入框显示姓名, 部门落到次要行, 不再显示用户 ID", async () => {
     const user = userEvent.setup();
     stubUserOptions();
 
@@ -89,7 +89,7 @@ describe("UserSelect", () => {
     expect(input).toHaveValue("张三");
     const secondaryLine = screen.getByText("销售部").closest("p");
     expect(secondaryLine).toHaveTextContent("销售部");
-    expect(secondaryLine).toHaveTextContent("u-1");
+    expect(secondaryLine).not.toHaveTextContent("u-1");
 
     // 手输覆盖选择: 没有可信姓名, 原样显示输入内容。
     await user.clear(input);
