@@ -156,6 +156,9 @@ def _upsert_approval_rules(
     permission_by_key: dict[str, Permission],
     authorization_group_by_key: dict[str, AuthorizationGroup],
 ) -> None:
+    # 空列表或缺省表示审批规则由控制台维护, 不得停用或改写已有 ApprovalRule。
+    if not manifest.approval_rules:
+        return
     incoming = {_approval_rule_input_key(rule): rule for rule in manifest.approval_rules}
     existing = {
         _approval_rule_key(rule): rule

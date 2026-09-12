@@ -165,6 +165,7 @@ credential capability；App owner 必须对每条 credential 显式授予所需 
 
 - `manifest.app.app_key` 必须与路径 `{app_key}` 一致。
 - `base_url` 可选：用于将 lifecycle 相对路径补全为 webhook 绝对地址。
+- `approval_rules` 为空列表或缺省时，表示审批规则由控制台维护：本次推送**不得**停用或改写已有 `ApprovalRule`。仅当清单声明至少一条审批规则时，本次推送才接管该 App 的规则集（按声明 upsert，并停用未声明的既有规则）。
 
 **成功响应：**
 

@@ -242,6 +242,9 @@ def _authorization_group_actions(app: App, manifest: AppManifestInput) -> list[T
 
 
 def _approval_rule_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
+    # 空列表或缺省表示审批规则由控制台维护, preview 不得发出 deactivate_approval_rule。
+    if not manifest.approval_rules:
+        return []
     actions: list[TemplateAction] = []
     existing = {
         _approval_rule_key(rule): rule

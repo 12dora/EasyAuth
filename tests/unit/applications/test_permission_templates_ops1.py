@@ -284,6 +284,82 @@ def test_ops1_app_manifest_import_deactivates_missing_objects_without_hard_delet
     assert AuthorizationGroupGrant.objects.filter(authorization_group=auth_group).exists()
 
 
+@pytest.mark.parametrize("rules_field", ["empty_list", "omitted"])
+def test_empty_manifest_approval_rules_keep_console_managed_rules(rules_field: str) -> None:
+    app = App.objects.create(app_key=APP_KEY, name="Ops1")
+    _ = apply_permission_template(app=app, template=_parsed_manifest())
+    rule = ApprovalRule.objects.get(app=app)
+    assert rule.is_active is True
+    assert rule.approver_userids == ["manager-001"]
+
+    payload = _manifest_payload()
+    payload["schema_version"] = 2
+    if rules_field == "omitted":
+        del payload["approval_rules"]
+    else:
+        payload["approval_rules"] = []
+    empty_rules = parse_permission_template(
+        app_key=APP_KEY,
+        raw_template=dumps(payload),
+        template_format="json",
+        imported_by="owner-001",
+    )
+    preview = preview_permission_template(app=app, template=empty_rules)
+    _ = apply_permission_template(app=app, template=empty_rules)
+
+    rule.refresh_from_db()
+    assert rule.is_active is True
+    assert rule.approver_userids == ["manager-001"]
+    assert ApprovalRule.objects.filter(app=app, is_active=True).count() == 1
+    assert all(action.action != "deactivate_approval_rule" for action in preview.actions)
+
+
+def test_nonempty_manifest_approval_rules_deactivate_undeclared_rules() -> None:
+    app = App.objects.create(app_key=APP_KEY, name="Ops1")
+    first_payload = _manifest_payload()
+    first_payload["approval_rules"] = [
+        {
+            "target_type": "authorization_group",
+            "target_key": "accountant",
+            "approver_userids": ["manager-001"],
+            "is_active": True,
+        },
+        {
+            "target_type": "permission",
+            "target_key": "billing.read",
+            "approver_userids": ["manager-002"],
+            "is_active": True,
+        },
+    ]
+    first = parse_permission_template(
+        app_key=APP_KEY,
+        raw_template=dumps(first_payload),
+        template_format="json",
+        imported_by="owner-001",
+    )
+    _ = apply_permission_template(app=app, template=first)
+
+    second_payload = _manifest_payload()
+    second_payload["schema_version"] = 2
+    second = parse_permission_template(
+        app_key=APP_KEY,
+        raw_template=dumps(second_payload),
+        template_format="json",
+        imported_by="owner-001",
+    )
+    preview = preview_permission_template(app=app, template=second)
+    _ = apply_permission_template(app=app, template=second)
+
+    group_rule = ApprovalRule.objects.get(app=app, authorization_group__key="accountant")
+    permission_rule = ApprovalRule.objects.get(app=app, permission__key="billing.read")
+    preview_keys = [(action.action, action.key) for action in preview.actions]
+    assert group_rule.is_active is True
+    assert group_rule.approver_userids == ["manager-001"]
+    assert permission_rule.is_active is False
+    assert ("deactivate_approval_rule", "permission:billing.read") in preview_keys
+    assert ("deactivate_approval_rule", "authorization_group:accountant") not in preview_keys
+
+
 def test_app_manifest_bilingual_fields_import_export_roundtrip() -> None:
     app = App.objects.create(app_key=APP_KEY, name="Ops1")
     manifest = parse_permission_template(
