@@ -6,10 +6,12 @@ from typing import Final, Protocol
 
 import pytest
 from django.contrib.auth.models import User
+from django.db import connection
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 from pydantic import TypeAdapter
 
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import DingTalkDepartmentMirror, DingTalkUserMirror, UserMirror
 from easyauth.api.errors import JsonValue
 from easyauth.applications.models import (
     HANDOVER_CAPABILITY_DECLARED,
@@ -127,6 +129,86 @@ def test_handover_task_list_exposes_delete_allowed_action_only_for_cancelled() -
     assert actions_by_status["in_progress"] == []
     assert actions_by_status["completed"] == []
     assert actions_by_status["cancelled"] == ["delete"]
+
+
+def test_handover_task_list_department_path_queries_do_not_grow_with_task_count() -> None:
+    client = _logged_in_superuser("handover-dept-query-admin")
+    source = "dingtalk"
+    corp = "corp-handover-list-nplusone"
+    _ = DingTalkDepartmentMirror.objects.create(
+        source_slug=source,
+        corp_id=corp,
+        dept_id="1",
+        parent_id="",
+        name="",
+    )
+    _ = DingTalkDepartmentMirror.objects.create(
+        source_slug=source,
+        corp_id=corp,
+        dept_id="10",
+        parent_id="1",
+        name="捷发",
+    )
+    _ = DingTalkDepartmentMirror.objects.create(
+        source_slug=source,
+        corp_id=corp,
+        dept_id="11",
+        parent_id="10",
+        name="安环部",
+    )
+    for index in range(5):
+        dingtalk_userid = f"dt-handover-dept-q-{index}"
+        subject = UserMirror.objects.create(
+            authentik_user_id=f"handover-dept-q-{index}",
+            name=f"交接用户{index}",
+            department="叶子名",
+            dingtalk_source_slug=source,
+            dingtalk_corp_id=corp,
+            dingtalk_userid=dingtalk_userid,
+        )
+        _ = DingTalkUserMirror.objects.create(
+            source_slug=source,
+            corp_id=corp,
+            user_id=dingtalk_userid,
+            name=subject.name,
+            department_ids=["11"],
+        )
+        _ = HandoverTask.objects.create(kind="offboard", subject_user=subject)
+
+    warmup = client.get(TASKS_URL, {"page_size": "1"})
+    assert warmup.status_code == HTTPStatus.OK
+
+    with CaptureQueriesContext(connection) as one_task_queries:
+        one = client.get(TASKS_URL, {"page_size": "1"})
+    with CaptureQueriesContext(connection) as five_task_queries:
+        five = client.get(TASKS_URL, {"page_size": "5"})
+
+    one_body = JSON_VALUE_ADAPTER.validate_json(one.content)
+    five_body = JSON_VALUE_ADAPTER.validate_json(five.content)
+    assert isinstance(one_body, dict)
+    assert isinstance(five_body, dict)
+    one_data = one_body["data"]
+    five_data = five_body["data"]
+    assert isinstance(one_data, list)
+    assert isinstance(five_data, list)
+    assert one.status_code == HTTPStatus.OK
+    assert five.status_code == HTTPStatus.OK
+    assert len(one_data) == 1
+    assert len(five_data) == 5
+    departments = {
+        item["subject"]["department"]
+        for item in five_data
+        if isinstance(item, dict) and isinstance(item.get("subject"), dict)
+    }
+    assert departments == {"捷发-安环部"}
+    assert _table_query_count(one_task_queries, "accounts_dingtalkusermirror") == (
+        _table_query_count(five_task_queries, "accounts_dingtalkusermirror")
+    )
+    assert _table_query_count(one_task_queries, "accounts_dingtalkdepartmentmirror") == (
+        _table_query_count(five_task_queries, "accounts_dingtalkdepartmentmirror")
+    )
+    assert _table_query_count(five_task_queries, "accounts_dingtalkusermirror") == 1
+    assert _table_query_count(five_task_queries, "accounts_dingtalkdepartmentmirror") == 1
 
 
 @pytest.mark.parametrize("query", [{"status": "typo"}, {"kind": "unknown"}])
@@ -623,6 +705,11 @@ def test_transfer_diff_confirmation_rejects_stale_revision() -> None:
     assert _int_field(second, "revision") == _int_field(first, "revision") + 1
     assert response.status_code == HTTPStatus.CONFLICT
     assert TransferPlan.objects.get(task=task).confirmed_at is None
+
+
+def _table_query_count(queries: CaptureQueriesContext, table: str) -> int:
+    needle = table.lower()
+    return sum(1 for query in queries if needle in query["sql"].lower())
 
 
 def _logged_in_superuser(username: str) -> Client:

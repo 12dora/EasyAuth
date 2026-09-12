@@ -21,6 +21,15 @@ def test_name_pinyin_fields_keeps_ascii_letters_and_digits() -> None:
     assert name_pinyin_fields("John2") == ("john2", "john2")
 
 
+def test_name_pinyin_fields_uses_whole_word_reading_for_heteronyms() -> None:
+    assert name_pinyin_fields("重庆") == ("chongqing", "cq")
+    assert name_pinyin_fields("长安") == ("changan", "ca")
+
+
+def test_name_pinyin_fields_keeps_ascii_run_in_full_and_initials() -> None:
+    assert name_pinyin_fields("Mike王") == ("mikewang", "mikew")
+
+
 def test_name_pinyin_fields_empty() -> None:
     assert name_pinyin_fields("") == ("", "")
 

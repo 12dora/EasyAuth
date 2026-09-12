@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, cast
 
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Prefetch, Q, Sum
 from django.utils import timezone
 
 from easyauth.accounts.department_paths import department_path_labels
@@ -33,6 +33,8 @@ from easyauth.lifecycle.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from easyauth.accounts.models import UserMirror
     from easyauth.api.errors import JsonValue
 
@@ -57,10 +59,15 @@ _CONSOLE_SKIPPABLE_STATUSES: Final = frozenset(
 _AUDIT_METADATA_TYPE_MESSAGE: Final = "审计 metadata 必须是 JSON 对象"
 
 
-def user_ref(user: UserMirror | None, *, include_status: bool = False) -> JsonObject | None:
+def user_ref(
+    user: UserMirror | None,
+    *,
+    include_status: bool = False,
+    department_labels: Mapping[str, str] | None = None,
+) -> JsonObject | None:
     if user is None:
         return None
-    labels = department_path_labels((user,))
+    labels = department_labels if department_labels is not None else department_path_labels((user,))
     payload: JsonObject = {
         "user_id": user.authentik_user_id,
         "name": user.name,
@@ -132,7 +139,11 @@ def _validated_audit_metadata(value: object) -> JsonObject:
     return cast("JsonObject", value)
 
 
-def task_list_item(task: HandoverTask) -> JsonObject:
+def task_list_item(
+    task: HandoverTask,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> JsonObject:
     actions = _task_actions(task)
     # 若未 prefetch, 再查一次聚合
     if not actions:
@@ -157,8 +168,12 @@ def task_list_item(task: HandoverTask) -> JsonObject:
         "kind": task.kind,
         "status": task.status,
         "generation": task.generation,
-        "subject": user_ref(task.subject_user, include_status=True),
-        "assignee": user_ref(task.assignee),
+        "subject": user_ref(
+            task.subject_user,
+            include_status=True,
+            department_labels=department_labels,
+        ),
+        "assignee": user_ref(task.assignee, department_labels=department_labels),
         "assignee_state": task.assignee_state,
         "escalation_level": task.escalation_level,
         "escalation": escalation_payload(task),
@@ -201,40 +216,92 @@ def _latest_action_generation(actions: list[HandoverAppAction]) -> int:
 
 
 def task_detail(task: HandoverTask, *, surface: str = SURFACE_CONSOLE) -> JsonObject:
-    actions_payload = _task_actions_payload(task, surface=surface)
-    team_items = _task_team_items_payload(task)
+    actions = _task_detail_actions(task)
+    team_entries = list(
+        HandoverTeamItem.objects.select_related("team", "to_user").filter(task=task),
+    )
+    department_labels = department_path_labels(
+        _task_detail_users(task, actions, team_entries),
+    )
     transfer_plan = _transfer_plan_payload(task)
     return {
         "id": task.id,
         "kind": task.kind,
         "status": task.status,
         "generation": task.generation,
-        "subject": user_ref(task.subject_user, include_status=True),
-        "assignee": user_ref(task.assignee),
+        "subject": user_ref(
+            task.subject_user,
+            include_status=True,
+            department_labels=department_labels,
+        ),
+        "assignee": user_ref(task.assignee, department_labels=department_labels),
         "assignee_state": task.assignee_state,
         "escalation_level": task.escalation_level,
         "escalation": escalation_payload(task, include_defer_history=True),
         "reason": task.reason,
         "created_at": datetime_value(task.created_at),
-        "actions": actions_payload,
-        "team_items": team_items,
+        "actions": [
+            action_item(action, surface=surface, department_labels=department_labels)
+            for action in actions
+        ],
+        "team_items": _task_team_items_payload(
+            team_entries,
+            department_labels=department_labels,
+        ),
         "transfer_plan": transfer_plan,
         "created_by": task.created_by,
         "updated_at": datetime_value(task.updated_at),
     }
 
 
-def _task_actions_payload(task: HandoverTask, *, surface: str) -> list[JsonValue]:
-    actions = HandoverAppAction.objects.select_related(
-        "app",
-        "grant_receiver",
-        "task",
-        "task__subject_user",
-    ).filter(task=task)
-    return [action_item(action, surface=surface) for action in actions]
+def _task_detail_actions(task: HandoverTask) -> list[HandoverAppAction]:
+    return list(
+        HandoverAppAction.objects.select_related(
+            "app",
+            "grant_receiver",
+            "task",
+            "task__subject_user",
+        )
+        .prefetch_related(
+            Prefetch(
+                "asset_types",
+                queryset=HandoverAssetType.objects.select_related("default_to_user").annotate(
+                    override_count=Count("overrides"),
+                ),
+            ),
+        )
+        .filter(task=task),
+    )
 
 
-def _task_team_items_payload(task: HandoverTask) -> list[JsonValue]:
+def _task_detail_users(
+    task: HandoverTask,
+    actions: list[HandoverAppAction],
+    team_entries: list[HandoverTeamItem],
+) -> list[UserMirror]:
+    users: list[UserMirror] = []
+    seen: set[str] = set()
+    candidates: list[UserMirror | None] = [task.subject_user, task.assignee]
+    candidates.extend(action.grant_receiver for action in actions)
+    candidates.extend(
+        asset_type.default_to_user
+        for action in actions
+        for asset_type in _asset_types_for_action(action)
+    )
+    candidates.extend(entry.to_user for entry in team_entries)
+    for user in candidates:
+        if user is None or user.authentik_user_id in seen:
+            continue
+        seen.add(user.authentik_user_id)
+        users.append(user)
+    return users
+
+
+def _task_team_items_payload(
+    entries: list[HandoverTeamItem],
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> list[JsonValue]:
     return [
         {
             "id": entry.id,
@@ -242,9 +309,9 @@ def _task_team_items_payload(task: HandoverTask) -> list[JsonValue]:
             "team_name": entry.team.name,
             "action": entry.action,
             "status": entry.status,
-            "to_user": user_ref(entry.to_user),
+            "to_user": user_ref(entry.to_user, department_labels=department_labels),
         }
-        for entry in HandoverTeamItem.objects.select_related("team", "to_user").filter(task=task)
+        for entry in entries
     ]
 
 
@@ -301,12 +368,13 @@ def _mark_selected_grants(
         grant_diff[name] = serialized
 
 
-def action_item(action: HandoverAppAction, *, surface: str = SURFACE_CONSOLE) -> JsonObject:
-    asset_types = list(
-        HandoverAssetType.objects.select_related("default_to_user")
-        .annotate(override_count=Count("overrides"))
-        .filter(action=action, generation=action.generation),
-    )
+def action_item(
+    action: HandoverAppAction,
+    *,
+    surface: str = SURFACE_CONSOLE,
+    department_labels: Mapping[str, str] | None = None,
+) -> JsonObject:
+    asset_types = _asset_types_for_action(action)
     skip_history: list[JsonValue] = [
         {
             "generation": rec.generation,
@@ -329,7 +397,10 @@ def action_item(action: HandoverAppAction, *, surface: str = SURFACE_CONSOLE) ->
         "blocked_reason": action.blocked_reason,
         "skip_reason": action.skip_reason,
         "last_error": action.last_error,
-        "grant_receiver": user_ref(action.grant_receiver),
+        "grant_receiver": user_ref(
+            action.grant_receiver,
+            department_labels=department_labels,
+        ),
         "summary": aggregated_summary(action),
         "data_completed_at": datetime_value(action.data_completed_at),
         "confirm_version": action.confirm_version,
@@ -340,12 +411,33 @@ def action_item(action: HandoverAppAction, *, surface: str = SURFACE_CONSOLE) ->
         "approval_instance_warning": action.approval_instance_warning,
         "allowed_actions": allowed_actions,
         "batch_progress": batch_progress(action),
-        "asset_types": [asset_type_item(at) for at in asset_types],
+        "asset_types": [
+            asset_type_item(at, department_labels=department_labels) for at in asset_types
+        ],
     }
     return payload
 
 
-def asset_type_item(asset_type: HandoverAssetType) -> JsonObject:
+def _asset_types_for_action(action: HandoverAppAction) -> list[HandoverAssetType]:
+    cache = getattr(action, "_prefetched_objects_cache", None)
+    if isinstance(cache, dict) and "asset_types" in cache:
+        return [
+            asset_type
+            for asset_type in action.asset_types.all()
+            if asset_type.generation == action.generation
+        ]
+    return list(
+        HandoverAssetType.objects.select_related("default_to_user")
+        .annotate(override_count=Count("overrides"))
+        .filter(action=action, generation=action.generation),
+    )
+
+
+def asset_type_item(
+    asset_type: HandoverAssetType,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> JsonObject:
     override_count = getattr(asset_type, "override_count", None)
     if override_count is None:
         override_count = asset_type.overrides.count()
@@ -356,7 +448,10 @@ def asset_type_item(asset_type: HandoverAssetType) -> JsonObject:
         "detail_supported": asset_type.detail_supported,
         "releasable": asset_type.releasable,
         "default_action": asset_type.default_action,
-        "default_to_user": user_ref(asset_type.default_to_user),
+        "default_to_user": user_ref(
+            asset_type.default_to_user,
+            department_labels=department_labels,
+        ),
         "override_count": int(override_count),
     }
 
@@ -449,8 +544,12 @@ def allowed_actions_for(action: HandoverAppAction, *, surface: str) -> list[str]
     return allowed
 
 
-def console_task_list_item(task: HandoverTask) -> JsonObject:
-    item = task_list_item(task)
+def console_task_list_item(
+    task: HandoverTask,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> JsonObject:
+    item = task_list_item(task, department_labels=department_labels)
     # 控制台列表保留既有部分字段
     item["created_by"] = task.created_by
     item["updated_at"] = datetime_value(task.updated_at)
