@@ -32,8 +32,16 @@ class HttpResponseLike(Protocol):
 def test_superuser_creates_team_and_manages_members() -> None:
     # Given: 控制台超级管理员与两个活跃用户。
     client = _logged_in_superuser("teams-super-admin")
-    leader = UserMirror.objects.create(authentik_user_id="teams-leader", name="张三")
-    member = UserMirror.objects.create(authentik_user_id="teams-member", name="李四")
+    leader = UserMirror.objects.create(
+        authentik_user_id="teams-leader",
+        name="张三",
+        department="销售一部",
+    )
+    member = UserMirror.objects.create(
+        authentik_user_id="teams-member",
+        name="李四",
+        department="销售二部",
+    )
 
     # When: 创建团队并添加 leader 与成员。
     created = client.post(
@@ -70,6 +78,14 @@ def test_superuser_creates_team_and_manages_members() -> None:
     assert isinstance(first_team, dict)
     assert first_team["member_count"] == EXPECTED_MEMBER_COUNT
     assert first_team["leaders"] == [{"user_id": "teams-leader", "name": "张三"}]
+    member_added_body = _response_json(member_added)
+    team_payload = member_added_body["team"]
+    assert isinstance(team_payload, dict)
+    members = team_payload["members"]
+    assert isinstance(members, list)
+    by_user = {item["user_id"]: item for item in members if isinstance(item, dict)}
+    assert by_user["teams-leader"]["department"] == "销售一部"
+    assert by_user["teams-member"]["department"] == "销售二部"
     assert AuditLog.objects.filter(event_type="team_created").exists()
     assert AuditLog.objects.filter(event_type="team_member_added").count() == EXPECTED_MEMBER_COUNT
 

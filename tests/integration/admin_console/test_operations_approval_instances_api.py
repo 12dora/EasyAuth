@@ -42,6 +42,7 @@ def test_approval_instances_list_includes_originator_and_app_display_names() -> 
     originator = UserMirror.objects.create(
         authentik_user_id="ops-approval-originator",
         name="胡玉琴A",
+        department="安环部",
     )
     unnamed = UserMirror.objects.create(authentik_user_id="ops-approval-unnamed")
     named_instance = ApprovalInstance.objects.create(
@@ -69,9 +70,11 @@ def test_approval_instances_list_includes_originator_and_app_display_names() -> 
     unnamed_item = by_id[str(unnamed_instance.id)]
     assert response.status_code == HTTPStatus.OK
     assert named_item["originator_name"] == "胡玉琴A"
+    assert named_item["originator_department"] == "安环部"
     assert named_item["app_name"] == "EasyLearning"
     assert named_item["app_alias"] == "学习工作台"
     assert unnamed_item["originator_name"] == ""
+    assert unnamed_item["originator_department"] == ""
     assert unnamed_item["app_name"] == "EasyLearning"
     assert unnamed_item["app_alias"] == "学习工作台"
 

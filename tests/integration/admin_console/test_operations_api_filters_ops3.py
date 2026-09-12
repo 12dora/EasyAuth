@@ -162,6 +162,7 @@ def test_ops3_access_grants_supports_version_current_revoked_and_expiration_filt
     assert item["grant_type"] == "timed"
     assert item["grant_expires_at"] == soon.isoformat()
     assert item["user_name"] == ""
+    assert item["user_department"] == ""
     assert item["app_name"] == "CRM"
     assert item["app_alias"] == ""
     assert item["authorization_groups"] == [

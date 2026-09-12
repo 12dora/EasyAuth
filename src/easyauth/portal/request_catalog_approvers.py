@@ -185,6 +185,8 @@ def approver_option(user: UserMirror) -> dict[str, JsonValue]:
     return {
         "user_id": user.authentik_user_id,
         "name": user.name,
+        "name_pinyin": user.name_pinyin,
+        "name_pinyin_initials": user.name_pinyin_initials,
     }
 
 

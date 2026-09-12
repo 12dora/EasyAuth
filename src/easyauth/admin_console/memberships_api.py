@@ -7,6 +7,7 @@ from django.db import IntegrityError, transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import UserMirror
 from easyauth.admin_console.api_payloads import list_payload
 from easyauth.admin_console.api_responses import (
@@ -23,7 +24,7 @@ from easyauth.applications.ownership import ConsoleActor, can_view_app
 from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
 type VisibleAppResult = App | JsonResponse
 type ManageableAppResult = tuple[App, ConsoleActor] | JsonResponse
@@ -61,10 +62,15 @@ def console_app_memberships(request: HttpRequest, app_key: str) -> JsonResponse:
             memberships = tuple(
                 AppMembership.objects.filter(app=app).order_by("user_id", "role"),
             )
-            names = _user_names_by_id(membership.user_id for membership in memberships)
+            users = _users_by_id(membership.user_id for membership in memberships)
+            department_labels = department_path_labels(users.values())
             return _items_response(
                 tuple(
-                    _membership_item(membership, names.get(membership.user_id, ""))
+                    _membership_item(
+                        membership,
+                        users.get(membership.user_id),
+                        department_labels=department_labels,
+                    )
                     for membership in memberships
                 ),
             )
@@ -113,7 +119,7 @@ def _create_membership(request: HttpRequest, app_key: str) -> JsonResponse:
     except IntegrityError:
         return _membership_conflict_response()
     return _json_response(
-        {"membership": _membership_item(membership, _user_name(membership.user_id))},
+        {"membership": _membership_payload(membership)},
         status=HTTPStatus.CREATED,
     )
 
@@ -151,7 +157,7 @@ def _update_membership(request: HttpRequest, app_key: str, membership_id: int) -
     except IntegrityError:
         return _membership_conflict_response()
     return _json_response(
-        {"membership": _membership_item(membership, _user_name(membership.user_id))},
+        {"membership": _membership_payload(membership)},
     )
 
 
@@ -203,30 +209,44 @@ def _manageable_app(request: HttpRequest, app_key: str) -> ManageableAppResult:
     return app, actor
 
 
-def _membership_item(membership: AppMembership, user_name: str) -> dict[str, JsonValue]:
+def _membership_payload(membership: AppMembership) -> dict[str, JsonValue]:
+    user = _users_by_id((membership.user_id,)).get(membership.user_id)
+    return _membership_item(membership, user)
+
+
+def _membership_item(
+    membership: AppMembership,
+    user: UserMirror | None,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> dict[str, JsonValue]:
+    if user is None:
+        user_name = ""
+        user_department = ""
+    else:
+        labels = (
+            department_labels if department_labels is not None else department_path_labels((user,))
+        )
+        user_name = user.name
+        user_department = labels.get(user.authentik_user_id, user.department)
     return {
         "id": membership.id,
         "user_id": membership.user_id,
         "user_name": user_name,
+        "user_department": user_department,
         "role": membership.role,
         "is_active": membership.is_active,
     }
 
 
-def _user_name(user_id: str) -> str:
-    return _user_names_by_id((user_id,)).get(user_id, "")
-
-
-def _user_names_by_id(user_ids: Iterable[str]) -> dict[str, str]:
+def _users_by_id(user_ids: Iterable[str]) -> dict[str, UserMirror]:
     unique_ids = tuple(dict.fromkeys(user_ids))
     if not unique_ids:
         return {}
-    return dict(
-        UserMirror.objects.filter(authentik_user_id__in=unique_ids).values_list(
-            "authentik_user_id",
-            "name",
-        ),
-    )
+    return {
+        user.authentik_user_id: user
+        for user in UserMirror.objects.filter(authentik_user_id__in=unique_ids)
+    }
 
 
 def _items_response(items: tuple[dict[str, JsonValue], ...]) -> JsonResponse:

@@ -128,7 +128,11 @@ def test_ops3_console_operations_api_filters_access_requests_and_grants() -> Non
 
 def test_ops3_access_requests_include_user_app_and_approver_names() -> None:
     client = _logged_in_superuser("ops3-request-names-admin")
-    user = UserMirror.objects.create(authentik_user_id="ops3-request-names-user", name="胡玉琴A")
+    user = UserMirror.objects.create(
+        authentik_user_id="ops3-request-names-user",
+        name="胡玉琴A",
+        department="安环部",
+    )
     app = App.objects.create(
         app_key="ops3-request-names-app",
         name="EasyLearning",
@@ -185,6 +189,7 @@ def test_ops3_access_requests_include_user_app_and_approver_names() -> None:
     failed_item = failed_response.json()["data"][0]
     assert submitted_response.status_code == HTTPStatus.OK
     assert submitted_item["user_name"] == "胡玉琴A"
+    assert submitted_item["user_department"] == "安环部"
     assert submitted_item["app_name"] == "EasyLearning"
     assert submitted_item["app_alias"] == "学习工作台"
     assert submitted_item["approver_user_ids"] == [approver.authentik_user_id]
@@ -435,10 +440,13 @@ def test_ops3_console_emergency_revoke_rejects_department_rows_appearing_after_i
 
     def current_grant_after_reconcile(user: UserMirror, locked_app: App) -> AccessGrant | None:
         unlocked = AccessGrant.objects.filter(user=user, app=locked_app, is_current=True).first()
-        if unlocked is not None and not AccessGrantGroup.objects.filter(
-            grant=unlocked,
-            source=MEMBERSHIP_SOURCE_DEPARTMENT,
-        ).exists():
+        if (
+            unlocked is not None
+            and not AccessGrantGroup.objects.filter(
+                grant=unlocked,
+                source=MEMBERSHIP_SOURCE_DEPARTMENT,
+            ).exists()
+        ):
             _ = AccessGrantGroup.objects.create(
                 grant=unlocked,
                 authorization_group=group,

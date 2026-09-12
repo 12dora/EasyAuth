@@ -44,7 +44,11 @@ _LIST_ROW_COUNT: Final = 20
 
 
 def test_serialize_access_grant_row_includes_names_sources_and_expansion() -> None:
-    user = UserMirror.objects.create(authentik_user_id="grant-row-user", name="胡玉琴A")
+    user = UserMirror.objects.create(
+        authentik_user_id="grant-row-user",
+        name="胡玉琴A",
+        department="安环部",
+    )
     app = App.objects.create(
         app_key="easylearning",
         name="EasyLearning",
@@ -87,6 +91,7 @@ def test_serialize_access_grant_row_includes_names_sources_and_expansion() -> No
     assert row["status"] == "active"
     assert row["user_id"] == "grant-row-user"
     assert row["user_name"] == "胡玉琴A"
+    assert row["user_department"] == "安环部"
     assert row["app_key"] == "easylearning"
     assert row["app_name"] == "EasyLearning"
     assert row["app_alias"] == "学习工作台"

@@ -469,6 +469,7 @@ def test_portal_request_catalog_returns_active_approver_options_and_defaults() -
     payload = json_object(response)
     assert response.status_code == HTTPStatus.OK
     option_ids = {option["user_id"] for option in payload["approver_options"]}
+    options_by_id = {option["user_id"]: option for option in payload["approver_options"]}
     app_defaults = {
         app_item["app_key"]: app_item["default_approver_user_ids"] for app_item in payload["apps"]
     }
@@ -485,6 +486,13 @@ def test_portal_request_catalog_returns_active_approver_options_and_defaults() -
         manager.authentik_user_id,
         rule_approver.authentik_user_id,
     }
+    assert options_by_id[manager.authentik_user_id]["name_pinyin"] == manager.name_pinyin
+    assert (
+        options_by_id[manager.authentik_user_id]["name_pinyin_initials"]
+        == manager.name_pinyin_initials
+    )
+    assert "email" not in options_by_id[manager.authentik_user_id]
+    assert "department" not in options_by_id[manager.authentik_user_id]
     assert app_defaults[app.app_key] == [manager.authentik_user_id]
     assert app_defaults[orphan_app.app_key] == [manager.authentik_user_id]
     assert group_defaults[group.key] == [rule_approver.authentik_user_id]
@@ -521,7 +529,12 @@ def test_portal_request_catalog_uses_local_admin_approval_rule_for_first_request
     groups = payload["authorization_groups"]
     assert response.status_code == HTTPStatus.OK
     assert payload["approver_options"] == [
-        {"user_id": local_admin.authentik_user_id, "name": local_admin.name},
+        {
+            "user_id": local_admin.authentik_user_id,
+            "name": local_admin.name,
+            "name_pinyin": local_admin.name_pinyin,
+            "name_pinyin_initials": local_admin.name_pinyin_initials,
+        },
     ]
     assert isinstance(groups, list)
     assert groups[0]["default_approver_user_ids"] == [local_admin.authentik_user_id]

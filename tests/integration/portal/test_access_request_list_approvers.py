@@ -26,6 +26,7 @@ from easyauth.portal.access_request_data import (
     access_request_items,
     access_request_items_for_user,
 )
+from easyauth.portal.request_catalog_approvers import approver_option
 from tests.integration.portal.helpers import logged_in_client
 from tests.integration.portal.json_helpers import HttpResponseLike, json_object
 
@@ -80,8 +81,8 @@ def test_my_requests_list_shows_current_approvers_for_submitted() -> None:
     row = _row_by_id(response, access_request.id)
     assert first_assignment.id < second_assignment.id
     assert row["current_approvers"] == [
-        {"user_id": later_name.authentik_user_id, "name": "乙审批人"},
-        {"user_id": earlier_name.authentik_user_id, "name": "甲审批人"},
+        approver_option(later_name),
+        approver_option(earlier_name),
     ]
     assert row["decided_by"] == ""
     assert row["decision_actor_type"] == ""
@@ -233,8 +234,8 @@ def test_my_requests_list_resolves_approver_and_decider_names_in_fixed_queries()
         assert item["current_approvers"] == []
     for item in by_status[REQUEST_STATUS_SUBMITTED]:
         assert item["current_approvers"] == [
-            {"user_id": first_approver.authentik_user_id, "name": "查询审批人甲"},
-            {"user_id": second_approver.authentik_user_id, "name": "查询审批人乙"},
+            approver_option(first_approver),
+            approver_option(second_approver),
         ]
         assert item["decided_by_name"] is None
     withdrawn_item = by_status[REQUEST_STATUS_WITHDRAWN][0]
@@ -324,8 +325,8 @@ def test_my_requests_list_http_resolves_approvers_in_fixed_queries() -> None:
         assert item["current_approvers"] == []
     for item in by_status[REQUEST_STATUS_SUBMITTED]:
         assert item["current_approvers"] == [
-            {"user_id": first_approver.authentik_user_id, "name": "HTTP 审批人甲"},
-            {"user_id": second_approver.authentik_user_id, "name": "HTTP 审批人乙"},
+            approver_option(first_approver),
+            approver_option(second_approver),
         ]
         assert item["decided_by_name"] is None
     withdrawn_item = by_status[REQUEST_STATUS_WITHDRAWN][0]

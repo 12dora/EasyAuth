@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
@@ -27,6 +28,8 @@ from easyauth.workflows.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from django.db.models import QuerySet
 
     from easyauth.api.errors import JsonValue
@@ -59,7 +62,7 @@ def operations_approval_instances(request: HttpRequest) -> JsonResponse:
         page = paginate_queryset(_filtered_instances(request).order_by(*ordering), request.GET)
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
-    items: list[JsonValue] = [_instance_item(instance) for instance in page.items]
+    items: list[JsonValue] = _instance_items(page.items)
     return json_response({"data": items, "pagination": pagination_item(page)})
 
 
@@ -131,10 +134,24 @@ def _filtered_instances(request: HttpRequest) -> QuerySet[ApprovalInstance]:
     return queryset
 
 
-def _instance_item(instance: ApprovalInstance) -> JsonObject:
+def _instance_items(instances: Sequence[ApprovalInstance]) -> list[JsonValue]:
+    department_labels = department_path_labels(instance.originator_user for instance in instances)
+    return [_instance_item(instance, department_labels=department_labels) for instance in instances]
+
+
+def _instance_item(
+    instance: ApprovalInstance,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> JsonObject:
     delivery = instance.completion_delivery
     originator = instance.originator_user
     app = instance.app
+    labels = (
+        department_labels
+        if department_labels is not None
+        else department_path_labels((originator,))
+    )
     return {
         "instance_id": str(instance.id),
         "app_key": app.app_key,
@@ -145,6 +162,7 @@ def _instance_item(instance: ApprovalInstance) -> JsonObject:
         "status": instance.status,
         "originator_user_id": originator.authentik_user_id,
         "originator_name": originator.name,
+        "originator_department": labels.get(originator.authentik_user_id, originator.department),
         "dingtalk_process_instance_id": instance.dingtalk_process_instance_id,
         "delivery_state": instance.delivery_state(),
         "delivery_attempts": delivery.attempts if delivery is not None else 0,

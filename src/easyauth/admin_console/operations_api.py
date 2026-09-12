@@ -9,6 +9,7 @@ from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.access_requests.models import AccessRequest, AccessRequestApprover
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import UserMirror
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
 from easyauth.admin_console.api_responses import (
@@ -60,6 +61,8 @@ from easyauth.grants.models import (
 from easyauth.grants.services import GrantService
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from django.http import QueryDict
 
     from easyauth.grants.managed_users import ManagedUsersDirectoryCache
@@ -337,11 +340,15 @@ def _access_request_item(
     access_request: AccessRequest,
     failure_reasons: dict[int, str],
     decided_by_name: str,
+    *,
+    department_labels: Mapping[str, str],
 ) -> dict[str, JsonValue]:
+    user = access_request.user
     item: dict[str, JsonValue] = {
         "id": access_request.id,
-        "user_id": access_request.user.authentik_user_id,
-        "user_name": access_request.user.name,
+        "user_id": user.authentik_user_id,
+        "user_name": user.name,
+        "user_department": department_labels.get(user.authentik_user_id, user.department),
         "app_key": access_request.app.app_key,
         "app_name": access_request.app.name,
         "app_alias": access_request.app.alias,
@@ -410,11 +417,13 @@ def _record_emergency_revoke(
 def _access_request_page_response(page: Page[AccessRequest]) -> JsonResponse:
     failure_reasons = _access_request_failure_reasons(page.items)
     names = decided_by_names(page.items)
+    department_labels = department_path_labels(access_request.user for access_request in page.items)
     result: list[JsonValue] = [
         _access_request_item(
             access_request,
             failure_reasons,
             names[access_request.id],
+            department_labels=department_labels,
         )
         for access_request in page.items
     ]

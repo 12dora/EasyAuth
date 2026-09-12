@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from django.db.models import Q
 from pypinyin import Style, lazy_pinyin
 
-__all__ = ["name_pinyin_fields"]
+__all__ = ["name_pinyin_fields", "pinyin_query_filter"]
 
 
 def name_pinyin_fields(name: str) -> tuple[str, str]:
@@ -26,3 +27,13 @@ def name_pinyin_fields(name: str) -> tuple[str, str]:
             full.append(letters)
             initials.append(letters[0])
     return "".join(full), "".join(initials)
+
+
+def pinyin_query_filter(q: str) -> Q | None:
+    """纯字母数字查询时匹配姓名全拼/首字母; 否则返回 None。"""
+    pinyin_query = q.lower().replace(" ", "")
+    if pinyin_query.isascii() and pinyin_query.isalnum():
+        return Q(name_pinyin__icontains=pinyin_query) | Q(
+            name_pinyin_initials__icontains=pinyin_query,
+        )
+    return None

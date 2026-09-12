@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 from django.db.models import Prefetch, QuerySet
 
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.api.datetime_json import datetime_value
 from easyauth.applications.models import AuthorizationGroupGrant
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
@@ -16,7 +17,7 @@ from easyauth.grants.query import (
 from easyauth.portal.permission_aggregation import json_expanded_grants, json_groups
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from easyauth.api.errors import JsonValue
     from easyauth.grants.managed_users import ManagedUsersDirectoryCache
@@ -56,11 +57,13 @@ def serialize_access_grant_rows(
 ) -> list[dict[str, JsonValue]]:
     catalog = expansion_catalog_for_grants(grants)
     cache: ManagedUsersDirectoryCache = {} if managed_users_cache is None else managed_users_cache
+    department_labels = department_path_labels(grant.user for grant in grants)
     return [
         serialize_access_grant_row(
             grant,
             managed_users_cache=cache,
             expansion_catalog=catalog,
+            department_labels=department_labels,
         )
         for grant in grants
     ]
@@ -71,6 +74,7 @@ def serialize_access_grant_row(
     *,
     managed_users_cache: ManagedUsersDirectoryCache | None = None,
     expansion_catalog: GrantExpansionCatalog | None = None,
+    department_labels: Mapping[str, str] | None = None,
 ) -> dict[str, JsonValue]:
     catalog = (
         expansion_catalog
@@ -83,13 +87,16 @@ def serialize_access_grant_row(
         expansion_catalog=catalog,
     )
     grant_type, grant_expires_at = grant_lifecycle_summary(snapshot)
+    user = grant.user
+    labels = department_labels if department_labels is not None else department_path_labels((user,))
     return {
         "id": grant.id,
         "version": grant.version,
         "is_current": grant.is_current,
         "status": grant.status,
-        "user_id": grant.user.authentik_user_id,
-        "user_name": grant.user.name,
+        "user_id": user.authentik_user_id,
+        "user_name": user.name,
+        "user_department": labels.get(user.authentik_user_id, user.department),
         "app_key": grant.app.app_key,
         "app_name": grant.app.name,
         "app_alias": grant.app.alias,

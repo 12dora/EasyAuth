@@ -149,6 +149,41 @@ def test_candidates_purpose_required() -> None:
     assert body["error"]["details"]["reason"] == "purpose_required"
 
 
+def test_receiver_candidates_match_pinyin_and_include_department() -> None:
+    actor = _user("cand-pinyin-actor", dtuid="cpa")
+    target = UserMirror.objects.create(
+        authentik_user_id="cand-pinyin-huyuqin",
+        name="胡玉琴A",
+        status=USER_STATUS_ACTIVE,
+        department="安环部",
+        dingtalk_source_slug=SOURCE,
+        dingtalk_corp_id=CORP,
+        dingtalk_userid="cph",
+    )
+    client = _login(Client(), actor)
+
+    by_pinyin = client.get(
+        "/portal/api/v1/handover-candidates",
+        {"purpose": "receiver", "q": "huyu"},
+    )
+    by_initials = client.get(
+        "/portal/api/v1/handover-candidates",
+        {"purpose": "receiver", "q": "hyqa"},
+    )
+    by_name = client.get(
+        "/portal/api/v1/handover-candidates",
+        {"purpose": "receiver", "q": "胡玉"},
+    )
+
+    items = by_pinyin.json()["items"]
+    assert by_pinyin.status_code == 200
+    assert [item["user_id"] for item in items] == [target.authentik_user_id]
+    assert items[0]["name"] == "胡玉琴A"
+    assert items[0]["department"] == "安环部"
+    assert [item["user_id"] for item in by_initials.json()["items"]] == [target.authentik_user_id]
+    assert [item["user_id"] for item in by_name.json()["items"]] == [target.authentik_user_id]
+
+
 def test_reassign_out_of_scope() -> None:
     actor = _user("mgr-x", dtuid="mx")
     stranger = _user("str-x", dtuid="sx")

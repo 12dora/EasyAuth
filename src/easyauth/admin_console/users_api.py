@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.pinyin import pinyin_query_filter
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
 from easyauth.admin_console.api_responses import error_response, json_response
 from easyauth.admin_console.authz import require_superuser
@@ -230,11 +231,9 @@ def _apply_query_filter(
         | Q(authentik_user_id__icontains=query)
         | Q(employee_number__icontains=query)
     )
-    pinyin_query = query.lower().replace(" ", "")
-    if pinyin_query.isascii() and pinyin_query.isalnum():
-        filters |= Q(name_pinyin__icontains=pinyin_query) | Q(
-            name_pinyin_initials__icontains=pinyin_query,
-        )
+    pinyin_filter = pinyin_query_filter(query)
+    if pinyin_filter is not None:
+        filters |= pinyin_filter
     return users.filter(filters)
 
 

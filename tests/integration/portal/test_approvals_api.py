@@ -33,6 +33,7 @@ from easyauth.applications.models import (
 )
 from easyauth.grants.models import AccessGrant, AccessGrantGroup
 from easyauth.grants.services import GrantMutationExpiredError
+from easyauth.portal.request_catalog_approvers import approver_option
 from tests.integration.portal.helpers import logged_in_client
 
 pytestmark = pytest.mark.django_db
@@ -92,6 +93,7 @@ def test_approver_sees_pending_approvals_and_approves() -> None:
     applicant = _json_dict(detail_body, "approval")["applicant"]
     assert isinstance(applicant, dict)
     assert applicant["user_id"] == "portal-applicant"
+    assert "department" in applicant
     approval = _json_dict(approved_body, "approval")
     assert approval["status"] == "grant_applied"
     assert AccessGrant.objects.filter(is_current=True).count() == 1
@@ -437,8 +439,8 @@ def test_pending_approvals_page_resolves_approvers_in_fixed_queries() -> None:
     for item in data:
         assert isinstance(item, dict)
         assert item["current_approvers"] == [
-            {"user_id": approver.authentik_user_id, "name": "门户用户"},
-            {"user_id": earlier_id_approver.authentik_user_id, "name": "另一审批人"},
+            approver_option(approver),
+            approver_option(earlier_id_approver),
         ]
         assert item["approver_user_ids"] == [
             earlier_id_approver.authentik_user_id,

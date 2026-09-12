@@ -99,7 +99,12 @@
     {"permission": "order.view", "permission_name": "查看订单", "scope": "SELF"}
   ],
   "current_approvers": [
-    {"user_id": "ak-manager-1", "name": "张三"}
+    {
+      "user_id": "ak-manager-1",
+      "name": "张三",
+      "name_pinyin": "zhangsan",
+      "name_pinyin_initials": "zs"
+    }
   ],
   "decided_by": "",
   "decision_actor_type": "",
@@ -112,7 +117,7 @@
 }
 ```
 
-- `current_approvers`：仅 `status == "submitted"` 时返回当前 `AccessRequestApprover` 分配（`user_id` + `name`），按分配记录 `id` 升序；其他状态固定为 `[]`。
+- `current_approvers`：仅 `status == "submitted"` 时返回当前 `AccessRequestApprover` 分配（`user_id`、`name`、`name_pinyin`、`name_pinyin_initials`），按分配记录 `id` 升序；其他状态固定为 `[]`。
 - `decided_by` / `decision_actor_type`：与申请上的决定字段一致（未决或已撤回时为空字符串）。
 - `decided_by_name`：当 `decision_actor_type` 为 `user` 时必须能解析到对应 `UserMirror.name`；找不到镜像视为数据损坏并失败，不返回 `null`。仅 `console_admin`（控制台代审）或尚未决定的申请为 `null`。前端可用 `decided_by` 作为无姓名时的回退展示。
 - `approved_at` / `applied_at` / `withdrawn_at`：ISO-8601 字符串或 `null`。分别来自 `AccessRequest.approved_at`（审批通过）、`applied_at`（授权生效）和 `withdrawn_at`（申请人撤回）。新提交的 `submitted` 申请三者均为 `null`；`withdrawn` 必须带 `withdrawn_at`；`grant_applied` 必须带 `applied_at`。
@@ -292,7 +297,12 @@
   "permission_groups": [],
   "ungrouped_permissions": [],
   "approver_options": [
-    {"user_id": "ak-manager-1", "name": "…", "…": "…"}
+    {
+      "user_id": "ak-manager-1",
+      "name": "…",
+      "name_pinyin": "zhangsan",
+      "name_pinyin_initials": "zs"
+    }
   ]
 }
 ```
@@ -303,6 +313,7 @@
 - **`authorization_groups`**：所属 App active、自身 active、`requestable=true`，且存在 active 审批规则
 - 不再使用历史 `roles` 模型命名；前端与文档均以 `authorization_groups` 为准
 - 可申请的直接权限见 `permission_groups` / `ungrouped_permissions`
+- `approver_options` 项含 `name_pinyin` / `name_pinyin_initials`，供前端按全拼或首字母本地筛选；不含邮箱与部门
 
 ---
 

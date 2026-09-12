@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from django.db.models import Q
 
 from easyauth.accounts.models import UserMirror
-from easyauth.accounts.pinyin import name_pinyin_fields
+from easyauth.accounts.pinyin import name_pinyin_fields, pinyin_query_filter
 
 pytestmark = pytest.mark.django_db
 
@@ -22,6 +23,18 @@ def test_name_pinyin_fields_keeps_ascii_letters_and_digits() -> None:
 
 def test_name_pinyin_fields_empty() -> None:
     assert name_pinyin_fields("") == ("", "")
+
+
+def test_pinyin_query_filter_matches_ascii_alnum_and_strips_spaces() -> None:
+    expected = Q(name_pinyin__icontains="huyu") | Q(name_pinyin_initials__icontains="huyu")
+    assert pinyin_query_filter("Hu Yu") == expected
+
+
+def test_pinyin_query_filter_skips_non_ascii_and_empty() -> None:
+    assert pinyin_query_filter("胡玉") is None
+    assert pinyin_query_filter("") is None
+    assert pinyin_query_filter("  ") is None
+    assert pinyin_query_filter("-") is None
 
 
 def test_user_mirror_save_fills_pinyin_when_name_set() -> None:

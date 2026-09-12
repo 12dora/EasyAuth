@@ -5,12 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from django.db.models import Q
+
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import (
     USER_STATUS_ACTIVE,
     DingTalkUserOrgContext,
     UserMirror,
 )
+from easyauth.accounts.pinyin import pinyin_query_filter
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -185,9 +188,9 @@ def _reassign_candidate_users(
             authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX,
         )
     )
-    q_stripped = q.strip()
-    if q_stripped:
-        qs = qs.filter(name__icontains=q_stripped)
+    name_query = _name_query(q)
+    if name_query is not None:
+        qs = qs.filter(name_query)
     return list(qs.order_by("name", "authentik_user_id")[:limit])
 
 
@@ -211,7 +214,18 @@ def list_receiver_candidates(
         qs = qs.exclude(authentik_user_id=actor.authentik_user_id)
     if subject is not None:
         qs = qs.exclude(pk=subject.id)
-    q_stripped = q.strip()
-    if q_stripped:
-        qs = qs.filter(name__icontains=q_stripped)
+    name_query = _name_query(q)
+    if name_query is not None:
+        qs = qs.filter(name_query)
     return list(qs.order_by("name", "authentik_user_id")[:limit])
+
+
+def _name_query(q: str) -> Q | None:
+    q_stripped = q.strip()
+    if not q_stripped:
+        return None
+    filters = Q(name__icontains=q_stripped)
+    pinyin_filter = pinyin_query_filter(q_stripped)
+    if pinyin_filter is not None:
+        filters |= pinyin_filter
+    return filters

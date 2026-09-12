@@ -74,7 +74,11 @@ def test_current_grant_returns_404_for_unknown_user_or_app() -> None:
 
 def test_current_grant_includes_department_and_user_sources() -> None:
     client = _logged_in_superuser("current-grant-mixed-admin")
-    user = UserMirror.objects.create(authentik_user_id="current-grant-mixed-user", name="混合用户")
+    user = UserMirror.objects.create(
+        authentik_user_id="current-grant-mixed-user",
+        name="混合用户",
+        department="安环部",
+    )
     app, group, permission = _catalog("current-grant-mixed")
     policy = DepartmentGrantPolicy.objects.create(
         source_slug="dingtalk",
@@ -122,6 +126,7 @@ def test_current_grant_includes_department_and_user_sources() -> None:
     assert response.status_code == HTTPStatus.OK
     assert row["id"] == grant.id
     assert row["user_name"] == "混合用户"
+    assert row["user_department"] == "安环部"
     assert {(item["key"], item["source"]) for item in row["authorization_groups"]} == {
         (group.key, MEMBERSHIP_SOURCE_USER),
         (group.key, MEMBERSHIP_SOURCE_DEPARTMENT),

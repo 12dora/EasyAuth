@@ -39,6 +39,7 @@ def test_memberships_list_includes_user_names_from_mirrors() -> None:
     _ = UserMirror.objects.create(
         authentik_user_id="membership-named-user",
         name="胡玉琴A",
+        department="安环部",
     )
     _ = UserMirror.objects.create(authentik_user_id="membership-unnamed-user")
 
@@ -47,8 +48,11 @@ def test_memberships_list_includes_user_names_from_mirrors() -> None:
     assert response.status_code == HTTPStatus.OK
     by_id = {item["id"]: item for item in response.json()["data"]}
     assert by_id[named.id]["user_name"] == "胡玉琴A"
+    assert by_id[named.id]["user_department"] == "安环部"
     assert by_id[unnamed.id]["user_name"] == ""
+    assert by_id[unnamed.id]["user_department"] == ""
     assert by_id[missing.id]["user_name"] == ""
+    assert by_id[missing.id]["user_department"] == ""
 
 
 def test_memberships_list_loads_user_names_in_one_query() -> None:
