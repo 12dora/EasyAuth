@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
@@ -65,6 +65,13 @@ export function UserSearchInput({
     selectedOption && selectedOption.user_id === value ? selectedOption : value ? (seenOptions[value] ?? null) : null;
   const inputValue = resolved ? userOptionName(resolved) : value;
   const secondary = resolved ? userSecondaryLabel(resolved, t) : "";
+  /**
+   * 本组件最近一次自己发出去的 value(手输 onChange 或 onPick)。
+   *
+   * 调用方回填的 ID 不会经过这两处, 与这份不同才按 ID 解析; 手输搜索词关掉下拉时
+   * 不能把「张」一类的自由文本拿去打 user_ids。
+   */
+  const lastEmittedValueRef = useRef<string | undefined>(undefined);
   const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } = useUserCombobox({
     query: inputValue.trim(),
     purpose: "employee",
@@ -73,12 +80,13 @@ export function UserSearchInput({
     closeOnPick: true,
     onPick: (option) => {
       setSeenOptions((current) => ({ ...current, [option.user_id]: option }));
+      lastEmittedValueRef.current = option.user_id;
       onChange(option.user_id);
       onSelectOption?.(option);
     },
   });
-  // 回填的 ID 本轮没选过: 下拉打开时输入的是搜索词, 不要拿去按 ID 解析。
-  const shouldLookup = Boolean(value) && !resolved && !open;
+  // 下拉打开时输入的是搜索词, 不要拿去按 ID 解析。
+  const shouldLookup = Boolean(value) && !resolved && !open && value !== lastEmittedValueRef.current;
   const lookupQuery = useUserOptionsByIds(shouldLookup ? [value] : [], "employee");
 
   useEffect(() => {
@@ -111,6 +119,7 @@ export function UserSearchInput({
         value={inputValue}
         onFocus={() => setOpen(true)}
         onChange={(event) => {
+          lastEmittedValueRef.current = event.currentTarget.value;
           onChange(event.currentTarget.value);
           setOpen(true);
         }}

@@ -525,6 +525,86 @@ describe("DirectGrantPage", () => {
     expect(within(departmentBlock.closest("section") as HTMLElement).queryByText("审计")).toBeNull();
   });
 
+  test("工具栏全选/清空与授权组 allowClear 都不拿掉组织授权锁定项, 提交只含本人来源", async () => {
+    const fetchMock = stubFetch(async (url) => {
+      if (url === "/console/api/v1/direct-grants") {
+        return jsonResponse({ data: { grant_id: 9 } }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }, CURRENT_GRANT);
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await selectGrantee(user);
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).toBeChecked(),
+    );
+    const reportChip = screen.getByRole("checkbox", { name: "选择 crm.report.view 全部" });
+    expect(reportChip).toBeChecked();
+    expect(reportChip).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "全选" }));
+    expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "选择 crm.customer.read 本人" })).toBeChecked();
+    expect(reportChip).toBeChecked();
+    expect(reportChip).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "清空" }));
+    expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).not.toBeChecked();
+    expect(reportChip).toBeChecked();
+    expect(reportChip).toBeDisabled();
+    expect(reportChip.closest("label")).toHaveAttribute("title", "由组织授权下发");
+
+    const auditAfterClear = await authorizationGroupOption(user, "审计");
+    expect(auditAfterClear).toHaveAttribute("aria-selected", "true");
+    expect(auditAfterClear).toHaveClass("ant-select-item-option-disabled");
+
+    const selectRoot = screen.getByLabelText("授权组").closest(".ant-select");
+    if (!(selectRoot instanceof HTMLElement)) {
+      throw new Error("「授权组」不是 antd Select");
+    }
+    const clearIcon = selectRoot.querySelector(".ant-select-clear");
+    let clearedViaAllowClear = false;
+    if (clearIcon instanceof HTMLElement) {
+      try {
+        await user.click(clearIcon);
+        clearedViaAllowClear = true;
+      } catch {
+        // jsdom 下 antd 的 allowClear 图标通常不可见/点不到。
+      }
+    }
+    if (!clearedViaAllowClear) {
+      // jsdom 下 antd 的 allowClear 图标不可达, 改走下拉反选本人来源组, 同一条 onChange。
+      const salesOption = await authorizationGroupOption(user, "销售");
+      if (salesOption.getAttribute("aria-selected") === "true") {
+        await user.click(salesOption);
+      }
+    }
+    const auditAfterDeselect = await authorizationGroupOption(user, "审计");
+    expect(auditAfterDeselect).toHaveAttribute("aria-selected", "true");
+    expect(auditAfterDeselect).toHaveClass("ant-select-item-option-disabled");
+    expect(await selectedAuthorizationGroupNames(user)).toEqual(["审计"]);
+
+    // 锁定项仍在展示, 草稿已被批量操作清掉本人来源; 再勾回销售组才能提交。
+    await user.click(await authorizationGroupOption(user, "销售"));
+    await user.type(screen.getByLabelText("说明"), "批量操作后只保留本人来源");
+    await waitFor(() => expect(screen.getByRole("button", { name: "授予权限" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "授予权限" }));
+
+    await waitFor(() => expect(directGrantBody(fetchMock)).not.toBeNull());
+    expect(directGrantBody(fetchMock)).toEqual({
+      user_id: "u-1",
+      app_key: "crm",
+      authorization_group_keys: ["sales"],
+      direct_grants: [],
+      grant_type: "timed",
+      grant_expires_at: "2030-06-30T15:59:59.123456+00:00",
+      reason: "批量操作后只保留本人来源",
+    });
+  });
+
   test("勾选一项本人权限后提交, 载荷不含组织授权锁定的组与权限", async () => {
     const fetchMock = stubFetch(async (url) => {
       if (url === "/console/api/v1/direct-grants") {

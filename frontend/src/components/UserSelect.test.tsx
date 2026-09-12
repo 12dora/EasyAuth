@@ -134,6 +134,41 @@ describe("UserSelect", () => {
     expect(secondaryLine).not.toHaveTextContent("u-1");
   });
 
+  test("手输姓名失焦不按 ID 解析; 回填的 ID 才走 user_ids", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes("user_ids=")) {
+        return jsonResponse({
+          data: [{ user_id: "u-9", name: "王五", department: "研发部", avatar_url: "" }],
+        });
+      }
+      return jsonResponse({ data: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const typed = renderWithProviders(
+      <>
+        <button type="button">outside</button>
+        <UncontrolledSearchInputHarness />
+      </>,
+    );
+    await user.type(screen.getByRole("combobox"), "张");
+    // 点外面关掉下拉: 若误把手输搜索词当 ID 解析, react-query 会立刻打 user_ids。
+    await user.click(screen.getByRole("button", { name: "outside" }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("user_ids="))).toEqual([]);
+    typed.unmount();
+
+    renderWithProviders(<UserSearchInput id="owner" value="u-9" onChange={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("王五"));
+    expect(screen.getByText("研发部")).toBeVisible();
+    expect(
+      fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("user_ids=")),
+    ).toEqual(["/console/api/v1/user-options?user_ids=u-9&purpose=employee"]);
+  });
+
   test("回填的 user_id 按 employee 口径解析成姓名", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
