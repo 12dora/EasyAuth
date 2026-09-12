@@ -30,6 +30,11 @@ declare module "@tanstack/react-table" {
      * 越界的 chip 必须真正 disabled: 撤销目标只能是基础授权的子集。null 表示不是撤销申请。
      */
     retainableKeySet: Set<string> | null;
+    /**
+     * 组织授权下发的权限范围: 勾选且禁用, 不进直接权限草稿。
+     * 空集合表示没有锁定项(门户申请不传 lockedKeys)。
+     */
+    lockedKeySet: Set<string>;
     /** 仅看已选: 空态文案要跟着换。 */
     showSelectedOnly: boolean;
     disabled: boolean;

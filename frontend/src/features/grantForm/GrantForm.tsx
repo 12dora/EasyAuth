@@ -6,6 +6,7 @@ import { Field, SelectInput, TextArea, TextInput } from "../../components/Field"
 import { localizedField, useI18n } from "../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
 import { PermissionSelector } from "../../pages/portal/components/PermissionSelector";
+import { keepLockedSelectionKeys } from "../../pages/portal/components/permissionSelectorRows";
 import {
   buildCatalogView,
   descendantGroupKeys,
@@ -30,6 +31,8 @@ import {
   grantDraftWithSelectionChange,
 } from "./grantDraftSelection";
 
+const EMPTY_KEYS: string[] = [];
+
 export interface GrantFormProps {
   catalog: PortalRequestCatalogView | undefined;
   catalogIsLoading: boolean;
@@ -39,6 +42,15 @@ export interface GrantFormProps {
   disabled?: boolean;
   /** 编辑既有策略时应用不可改(后端拒绝跨应用改写), 应用选择器固定并置灰。 */
   lockedAppKey?: string;
+  /**
+   * 组织授权下发的授权组: 展示为不可移除的选中标签, 不进草稿。
+   * 缺省空数组, 组织授权策略编辑不传。
+   */
+  lockedAuthorizationGroupKeys?: string[];
+  /**
+   * 组织授权下发的直接权限选择键; 与锁定组覆盖的范围一并交给 PermissionSelector.lockedKeys。
+   */
+  lockedPermissionKeys?: string[];
   /** 渲染在目标选择器上方的插槽(直接授权页放"被授权人")。 */
   header?: ReactNode;
 }
@@ -57,6 +69,8 @@ export function GrantForm({
   onDraftChange,
   disabled = false,
   lockedAppKey,
+  lockedAuthorizationGroupKeys = EMPTY_KEYS,
+  lockedPermissionKeys = EMPTY_KEYS,
   header,
 }: GrantFormProps) {
   const { t, locale } = useI18n();
@@ -64,24 +78,47 @@ export function GrantForm({
   const appKey = lockedAppKey ?? draft.appKey;
   // 目录视图与门户申请共用同一条路径; 控制台没有"排除自己"的审批人语义, currentUserId 传空串。
   const catalogView = useMemo(() => buildCatalogView(catalog, appKey, ""), [catalog, appKey]);
+  const lockedGroupKeySet = useMemo(() => new Set(lockedAuthorizationGroupKeys), [lockedAuthorizationGroupKeys]);
+  const lockedSelectionKeys = useMemo(
+    () =>
+      uniqueStrings([
+        ...lockedPermissionKeys,
+        ...groupCoveredSelectionKeys(lockedAuthorizationGroupKeys, catalogView),
+      ]),
+    [catalogView, lockedAuthorizationGroupKeys, lockedPermissionKeys],
+  );
+  const lockedSelectionKeySet = useMemo(() => new Set(lockedSelectionKeys), [lockedSelectionKeys]);
   const coveredSelectionKeys = useMemo(
     () => groupCoveredSelectionKeys(draft.authorizationGroupKeys, catalogView),
     [draft.authorizationGroupKeys, catalogView],
   );
   const nowMin = useMemo(() => toDatetimeLocalValue(new Date()), []);
   const expiresAtError = grantDraftExpiresAtError(draft);
-
-  const authorizationGroupOptions = useMemo(
-    () =>
-      catalogView.authorizationGroups.map((group) => ({
-        label: localizedField(locale, group.name, group.name_en),
-        value: group.key,
-      })),
-    [catalogView.authorizationGroups, locale],
+  // 锁定组始终出现在选中值里(antd 对 disabled option 的 tag 不渲染关闭按钮), 草稿本身只有本人可改的组。
+  const displayedAuthorizationGroupKeys = useMemo(
+    () => uniqueStrings([...lockedAuthorizationGroupKeys, ...draft.authorizationGroupKeys]),
+    [draft.authorizationGroupKeys, lockedAuthorizationGroupKeys],
   );
 
+  const authorizationGroupOptions = useMemo(() => {
+    const fromCatalog = catalogView.authorizationGroups.map((group) => ({
+      label: localizedField(locale, group.name, group.name_en),
+      value: group.key,
+      disabled: lockedGroupKeySet.has(group.key),
+    }));
+    const knownKeys = new Set(fromCatalog.map((option) => option.value));
+    const extras = lockedAuthorizationGroupKeys
+      .filter((key) => !knownKeys.has(key))
+      .map((key) => ({ label: key, value: key, disabled: true }));
+    return [...fromCatalog, ...extras];
+  }, [catalogView.authorizationGroups, locale, lockedAuthorizationGroupKeys, lockedGroupKeySet]);
+
   const changeSelection = (change: (selectionKeys: string[]) => string[]) => {
-    onDraftChange(grantDraftWithSelectionChange(draft, catalogView, change));
+    onDraftChange(
+      grantDraftWithSelectionChange(draft, catalogView, (keys) =>
+        change(keys).filter((key) => !lockedSelectionKeySet.has(key)),
+      ),
+    );
   };
 
   return (
@@ -113,7 +150,7 @@ export function GrantForm({
           <Select
             className="w-full"
             mode="multiple"
-            value={draft.authorizationGroupKeys}
+            value={displayedAuthorizationGroupKeys}
             options={authorizationGroupOptions}
             placeholder={t("grantForm.authorizationGroupNone")}
             notFoundContent={t("grantForm.authorizationGroupEmpty")}
@@ -124,7 +161,14 @@ export function GrantForm({
             optionFilterProp="label"
             disabled={disabled || !appKey}
             onChange={(groupKeys: string[]) =>
-              onDraftChange(grantDraftWithAuthorizationGroupKeys(draft, groupKeys, catalogView))
+              onDraftChange(
+                grantDraftWithAuthorizationGroupKeys(
+                  draft,
+                  // allowClear / 关 tag 都可能把锁定组带下来; 从交给草稿的值里剥掉, 展示值再拼回去。
+                  groupKeys.filter((key) => !lockedGroupKeySet.has(key)),
+                  catalogView,
+                ),
+              )
             }
           />
         </Field>
@@ -136,6 +180,7 @@ export function GrantForm({
           ungroupedPermissions={catalogView.ungroupedPermissions}
           selectedKeys={draft.selectedPermissionKeys}
           coveredKeys={coveredSelectionKeys}
+          lockedKeys={lockedSelectionKeys}
           revokeBaseGrant={null}
           expandedGroupKeys={expandedGroupKeys}
           loading={catalogIsLoading}
@@ -155,7 +200,13 @@ export function GrantForm({
             if (!scopeKey) {
               return;
             }
-            changeSelection((current) => nextSelectionForGroupScopeClick(group, scopeKey, shouldSelect, current));
+            changeSelection((current) =>
+              keepLockedSelectionKeys(
+                current,
+                nextSelectionForGroupScopeClick(group, scopeKey, shouldSelect, current),
+                lockedSelectionKeySet,
+              ),
+            );
           }}
           onSelectPermissionKeys={(keys: string[]) => {
             changeSelection((current) => uniqueStrings([...current, ...keys]));

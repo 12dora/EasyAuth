@@ -29,6 +29,30 @@ export function grantDisplaySelectionKeys(draft: GrantDraft, catalogView: Catalo
 }
 
 /**
+ * 从草稿里摘掉组织授权锁定的目标。
+ *
+ * 锁定组覆盖的权限范围也要丢掉: 回填时本人来源的直接权限可能正好落在组织组的覆盖里,
+ * 不摘的话提交会把组织授权再抄一份成个人授权。
+ */
+export function grantDraftExcludingLockedKeys(
+  draft: GrantDraft,
+  lockedGroupKeys: string[],
+  lockedPermissionKeys: string[],
+  catalogView: CatalogView,
+): GrantDraft {
+  const lockedGroupKeySet = new Set(lockedGroupKeys);
+  const lockedSelectionKeySet = new Set([
+    ...lockedPermissionKeys,
+    ...groupCoveredSelectionKeys(lockedGroupKeys, catalogView),
+  ]);
+  return {
+    ...draft,
+    authorizationGroupKeys: draft.authorizationGroupKeys.filter((key) => !lockedGroupKeySet.has(key)),
+    selectedPermissionKeys: draft.selectedPermissionKeys.filter((key) => !lockedSelectionKeySet.has(key)),
+  };
+}
+
+/**
  * 换被授权人会作废整张草稿的"现状"部分: 目标与期限描述的是上一个人的授权, 换人后一条都不成立。
  * 说明保留 —— 管理员多半是在给同一批人办同一件事。
  */

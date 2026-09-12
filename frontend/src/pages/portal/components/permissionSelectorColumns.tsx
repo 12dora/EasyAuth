@@ -70,6 +70,7 @@ function ScopeColumnCell({ row, table }: SelectorCellContext) {
     displaySelectedKeys,
     coveredKeySet,
     retainableKeySet,
+    lockedKeySet,
     onPermissionScopeChange,
     onPermissionGroupScopeChange,
   } = permissionSelectorTableMeta(table);
@@ -79,6 +80,7 @@ function ScopeColumnCell({ row, table }: SelectorCellContext) {
       scopeOptions={row.original.scopeOptions}
       selectedKeys={displaySelectedKeys}
       retainableKeySet={retainableKeySet}
+      lockedKeySet={lockedKeySet}
       onScopeChange={onPermissionGroupScopeChange}
       locale={locale}
     />
@@ -88,6 +90,7 @@ function ScopeColumnCell({ row, table }: SelectorCellContext) {
       selectedKeys={displaySelectedKeys}
       coveredKeySet={coveredKeySet}
       retainableKeySet={retainableKeySet}
+      lockedKeySet={lockedKeySet}
       onScopeChange={onPermissionScopeChange}
       locale={locale}
     />

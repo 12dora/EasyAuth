@@ -17,6 +17,7 @@ import {
   buildPermissionRows,
   currentPageGroupKeysFromRows,
   currentPageSelectionKeysFromRows,
+  excludeLockedSelectionKeys,
   filterRowsToSelected,
   type PermissionSelectorRow,
 } from "./permissionSelectorRows";
@@ -37,6 +38,11 @@ interface PermissionSelectorProps {
    * 越界的权限范围 chip 与工具栏"全选/按范围选择"因此要真正禁用。null 表示不是撤销申请。
    */
   revokeBaseGrant?: RevokeBaseGrantSnapshot | null;
+  /**
+   * 组织授权下发的权限范围: 勾选且禁用, 不进直接权限草稿。
+   * 缺省空数组, 门户申请不传时行为与原来完全一致。
+   */
+  lockedKeys?: string[];
   expandedGroupKeys: string[];
   loading: boolean;
   errorMessage: string;
@@ -57,6 +63,7 @@ export function PermissionSelector({
   selectedKeys,
   coveredKeys = [],
   revokeBaseGrant = null,
+  lockedKeys = [],
   expandedGroupKeys,
   loading,
   errorMessage,
@@ -75,11 +82,13 @@ export function PermissionSelector({
   const enteringGroupKeys = useGroupTransitionKeys(expandedGroupKeys, "entering");
   const stableSelectedKeys = useStableStringList(selectedKeys);
   const stableCoveredKeys = useStableStringList(coveredKeys);
+  const stableLockedKeys = useStableStringList(lockedKeys);
   const coveredKeySet = useMemo(() => new Set(stableCoveredKeys), [stableCoveredKeys]);
-  // 展示态 = 直接勾选 ∪ 权限组覆盖; 提交载荷仍只用直接勾选(selectedKeys)。
+  const lockedKeySet = useMemo(() => new Set(stableLockedKeys), [stableLockedKeys]);
+  // 展示态 = 直接勾选 ∪ 权限组覆盖 ∪ 组织授权锁定; 提交载荷仍只用直接勾选(selectedKeys)。
   const displaySelectedKeys = useMemo(
-    () => Array.from(new Set([...stableSelectedKeys, ...stableCoveredKeys])),
-    [stableCoveredKeys, stableSelectedKeys],
+    () => Array.from(new Set([...stableSelectedKeys, ...stableCoveredKeys, ...stableLockedKeys])),
+    [stableCoveredKeys, stableLockedKeys, stableSelectedKeys],
   );
   // 撤销草稿里还能勾上的权限范围: 基础授权的直接权限 + 当前所选权限组的覆盖范围。
   const retainableKeySet = useMemo(
@@ -114,6 +123,7 @@ export function PermissionSelector({
       displaySelectedKeys,
       coveredKeySet,
       retainableKeySet,
+      lockedKeySet,
       showSelectedOnly,
       disabled,
       onPermissionScopeChange,
@@ -148,9 +158,17 @@ export function PermissionSelector({
         onShowSelectedOnlyChange={setShowSelectedOnly}
         onExpandAll={() => onExpandGroups(currentPageGroupKeysFromRows(visibleRows))}
         onCollapseAll={() => onCollapseGroups(currentPageGroupKeysFromRows(visibleRows))}
-        onSelectAll={() => onSelectPermissionKeys(currentPageSelectionKeysFromRows(visibleRows))}
-        onSelectScope={(scopeKey) => onSelectPermissionKeys(currentPageSelectionKeysFromRows(visibleRows, scopeKey))}
-        onClear={() => onClearPermissionKeys(currentPageSelectionKeysFromRows(visibleRows))}
+        onSelectAll={() =>
+          onSelectPermissionKeys(excludeLockedSelectionKeys(currentPageSelectionKeysFromRows(visibleRows), lockedKeySet))
+        }
+        onSelectScope={(scopeKey) =>
+          onSelectPermissionKeys(
+            excludeLockedSelectionKeys(currentPageSelectionKeysFromRows(visibleRows, scopeKey), lockedKeySet),
+          )
+        }
+        onClear={() =>
+          onClearPermissionKeys(excludeLockedSelectionKeys(currentPageSelectionKeysFromRows(visibleRows), lockedKeySet))
+        }
       />
       <PermissionSelectorTable table={table} />
     </div>

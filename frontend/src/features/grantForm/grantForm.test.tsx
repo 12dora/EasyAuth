@@ -12,12 +12,14 @@ import {
   GrantForm,
   buildGrantSubmission,
   grantDraftErrors,
+  grantDraftExcludingLockedKeys,
   grantDraftFromCurrentGrant,
   grantDraftFromPolicy,
   grantDraftIsValid,
   parseCurrentGrantPayload,
 } from "./index";
 import type { GrantDraft } from "./index";
+import { buildCatalogView } from "../../pages/portal/hooks/accessRequestCatalog";
 
 // antd 多选下拉 + 权限选择表格在 jsdom 下与其余控制台用例同一档。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
@@ -34,6 +36,14 @@ const CATALOG: PortalRequestCatalogView = {
       name: "销售",
       grants: [{ permission_key: "crm.customer.read", scope_key: "SELF" }],
     },
+    {
+      id: 12,
+      app_key: "crm",
+      key: "audit",
+      kind: "role",
+      name: "审计",
+      grants: [{ permission_key: "crm.customer.read", scope_key: "SELF" }],
+    },
   ],
   permission_groups: [
     {
@@ -48,6 +58,13 @@ const CATALOG: PortalRequestCatalogView = {
           app_key: "crm",
           key: "crm.customer.read",
           name: "查看客户",
+          scopes: [{ key: "SELF", name: "本人" }],
+        },
+        {
+          id: 102,
+          app_key: "crm",
+          key: "crm.customer.export",
+          name: "导出客户",
           scopes: [{ key: "SELF", name: "本人" }],
         },
       ],
@@ -299,6 +316,39 @@ describe("现有授权回填", () => {
     expect(buildGrantSubmission(draft).grant_expires_at).toBe("2030-06-30T15:59:59.123456+00:00");
   });
 
+  test("同一授权组既有组织来源又有本人来源时不进草稿", () => {
+    const draft = grantDraftFromCurrentGrant(
+      {
+        ...CURRENT_GRANT,
+        authorization_groups: [
+          ...CURRENT_GRANT.authorization_groups,
+          { key: "sales", kind: "role", name: "销售", expires_at: null, source: "department" },
+        ],
+      },
+      EMPTY_GRANT_DRAFT,
+    );
+
+    expect(draft.authorizationGroupKeys).toEqual([]);
+    expect(draft.selectedPermissionKeys).toEqual([
+      '["crm.customer.read","SELF"]',
+      '["crm.customer.export","SELF"]',
+    ]);
+  });
+
+  test("锁定组覆盖的直接权限要从草稿里摘掉", () => {
+    const catalogView = buildCatalogView(CATALOG, "crm", "");
+    const draft = grantDraftExcludingLockedKeys(
+      grantDraftFromCurrentGrant(CURRENT_GRANT, EMPTY_GRANT_DRAFT),
+      ["audit"],
+      ['["crm.report.view","ALL"]'],
+      catalogView,
+    );
+
+    expect(draft.authorizationGroupKeys).toEqual(["sales"]);
+    // audit 覆盖 crm.customer.read, 本人来源的那条不能再提交。
+    expect(draft.selectedPermissionKeys).toEqual(['["crm.customer.export","SELF"]']);
+  });
+
   test("本人来源成员关系全是长期时回填成长期草稿", () => {
     const draft = grantDraftFromCurrentGrant(
       {
@@ -383,6 +433,47 @@ describe("GrantForm", () => {
     expect(drafts.at(-1)?.expiresAtSource).toBe("");
   });
 
+  test("组织授权锁定的授权组出现在选中标签里, 但不进草稿", async () => {
+    const user = userEvent.setup({ delay: null });
+    const drafts: GrantDraft[] = [];
+    renderForm((draft) => drafts.push(draft), EMPTY_GRANT_DRAFT, {
+      lockedAuthorizationGroupKeys: ["audit"],
+    });
+
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    // jsdom 下 maxTagCount="responsive" 把 tag 都收进 overflow, 可移除性改从选项的 disabled 读:
+    // antd 对 disabled option 不渲染关闭按钮, 下拉里也点不掉。
+    const auditOption = await authorizationGroupOption(user, "审计");
+    expect(auditOption).toHaveAttribute("aria-selected", "true");
+    expect(auditOption).toHaveClass("ant-select-item-option-disabled");
+
+    await user.click(await authorizationGroupOption(user, "销售"));
+
+    await waitFor(() => expect(drafts.at(-1)?.authorizationGroupKeys).toEqual(["sales"]));
+    expect(drafts.at(-1)?.authorizationGroupKeys).not.toContain("audit");
+  });
+
+  test("组织授权锁定的权限不进草稿", async () => {
+    const user = userEvent.setup({ delay: null });
+    const drafts: GrantDraft[] = [];
+    const lockedKey = '["crm.customer.read","SELF"]';
+    renderForm((draft) => drafts.push(draft), { ...EMPTY_GRANT_DRAFT, appKey: "crm" }, {
+      lockedPermissionKeys: [lockedKey],
+    });
+
+    await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
+    const lockedChip = screen.getByRole("checkbox", { name: "选择 crm.customer.read 本人" });
+    expect(lockedChip).toBeChecked();
+    expect(lockedChip).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "全选" }));
+
+    await waitFor(() =>
+      expect(drafts.at(-1)?.selectedPermissionKeys.length).toBeGreaterThan(0),
+    );
+    expect(drafts.at(-1)?.selectedPermissionKeys).not.toContain(lockedKey);
+  });
+
   test("说明写回草稿", async () => {
     const user = userEvent.setup({ delay: null });
     const drafts: GrantDraft[] = [];
@@ -394,17 +485,25 @@ describe("GrantForm", () => {
   });
 });
 
-function renderForm(onDraftChange?: (draft: GrantDraft) => void, initialDraft: GrantDraft = EMPTY_GRANT_DRAFT) {
-  renderWithAntd(<GrantFormHarness onDraftChange={onDraftChange} initialDraft={initialDraft} />);
+function renderForm(
+  onDraftChange?: (draft: GrantDraft) => void,
+  initialDraft: GrantDraft = EMPTY_GRANT_DRAFT,
+  locked: { lockedAuthorizationGroupKeys?: string[]; lockedPermissionKeys?: string[] } = {},
+) {
+  renderWithAntd(
+    <GrantFormHarness onDraftChange={onDraftChange} initialDraft={initialDraft} locked={locked} />,
+  );
 }
 
 /** 草稿由调用方持有, 用例里用一个最小的受控壳子把它接起来。 */
 function GrantFormHarness({
   onDraftChange,
   initialDraft,
+  locked,
 }: {
   onDraftChange?: (draft: GrantDraft) => void;
   initialDraft: GrantDraft;
+  locked: { lockedAuthorizationGroupKeys?: string[]; lockedPermissionKeys?: string[] };
 }) {
   const [draft, setDraft] = useState<GrantDraft>(initialDraft);
   return (
@@ -413,6 +512,8 @@ function GrantFormHarness({
       catalogIsLoading={false}
       catalogErrorMessage=""
       draft={draft}
+      lockedAuthorizationGroupKeys={locked.lockedAuthorizationGroupKeys}
+      lockedPermissionKeys={locked.lockedPermissionKeys}
       onDraftChange={(next) => {
         setDraft(next);
         onDraftChange?.(next);

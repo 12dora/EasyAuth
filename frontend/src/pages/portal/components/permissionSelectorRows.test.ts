@@ -6,6 +6,7 @@ import {
   buildPermissionRows,
   currentPageGroupKeysFromRows,
   currentPageSelectionKeysFromRows,
+  excludeLockedSelectionKeys,
   filterRowsToSelected,
   groupScopeChipState,
   groupScopeSelectionState,
@@ -173,6 +174,58 @@ describe("权限范围 chip 的方向与撤销禁用", () => {
   });
 });
 
+describe("组织授权锁定的权限范围 chip", () => {
+  const READ_SELF = directGrantSelectionKey("orders.read", "SELF");
+  const APPROVE_SELF = directGrantSelectionKey("orders.refund.approve", "SELF");
+  const APPROVE_ALL = directGrantSelectionKey("orders.refund.approve", "ALL");
+
+  test("锁定键勾选且禁用", () => {
+    const chip = permissionScopeChipState(
+      permission("orders.read"),
+      "SELF",
+      [READ_SELF],
+      null,
+      new Set([READ_SELF]),
+    );
+
+    expect(chip.checked).toBe(true);
+    expect(chip.disabled).toBe(true);
+    expect(chip.locked).toBe(true);
+    expect(chip.shouldSelect).toBe(false);
+  });
+
+  test("组表头批量点击只动未锁定的键, 全是锁定则禁用", () => {
+    const selectedKeys = [READ_SELF, APPROVE_SELF, APPROVE_ALL];
+    const allLocked = groupScopeChipState(
+      ordersGroup(),
+      "SELF",
+      selectedKeys,
+      null,
+      new Set([READ_SELF, APPROVE_SELF]),
+    );
+    const mixedLocked = groupScopeChipState(ordersGroup(), "SELF", selectedKeys, null, new Set([READ_SELF]));
+
+    expect(allLocked.checked).toBe(true);
+    expect(allLocked.disabled).toBe(true);
+    expect(allLocked.locked).toBe(true);
+    expect(mixedLocked.disabled).toBe(false);
+    expect(mixedLocked.locked).toBe(false);
+  });
+
+  test("groupSelectionState 把锁定键算进已选", () => {
+    const group = ordersGroup();
+    const lockedKeys = [
+      directGrantSelectionKey("orders.read", "SELF"),
+      directGrantSelectionKey("orders.refund.approve", "SELF"),
+      directGrantSelectionKey("orders.refund.approve", "MANAGED_USERS"),
+      directGrantSelectionKey("orders.refund.approve", "ALL"),
+    ];
+
+    expect(groupSelectionState(group, lockedKeys)).toBe("checked");
+    expect(groupSelectionState(group, [lockedKeys[0]])).toBe("indeterminate");
+  });
+});
+
 describe("buildPermissionRows", () => {
   test("未展开的权限组只出一行, 展开后带出直接权限与子组", () => {
     const rows = buildPermissionRows([ordersGroup()], [permission("dashboard.view")], rowContext());
@@ -253,5 +306,18 @@ describe("行集合派生", () => {
       directGrantSelectionKey("orders.refund.approve", "ALL"),
     ]);
     expect(currentPageGroupKeysFromRows(rows)).toEqual(["orders"]);
+  });
+
+  test("工具栏选择键要摘掉锁定项", () => {
+    const keys = [
+      directGrantSelectionKey("orders.read", "SELF"),
+      directGrantSelectionKey("orders.refund.approve", "ALL"),
+    ];
+    const locked = new Set([directGrantSelectionKey("orders.read", "SELF")]);
+
+    expect(excludeLockedSelectionKeys(keys, locked)).toEqual([
+      directGrantSelectionKey("orders.refund.approve", "ALL"),
+    ]);
+    expect(excludeLockedSelectionKeys(keys, new Set())).toEqual(keys);
   });
 });

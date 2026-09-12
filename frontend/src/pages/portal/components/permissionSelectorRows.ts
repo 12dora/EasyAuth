@@ -202,14 +202,17 @@ export function groupScopeSelectionState(
  * 禁用与否只看这次点击真正会产生的选择集合(与动作层同一条路径, 见 accessRequestScopeClick):
  * 勾上一个范围会连同它以下的范围一起补齐, 只看被点的那一个范围键会把越界判漏;
  * 而已勾上的 chip 点下去是清空, 算不出新增, 因此撤销申请里合法的减法不会被误禁。
+ * 组织授权锁定的选择键另外算: 勾选且不可改, 组表头的批量点击也不能动它们。
  */
 export interface ScopeChipState {
   checked: boolean;
   mixed: boolean;
   /** 点一下的方向: true 是补齐成全勾, false 是清空。 */
   shouldSelect: boolean;
-  /** 撤销申请里这一下会把基础授权之外的权限带进保留范围, 因此禁用。 */
+  /** 撤销越界, 或组织授权锁定, 因此禁用。 */
   disabled: boolean;
+  /** 由组织授权下发: 勾选且不可改, 悬停标题走「由组织授权下发」。 */
+  locked: boolean;
 }
 
 export function groupScopeChipState(
@@ -217,19 +220,26 @@ export function groupScopeChipState(
   scopeKey: string,
   selectedKeys: string[],
   retainableKeySet: Set<string> | null,
+  lockedKeySet: Set<string> | null = null,
 ): ScopeChipState {
   const selectionState = groupScopeSelectionState(group, scopeKey, selectedKeys);
   // 全勾时点一下清空整个范围; 未勾与半勾都补齐成全勾, 半勾不再变成"再点一次也没反应"。
   const shouldSelect = selectionState !== "checked";
+  const next = nextSelectionForGroupScopeClick(group, scopeKey, shouldSelect, selectedKeys);
+  const nextKeepingLocked = keepLockedSelectionKeys(selectedKeys, next, lockedKeySet);
+  const toggledKeys = selectionToggleKeys(selectedKeys, next);
+  const lockedNoop =
+    toggledKeys.length > 0 &&
+    lockedKeySet !== null &&
+    toggledKeys.every((key) => lockedKeySet.has(key));
   return {
     checked: selectionState === "checked",
     mixed: selectionState === "indeterminate",
     shouldSelect,
-    disabled: selectionChangeAddsOutsideRetainableTarget(
-      selectedKeys,
-      nextSelectionForGroupScopeClick(group, scopeKey, shouldSelect, selectedKeys),
-      retainableKeySet,
-    ),
+    disabled:
+      lockedNoop ||
+      selectionChangeAddsOutsideRetainableTarget(selectedKeys, nextKeepingLocked, retainableKeySet),
+    locked: lockedNoop,
   };
 }
 
@@ -238,7 +248,12 @@ export function permissionScopeChipState(
   scopeKey: string,
   selectedKeys: string[],
   retainableKeySet: Set<string> | null,
+  lockedKeySet: Set<string> | null = null,
 ): ScopeChipState {
+  const selectionKey = directGrantSelectionKey(permission.key, scopeKey);
+  if (lockedKeySet?.has(selectionKey)) {
+    return { checked: true, mixed: false, shouldSelect: false, disabled: true, locked: true };
+  }
   const shouldSelect = permissionScopeClickSelects(permission, scopeKey, selectedKeys);
   return {
     checked: !shouldSelect,
@@ -249,7 +264,52 @@ export function permissionScopeChipState(
       nextSelectionForPermissionScopeClick(permission, scopeKey, selectedKeys),
       retainableKeySet,
     ),
+    locked: false,
   };
+}
+
+/**
+ * 组表头批量点击时, 组织授权锁定的选择键保持原样: 不能被这次点击勾上, 也不能被清掉。
+ * lockedKeySet 为空时原样返回 next, 门户不传锁定键时行为不变。
+ */
+export function keepLockedSelectionKeys(
+  current: string[],
+  next: string[],
+  lockedKeySet: Set<string> | null,
+): string[] {
+  if (!lockedKeySet || lockedKeySet.size === 0) {
+    return next;
+  }
+  const currentSet = new Set(current);
+  const nextSet = new Set(next);
+  for (const key of lockedKeySet) {
+    if (currentSet.has(key)) {
+      nextSet.add(key);
+    } else {
+      nextSet.delete(key);
+    }
+  }
+  if (nextSet.size === next.length && next.every((key) => nextSet.has(key))) {
+    return next;
+  }
+  return Array.from(nextSet);
+}
+
+/** 工具栏全选/清空交给动作层的选择键: 锁定键不进草稿, 从批量操作里摘掉。 */
+export function excludeLockedSelectionKeys(keys: string[], lockedKeySet: Set<string>): string[] {
+  if (lockedKeySet.size === 0) {
+    return keys;
+  }
+  return keys.filter((key) => !lockedKeySet.has(key));
+}
+
+function selectionToggleKeys(current: string[], next: string[]): string[] {
+  const currentSet = new Set(current);
+  const nextSet = new Set(next);
+  return [
+    ...next.filter((key) => !currentSet.has(key)),
+    ...current.filter((key) => !nextSet.has(key)),
+  ];
 }
 
 function hasLowerScopeSelection(permission: ScopedPermissionItem, scopeKey: string, selectedKeySet: Set<string>): boolean {

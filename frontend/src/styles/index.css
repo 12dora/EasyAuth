@@ -6,6 +6,7 @@
 @import "./features/app-table.css";
 @import "./features/permission-selector.css";
 @import "./features/org-tree.css";
+@import "./features/department-sourced-grants.css";
 
 :root {
   color-scheme: light;

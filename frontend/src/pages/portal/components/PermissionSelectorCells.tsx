@@ -76,6 +76,7 @@ export function PermissionGroupScopeCell({
   scopeOptions,
   selectedKeys,
   retainableKeySet,
+  lockedKeySet,
   onScopeChange,
   locale,
 }: {
@@ -84,6 +85,8 @@ export function PermissionGroupScopeCell({
   selectedKeys: string[];
   /** 撤销申请里还允许勾上的权限范围; null 表示不是撤销申请。 */
   retainableKeySet: Set<string> | null;
+  /** 组织授权锁定的权限范围; 空集合表示没有锁定项。 */
+  lockedKeySet: Set<string>;
   onScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => void;
   locale: Locale;
 }) {
@@ -95,7 +98,7 @@ export function PermissionGroupScopeCell({
   return (
     <div className="permission-selector__scope-chip-list permission-selector__scope-chip-list--single-line">
       {scopeOptions.map((scope) => {
-        const chip = groupScopeChipState(group, scope.key, selectedKeys, retainableKeySet);
+        const chip = groupScopeChipState(group, scope.key, selectedKeys, retainableKeySet, lockedKeySet);
 
         return (
           <ScopeChip
@@ -104,6 +107,7 @@ export function PermissionGroupScopeCell({
             checked={chip.checked}
             mixed={chip.mixed}
             disabled={chip.disabled}
+            title={chip.locked ? t("selector.scope.grantedByOrganization") : undefined}
             ariaLabel={t("selector.selectGroupScope", { groupKey: group.key, scopeName: localizedName(locale, scope) })}
             onChange={() => onScopeChange(group, scope.key, chip.shouldSelect)}
           />
@@ -118,6 +122,7 @@ export function PermissionScopeCell({
   selectedKeys,
   coveredKeySet,
   retainableKeySet,
+  lockedKeySet,
   onScopeChange,
   locale,
 }: {
@@ -126,6 +131,8 @@ export function PermissionScopeCell({
   coveredKeySet: Set<string>;
   /** 撤销申请里还允许勾上的权限范围; null 表示不是撤销申请。 */
   retainableKeySet: Set<string> | null;
+  /** 组织授权锁定的权限范围; 空集合表示没有锁定项。 */
+  lockedKeySet: Set<string>;
   onScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
   locale: Locale;
 }) {
@@ -138,18 +145,26 @@ export function PermissionScopeCell({
   return (
     <div className="permission-selector__scope-chip-list permission-selector__scope-chip-list--single-line">
       {scopes.map((scope) => {
+        const selectionKey = directGrantSelectionKey(permission.key, scope.key);
         // 权限组覆盖的权限同样可编辑: 取消勾选会把权限组落地成逐项直接申请(见 accessRequestActions)。
-        const isCovered = coveredKeySet.has(directGrantSelectionKey(permission.key, scope.key));
-        const chip = permissionScopeChipState(permission, scope.key, selectedKeys, retainableKeySet);
+        // 组织授权锁定优先: 既覆盖又锁定时画成禁用, 不能落地成个人授权。
+        const isCovered = coveredKeySet.has(selectionKey);
+        const chip = permissionScopeChipState(permission, scope.key, selectedKeys, retainableKeySet, lockedKeySet);
         const scopeLabel = t("selector.selectPermissionScope", { permissionKey: permission.key, scopeName: localizedName(locale, scope) });
         return (
           <ScopeChip
             key={scope.key}
             label={localizedName(locale, scope)}
             checked={chip.checked}
-            covered={isCovered}
+            covered={isCovered && !chip.locked}
             disabled={chip.disabled}
-            title={isCovered ? t("selector.scope.coveredByGroup") : undefined}
+            title={
+              chip.locked
+                ? t("selector.scope.grantedByOrganization")
+                : isCovered
+                  ? t("selector.scope.coveredByGroup")
+                  : undefined
+            }
             ariaLabel={scopeLabel}
             onChange={() => onScopeChange(permission, scope.key)}
           />
@@ -196,7 +211,10 @@ function ScopeChip({
         mixed && "permission-selector__scope-chip--mixed",
         covered && "permission-selector__scope-chip--covered",
         // 与只读行一致的禁用样式(见 PermissionSelectorBody.rowClassName)。
-        disabled && "pointer-events-none opacity-60",
+        // 带 title 的锁定 chip 不能 pointer-events-none: 否则悬停「由组织授权下发」出不来。
+        disabled && "opacity-60",
+        disabled && !title && "pointer-events-none",
+        disabled && title && "cursor-not-allowed",
       )}
     >
       <input

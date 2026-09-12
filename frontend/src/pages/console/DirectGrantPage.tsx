@@ -15,8 +15,11 @@ import {
   EMPTY_GRANT_DRAFT,
   GrantForm,
   buildGrantSubmission,
+  departmentSourcedGroupKeys,
+  departmentSourcedPermissionKeys,
   grantCatalogApp,
   grantDraftErrors,
+  grantDraftExcludingLockedKeys,
   grantDraftFromCurrentGrant,
   grantDraftIsValid,
   grantDraftWithoutGrantee,
@@ -29,7 +32,13 @@ import type { MessageKey } from "../../i18n/messages";
 import { ApiError, apiRequest } from "../../lib/api";
 import type { JsonValue } from "../../lib/api";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
-import type { AccessGrantRow } from "../../lib/domain/accessGrantRow";
+import { cn } from "../../lib/cn";
+import type {
+  AccessGrantDirectMembership,
+  AccessGrantGroupMembership,
+  AccessGrantRow,
+} from "../../lib/domain/accessGrantRow";
+import { buildCatalogView } from "../portal/hooks/accessRequestCatalog";
 
 interface DirectGrantRequest {
   payload: GrantSubmission & { user_id: string };
@@ -58,7 +67,9 @@ export function DirectGrantPage() {
   const lastPairRef = useRef("");
   const reportedErrorPairRef = useRef("");
   const grantPairKey = userId !== "" && draft.appKey !== "" ? `${userId}\u0000${draft.appKey}` : "";
-  const currentGrant = currentGrantQuery.data ?? null;
+  const currentGrant = currentGrantQuery.isSuccess ? (currentGrantQuery.data ?? null) : null;
+  const lockedAuthorizationGroupKeys = currentGrant ? departmentSourcedGroupKeys(currentGrant) : [];
+  const lockedPermissionKeys = currentGrant ? departmentSourcedPermissionKeys(currentGrant) : [];
 
   useEffect(() => {
     if (lastPairRef.current !== grantPairKey) {
@@ -72,9 +83,18 @@ export function DirectGrantPage() {
     settledPairRef.current = grantPairKey;
     const grant = currentGrantQuery.data;
     if (grant) {
-      setDraft((current) => grantDraftFromCurrentGrant(grant, current));
+      setDraft((current) => {
+        const next = grantDraftFromCurrentGrant(grant, current);
+        // 锁定组覆盖的直接权限也要从草稿里摘掉, 否则提交会把组织授权再抄一份。
+        return grantDraftExcludingLockedKeys(
+          next,
+          departmentSourcedGroupKeys(grant),
+          departmentSourcedPermissionKeys(grant),
+          buildCatalogView(catalogQuery.data, next.appKey, ""),
+        );
+      });
     }
-  }, [grantPairKey, currentGrantQuery.isSuccess, currentGrantQuery.data]);
+  }, [grantPairKey, currentGrantQuery.isSuccess, currentGrantQuery.data, catalogQuery.data]);
 
   useEffect(() => {
     // 读不到现状就把失败说出来, 让表单停在空白态: 静默留白会让管理员以为这个人还没有权限。
@@ -163,8 +183,10 @@ export function DirectGrantPage() {
             setDraftErrorKeys([]);
           }}
           disabled={grantMutation.isPending}
+          lockedAuthorizationGroupKeys={lockedAuthorizationGroupKeys}
+          lockedPermissionKeys={lockedPermissionKeys}
           header={
-            <>
+            <div>
               <Field label={t("directGrant.grantee")} hint={grantee ? undefined : t("directGrant.granteeHint")}>
                 <UserSearchInput
                   value={userId}
@@ -176,11 +198,13 @@ export function DirectGrantPage() {
                   onSelectOption={(option) => changeGrantee(option.user_id, option)}
                 />
               </Field>
-              {currentGrantQuery.isFetching ? (
-                <p className="text-xs leading-5 text-ink-faint">{t("directGrant.currentGrantLoading")}</p>
-              ) : null}
-              <DepartmentSourcedGrants grant={currentGrant} />
-            </>
+              <DepartmentSourcedGrants
+                userId={userId}
+                grant={currentGrant}
+                status={departmentSourcedNoticeStatus(userId, draft.appKey, currentGrantQuery)}
+                isFetching={currentGrantQuery.isFetching}
+              />
+            </div>
           }
         />
         {catalogErrorMessage ? (
@@ -230,34 +254,150 @@ export function DirectGrantPage() {
   );
 }
 
+type DepartmentSourcedNoticeStatus = "idle" | "pending" | "success" | "error";
+
+interface DepartmentSourcedContent {
+  groups: AccessGrantGroupMembership[];
+  permissions: AccessGrantDirectMembership[];
+}
+
 /**
  * 组织授权下发的成员关系, 只读展示。
  *
  * 这部分由部门策略维护, 在这一页改不了: 直接授权提交时只替换本人来源的成员关系。
  * 不展示的话管理员会以为这个人没有这些权限, 于是重复授一遍。
+ *
+ * 换应用时现状查询会短暂没有 data: 上一份内容留在格子里并压低透明度, 新数据就地替换;
+ * 新的一对没有组织授权则高度收拢, 而不是卸掉再挂上把下面的表单顶得跳一下。
+ * 换被授权人或重置必须立刻清空, 不能把上一个人的组织授权留在这一格。
  */
-function DepartmentSourcedGrants({ grant }: { grant: AccessGrantRow | null }) {
+function DepartmentSourcedGrants({
+  userId,
+  grant,
+  status,
+  isFetching,
+}: {
+  userId: string;
+  grant: AccessGrantRow | null;
+  status: DepartmentSourcedNoticeStatus;
+  isFetching: boolean;
+}) {
   const { t } = useI18n();
-  const groups = (grant?.authorization_groups ?? []).filter((group) => group.source === "department");
-  const permissions = (grant?.direct_grants ?? []).filter((permission) => permission.source === "department");
-  if (groups.length === 0 && permissions.length === 0) {
-    return null;
+  const [shownUserId, setShownUserId] = useState(userId);
+  const [shown, setShown] = useState<DepartmentSourcedContent | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  if (userId !== shownUserId) {
+    setShownUserId(userId);
+    setShown(null);
+    setExpanded(false);
+  } else if (status === "idle") {
+    if (shown !== null || expanded) {
+      setShown(null);
+      setExpanded(false);
+    }
+  } else if (status === "success") {
+    const next = departmentSourcedContent(grant);
+    if (departmentSourcedContentHasItems(next)) {
+      if (!departmentSourcedContentEquals(shown, next) || !expanded) {
+        setShown(next);
+        setExpanded(true);
+      }
+    } else if (expanded) {
+      setExpanded(false);
+    }
+  } else if (status === "error" && expanded) {
+    setExpanded(false);
+  }
+
+  if (!shown) {
+    return (
+      <p className="sr-only" role="status">
+        {isFetching ? t("directGrant.currentGrantLoading") : ""}
+      </p>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "department-sourced-grants",
+        expanded && "department-sourced-grants--open",
+        isFetching && "department-sourced-grants--fetching",
+      )}
+      aria-hidden={!expanded}
+      inert={!expanded || undefined}
+    >
+      <div className="department-sourced-grants__body">
+        <section className="mt-5 rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-2.5">
+          <h3 className="text-xs font-semibold text-ink">{t("directGrant.departmentSourced")}</h3>
+          <p className="mt-1 text-xs leading-5 text-ink-faint">{t("directGrant.departmentSourcedHint")}</p>
+          <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs leading-5 text-ink-soft">
+            {shown.groups.map((group) => (
+              <li key={`group:${group.key}`}>{group.name}</li>
+            ))}
+            {shown.permissions.map((permission) => (
+              <li key={`permission:${permission.permission}:${permission.scope}`}>
+                {`${permission.permission_name} · ${permission.scope_name}`}
+              </li>
+            ))}
+          </ul>
+          <p className="sr-only" role="status">
+            {isFetching ? t("directGrant.currentGrantLoading") : ""}
+          </p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function departmentSourcedNoticeStatus(
+  userId: string,
+  appKey: string,
+  query: { isSuccess: boolean; isError: boolean },
+): DepartmentSourcedNoticeStatus {
+  if (!userId || !appKey) {
+    return "idle";
+  }
+  if (query.isError) {
+    return "error";
+  }
+  if (query.isSuccess) {
+    return "success";
+  }
+  return "pending";
+}
+
+function departmentSourcedContent(grant: AccessGrantRow | null): DepartmentSourcedContent {
+  return {
+    groups: (grant?.authorization_groups ?? []).filter((group) => group.source === "department"),
+    permissions: (grant?.direct_grants ?? []).filter((permission) => permission.source === "department"),
+  };
+}
+
+function departmentSourcedContentHasItems(content: DepartmentSourcedContent): boolean {
+  return content.groups.length > 0 || content.permissions.length > 0;
+}
+
+function departmentSourcedContentEquals(
+  left: DepartmentSourcedContent | null,
+  right: DepartmentSourcedContent,
+): boolean {
+  if (!left) {
+    return false;
+  }
+  if (left.groups.length !== right.groups.length || left.permissions.length !== right.permissions.length) {
+    return false;
   }
   return (
-    <section className="rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-2.5">
-      <h3 className="text-xs font-semibold text-ink">{t("directGrant.departmentSourced")}</h3>
-      <p className="mt-1 text-xs leading-5 text-ink-faint">{t("directGrant.departmentSourcedHint")}</p>
-      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs leading-5 text-ink-soft">
-        {groups.map((group) => (
-          <li key={`group:${group.key}`}>{group.name}</li>
-        ))}
-        {permissions.map((permission) => (
-          <li key={`permission:${permission.permission}:${permission.scope}`}>
-            {`${permission.permission_name} · ${permission.scope_name}`}
-          </li>
-        ))}
-      </ul>
-    </section>
+    left.groups.every((group, index) => group.key === right.groups[index]?.key && group.name === right.groups[index]?.name) &&
+    left.permissions.every(
+      (permission, index) =>
+        permission.permission === right.permissions[index]?.permission &&
+        permission.scope === right.permissions[index]?.scope &&
+        permission.permission_name === right.permissions[index]?.permission_name &&
+        permission.scope_name === right.permissions[index]?.scope_name,
+    )
   );
 }
 

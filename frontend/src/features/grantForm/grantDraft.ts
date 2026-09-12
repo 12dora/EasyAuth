@@ -190,12 +190,28 @@ export function grantDraftFromPolicy(input: GrantPolicySnapshot): GrantDraft {
  *
  * 只回填本人来源(`source: "user"`)的成员关系: 组织授权下发的那部分由部门策略维护, 提交这份草稿
  * 会整体替换本人来源的成员关系, 把它一起回填就等于把组织授权抄成个人授权。
+ * 同一授权组既有组织来源又有本人来源时, 组织来源锁定优先, 本人那条不进草稿, 避免提交一份重复成员关系。
+ * 直接权限同样: 与组织来源同一选择键的本人条目丢掉。
  * 期限由这些成员关系自己决定 —— 全部无到期时间就是长期, 否则取最早的一个到期时间。
  * 说明不回填: 每次授权都要写清楚这一次的依据。
  */
 export function grantDraftFromCurrentGrant(grant: AccessGrantRow, draft: GrantDraft): GrantDraft {
-  const groups = grant.authorization_groups.filter((group) => group.source === "user");
-  const permissions = grant.direct_grants.filter((permission) => permission.source === "user");
+  const departmentGroupKeys = new Set(
+    grant.authorization_groups.filter((group) => group.source === "department").map((group) => group.key),
+  );
+  const groups = grant.authorization_groups.filter(
+    (group) => group.source === "user" && !departmentGroupKeys.has(group.key),
+  );
+  const departmentPermissionKeys = new Set(
+    grant.direct_grants
+      .filter((permission) => permission.source === "department")
+      .map((permission) => directGrantSelectionKey(permission.permission, permission.scope)),
+  );
+  const permissions = grant.direct_grants.filter(
+    (permission) =>
+      permission.source === "user" &&
+      !departmentPermissionKeys.has(directGrantSelectionKey(permission.permission, permission.scope)),
+  );
   const expiresAt = earliestExpiresAt([
     ...groups.map((group) => group.expires_at),
     ...permissions.map((permission) => permission.expires_at),
@@ -211,6 +227,26 @@ export function grantDraftFromCurrentGrant(grant: AccessGrantRow, draft: GrantDr
     expiresAt: expiresAt === null ? "" : isoToDatetimeLocal(expiresAt),
     expiresAtSource: expiresAt ?? "",
   };
+}
+
+/** 组织授权下发的授权组 key; 在表单里锁定展示, 不进本人草稿。 */
+export function departmentSourcedGroupKeys(grant: AccessGrantRow): string[] {
+  return [
+    ...new Set(
+      grant.authorization_groups.filter((group) => group.source === "department").map((group) => group.key),
+    ),
+  ];
+}
+
+/** 组织授权下发的直接权限选择键; 与锁定组覆盖的范围一并交给 PermissionSelector.lockedKeys。 */
+export function departmentSourcedPermissionKeys(grant: AccessGrantRow): string[] {
+  return [
+    ...new Set(
+      grant.direct_grants
+        .filter((permission) => permission.source === "department")
+        .map((permission) => directGrantSelectionKey(permission.permission, permission.scope)),
+    ),
+  ];
 }
 
 /** 最早的到期时间; 全是长期(null)时返回 null。 */

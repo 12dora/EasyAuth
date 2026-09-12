@@ -2,6 +2,8 @@ export {
   EMPTY_GRANT_DRAFT,
   GRANT_REASON_MAX_LENGTH,
   buildGrantSubmission,
+  departmentSourcedGroupKeys,
+  departmentSourcedPermissionKeys,
   grantCatalogApp,
   grantDraftErrors,
   grantDraftExpiresAtError,
@@ -21,4 +23,4 @@ export { GrantForm } from "./GrantForm";
 export type { GrantFormProps } from "./GrantForm";
 export { useGrantCatalog } from "./useGrantCatalog";
 export { useCurrentGrant, parseCurrentGrantPayload } from "./useCurrentGrant";
-export { grantDraftWithoutGrantee } from "./grantDraftSelection";
+export { grantDraftExcludingLockedKeys, grantDraftWithoutGrantee } from "./grantDraftSelection";

@@ -1,6 +1,8 @@
-import { act, render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { directGrantSelectionKey } from "../hooks/accessRequestSelection";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import { PermissionSelector } from "./PermissionSelector";
 
@@ -134,5 +136,49 @@ describe("PermissionSelector 前后两批过渡各自定案", () => {
     });
     expect(motionRowCount(container, "exiting")).toBe(0);
     expect(container.querySelectorAll("tbody tr")).toHaveLength(2);
+  });
+});
+
+describe("PermissionSelector lockedKeys", () => {
+  test("锁定 chip 勾选且禁用, 全选/清空都不带上锁定键", async () => {
+    const user = userEvent.setup({ delay: null });
+    const lockedKey = directGrantSelectionKey("crm.perm.0", "SELF");
+    const unlockedKey = directGrantSelectionKey("crm.perm.1", "SELF");
+    const onSelectPermissionKeys = vi.fn();
+    const onClearPermissionKeys = vi.fn();
+    const noop = () => undefined;
+
+    render(
+      <PermissionSelector
+        appKey="crm"
+        groups={[groupWith(2)]}
+        ungroupedPermissions={[]}
+        selectedKeys={[]}
+        lockedKeys={[lockedKey]}
+        expandedGroupKeys={["orders"]}
+        loading={false}
+        errorMessage=""
+        onPermissionScopeChange={noop}
+        onPermissionGroupScopeChange={noop}
+        onSelectPermissionKeys={onSelectPermissionKeys}
+        onClearPermissionKeys={onClearPermissionKeys}
+        onExpandGroups={noop}
+        onCollapseGroups={noop}
+        onToggleGroup={noop}
+      />,
+    );
+
+    const lockedChip = screen.getByRole("checkbox", { name: "选择 crm.perm.0 本人" });
+    expect(lockedChip).toBeChecked();
+    expect(lockedChip).toBeDisabled();
+    expect(lockedChip.closest("label")).toHaveAttribute("title", "由组织授权下发");
+    expect(screen.getByRole("checkbox", { name: "选择 crm.perm.1 本人" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "选择 crm.perm.1 本人" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "全选" }));
+    expect(onSelectPermissionKeys).toHaveBeenCalledWith([unlockedKey]);
+
+    await user.click(screen.getByRole("button", { name: "清空" }));
+    expect(onClearPermissionKeys).toHaveBeenCalledWith([unlockedKey]);
   });
 });

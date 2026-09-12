@@ -13,7 +13,10 @@ import { DirectGrantPage } from "./DirectGrantPage";
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 const CATALOG = {
-  apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "客户管理" }],
+  apps: [
+    { id: 1, app_key: "crm", name: "CRM", alias: "客户管理" },
+    { id: 2, app_key: "erp", name: "ERP", alias: "企业资源" },
+  ],
   approver_options: [],
   authorization_groups: [
     {
@@ -23,6 +26,14 @@ const CATALOG = {
       kind: "role",
       name: "销售",
       grants: [{ permission_key: "crm.customer.read", scope_key: "SELF" }],
+    },
+    {
+      id: 12,
+      app_key: "crm",
+      key: "audit",
+      kind: "role",
+      name: "审计",
+      grants: [{ permission_key: "crm.report.view", scope_key: "ALL" }],
     },
   ],
   permission_groups: [
@@ -50,7 +61,15 @@ const CATALOG = {
       ],
     },
   ],
-  ungrouped_permissions: [],
+  ungrouped_permissions: [
+    {
+      id: 201,
+      app_key: "crm",
+      key: "crm.report.view",
+      name: "查看报表",
+      scopes: [{ key: "ALL", name: "全部" }],
+    },
+  ],
 };
 
 const USER_OPTIONS = {
@@ -101,6 +120,30 @@ const CURRENT_GRANT = {
       { key: "sales", kind: "role", name: "销售" },
       { key: "audit", kind: "role", name: "审计" },
     ],
+    grants: [],
+  },
+};
+
+/** ERP 上没有组织授权, 用来断言换应用后提示框收拢。 */
+const ERP_NO_GRANT = { grant: null };
+
+/** ERP 上另一份组织授权, 用来断言换应用后提示框就地换成新内容。 */
+const ERP_DEPARTMENT_GRANT = {
+  grant: {
+    id: 8,
+    version: 1,
+    is_current: true,
+    status: "active",
+    user_id: "u-1",
+    user_name: "张三",
+    app_key: "erp",
+    app_name: "ERP",
+    app_alias: "企业资源",
+    grant_type: "permanent",
+    grant_expires_at: null,
+    authorization_groups: [{ key: "finance", kind: "role", name: "财务", expires_at: null, source: "department" }],
+    direct_grants: [],
+    groups: [{ key: "finance", kind: "role", name: "财务" }],
     grants: [],
   },
 };
@@ -227,9 +270,20 @@ describe("DirectGrantPage", () => {
 
     // 本人来源的授权组与直接权限回填进表单, 管理员在现状上做加减。
     await waitFor(() => expect(screen.getByLabelText("有效期")).toHaveValue("timed"));
-    expect(await selectedAuthorizationGroupNames(user)).toEqual(["销售"]);
+    expect(await selectedAuthorizationGroupNames(user)).toEqual(["销售", "审计"]);
+    // jsdom 下 maxTagCount="responsive" 把 tag 收进 overflow, 锁定改从选项的 disabled 读。
+    const auditOption = await authorizationGroupOption(user, "审计");
+    expect(auditOption).toHaveAttribute("aria-selected", "true");
+    expect(auditOption).toHaveClass("ant-select-item-option-disabled");
+    const salesOption = await authorizationGroupOption(user, "销售");
+    expect(salesOption).toHaveAttribute("aria-selected", "true");
+    expect(salesOption).not.toHaveClass("ant-select-item-option-disabled");
     await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
     expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).toBeChecked();
+    const reportChip = screen.getByRole("checkbox", { name: "选择 crm.report.view 全部" });
+    expect(reportChip).toBeChecked();
+    expect(reportChip).toBeDisabled();
+    expect(reportChip.closest("label")).toHaveAttribute("title", "由组织授权下发");
     // 期限取本人来源成员关系里最早的到期时间。
     expect(screen.getByLabelText("到期时间")).toHaveValue(
       localDatetimeValue("2030-06-30T15:59:59.123456+00:00"),
@@ -283,10 +337,10 @@ describe("DirectGrantPage", () => {
 
     // 现状照常展示组织授权来源, 但不能把管理员的编辑抹掉。
     expect(await screen.findByRole("heading", { name: "来自组织授权" })).toBeVisible();
-    // 回填会写上现状里的到期时间与目标; 这里一个都不能出现。
+    // 回填会写上现状里的到期时间与目标; 这里一个都不能出现。锁定的组织授权组会进展示, 但不进草稿。
     expect(screen.getByLabelText("有效期")).toHaveValue("timed");
     expect(screen.getByLabelText("到期时间")).toHaveValue("");
-    expect(await selectedAuthorizationGroupNames(user)).toEqual([]);
+    expect(await selectedAuthorizationGroupNames(user)).toEqual(["审计"]);
     await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
     expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).not.toBeChecked();
   });
@@ -398,6 +452,110 @@ describe("DirectGrantPage", () => {
     expect(await screen.findByText("授权目标校验未通过")).toBeVisible();
     expect(screen.getByText("权限 crm.customer.read 不支持范围 GLOBAL")).toBeVisible();
     expect(screen.getByText("授权组 sales 已停用")).toBeVisible();
+  });
+
+  test("切换应用时组织授权提示框保持挂载, 新数据到达后就地替换或收拢", async () => {
+    let releaseErp = () => {};
+    const erpArrived = new Promise<void>((resolve) => {
+      releaseErp = resolve;
+    });
+    stubFetch(async (url) => {
+      if (url.includes("/apps/crm/") && url.endsWith("/current-grant")) {
+        return jsonResponse(CURRENT_GRANT);
+      }
+      if (url.includes("/apps/erp/") && url.endsWith("/current-grant")) {
+        await erpArrived;
+        return jsonResponse(ERP_NO_GRANT);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }, CURRENT_GRANT_FROM_HANDLER);
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await selectGrantee(user);
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    expect(await screen.findByRole("heading", { name: "来自组织授权" })).toBeVisible();
+    expect(screen.getByText("审计")).toBeVisible();
+
+    await user.selectOptions(screen.getByLabelText("应用"), "erp");
+    // 换应用还在路上: 上一份内容留着, 标题不能从 DOM 里消失。
+    expect(screen.getByRole("heading", { name: "来自组织授权" })).toBeVisible();
+    expect(screen.getByText("审计")).toBeVisible();
+
+    await act(async () => {
+      releaseErp();
+      await erpArrived;
+    });
+
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "来自组织授权" })).toBeNull());
+  });
+
+  test("切换应用到另一份组织授权时提示框就地换成新条目", async () => {
+    let releaseErp = () => {};
+    const erpArrived = new Promise<void>((resolve) => {
+      releaseErp = resolve;
+    });
+    stubFetch(async (url) => {
+      if (url.includes("/apps/crm/") && url.endsWith("/current-grant")) {
+        return jsonResponse(CURRENT_GRANT);
+      }
+      if (url.includes("/apps/erp/") && url.endsWith("/current-grant")) {
+        await erpArrived;
+        return jsonResponse(ERP_DEPARTMENT_GRANT);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }, CURRENT_GRANT_FROM_HANDLER);
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await selectGrantee(user);
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    expect(await screen.findByRole("heading", { name: "来自组织授权" })).toBeVisible();
+
+    await user.selectOptions(screen.getByLabelText("应用"), "erp");
+    expect(screen.getByRole("heading", { name: "来自组织授权" })).toBeVisible();
+
+    await act(async () => {
+      releaseErp();
+      await erpArrived;
+    });
+
+    const departmentBlock = await screen.findByRole("heading", { name: "来自组织授权" });
+    expect(within(departmentBlock.closest("section") as HTMLElement).getByText("财务")).toBeVisible();
+    expect(within(departmentBlock.closest("section") as HTMLElement).queryByText("审计")).toBeNull();
+  });
+
+  test("勾选一项本人权限后提交, 载荷不含组织授权锁定的组与权限", async () => {
+    const fetchMock = stubFetch(async (url) => {
+      if (url === "/console/api/v1/direct-grants") {
+        return jsonResponse({ data: { grant_id: 9 } }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }, CURRENT_GRANT);
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await selectGrantee(user);
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).toBeChecked(),
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" }));
+    await user.type(screen.getByLabelText("说明"), "去掉导出权限");
+    await user.click(screen.getByRole("button", { name: "授予权限" }));
+
+    await waitFor(() => expect(directGrantBody(fetchMock)).not.toBeNull());
+    expect(directGrantBody(fetchMock)).toEqual({
+      user_id: "u-1",
+      app_key: "crm",
+      authorization_group_keys: ["sales"],
+      direct_grants: [],
+      grant_type: "timed",
+      grant_expires_at: "2030-06-30T15:59:59.123456+00:00",
+      reason: "去掉导出权限",
+    });
   });
 });
 
