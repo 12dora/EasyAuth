@@ -49,6 +49,7 @@ describe("ConsoleTeamDetail", () => {
     renderDetail();
 
     expect(await screen.findByText("成员1")).toBeVisible();
+    expect(screen.queryByText("u-1")).not.toBeInTheDocument();
     expect(memberRowCount()).toBe(10);
     expect(screen.getByText("第 1-10 条 / 共 12 条")).toBeVisible();
 

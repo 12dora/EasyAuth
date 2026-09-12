@@ -28,6 +28,7 @@ describe("OperationsPage", () => {
               id: 101,
               user_id: "user-a",
               user_name: "胡玉琴",
+              user_department: "捷发-安环部",
               app_key: "crm",
               app_name: "CRM",
               app_alias: "客户管理",
@@ -48,6 +49,8 @@ describe("OperationsPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("胡玉琴")).toBeInTheDocument();
+      expect(screen.getByText("捷发-安环部")).toBeInTheDocument();
+      expect(screen.queryByText("user-a")).not.toBeInTheDocument();
       expect(screen.getByText("客户管理 (CRM)")).toBeInTheDocument();
       expect(screen.getByText("张主管")).toBeInTheDocument();
       // 申请类型按文案展示, 不再暴露 grant/change/revoke/renew 这些接口取值。
@@ -432,6 +435,8 @@ describe("OperationsPage", () => {
     renderOperationsPage("access-grants");
 
     expect(await screen.findByText("胡玉琴")).toBeInTheDocument();
+    expect(screen.getByText("捷发-安环部")).toBeInTheDocument();
+    expect(screen.queryByText("risk-user")).not.toBeInTheDocument();
     expect(screen.getByText("客户管理 (CRM)")).toBeInTheDocument();
     expect(screen.getByText("审计员")).toBeInTheDocument();
     expect(screen.getByText("2 项权限")).toBeInTheDocument();
@@ -796,6 +801,7 @@ function accessRequestRow(overrides: Record<string, unknown> = {}) {
     id: 1,
     user_id: "user-a",
     user_name: "胡玉琴",
+    user_department: "捷发-安环部",
     app_key: "crm",
     app_name: "CRM",
     app_alias: "客户管理",
@@ -818,6 +824,7 @@ function accessGrantRow(overrides: Record<string, unknown> = {}) {
     status: "active",
     user_id: "risk-user",
     user_name: "胡玉琴",
+    user_department: "捷发-安环部",
     app_key: "crm",
     app_name: "CRM",
     app_alias: "客户管理",

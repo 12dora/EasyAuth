@@ -77,7 +77,7 @@ export const zhCN = {
   "portal.request.approverSelect": "选择审批人 {userId}",
   "portal.request.approverUnnamed": "未命名审批人",
   "portal.request.approverNoMatch": "没有匹配的审批人",
-  "portal.request.approverSearchHint": "输入姓名、用户 ID、邮箱或部门搜索审批人",
+  "portal.request.approverSearchHint": "输入姓名、拼音、用户 ID、邮箱或部门搜索审批人",
 
   "portal.approvals.tablist": "审批列表切换",
   "portal.approvals.tab.pending": "待办",
@@ -188,7 +188,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.request.approverSelect": "Select approver {userId}",
   "portal.request.approverUnnamed": "Unnamed approver",
   "portal.request.approverNoMatch": "No matching approvers",
-  "portal.request.approverSearchHint": "Search by name, user ID, email, or department",
+  "portal.request.approverSearchHint": "Search by name, pinyin, user ID, email, or department",
 
   "portal.approvals.tablist": "Approval list views",
   "portal.approvals.tab.pending": "Pending",

@@ -13,6 +13,8 @@ export interface OperationRow {
   user_id?: string;
   /** 用户显示名; 目录里没有姓名时为空串, 此时界面回落展示 user_id。 */
   user_name?: string;
+  /** 用户部门路径; 未同步或本地账号时缺省/空串。 */
+  user_department?: string;
   app_key?: string;
   app_name?: string;
   app_alias?: string;

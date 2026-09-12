@@ -2,10 +2,11 @@ import type { ComponentPropsWithoutRef, MouseEvent, ReactNode } from "react";
 
 import { useI18n } from "../../i18n/I18nProvider";
 import { cn } from "../../lib/cn";
-import type { BadgeTone } from "../../lib/status";
+import type { BadgeTone, Translator } from "../../lib/status";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { ButtonLink } from "../ButtonLink";
+import { userSecondaryLabel } from "../UserCombobox";
 import { enumFilter, readField, textFilter, type ColumnType, type ServerSortState } from "./AppTable";
 
 /**
@@ -284,32 +285,63 @@ export interface UserColumnConfig<T> {
   title?: ReactNode;
   /** 主行: 显示名。 */
   getName: (record: T) => string | null | undefined;
-  /** 次行: 用户 ID / 账号, 等宽展示; 不传则只渲染一行。 */
+  /**
+   * 姓名缺失时的主行回退, 以及未传 `getSecondary` 时的次行(应用 key / 邮箱等标识符)。
+   * 人员列请改用 `personColumn`, 不要把 Authentik UUID 传到这里当次行。
+   */
   getUserId?: (record: T) => string | null | undefined;
-  /** 开启文本筛选(同时匹配显示名与 ID)。 */
+  /** 次行文案; 传入后覆盖 `getUserId` 作为次行(主行回退仍用 `getUserId`)。 */
+  getSecondary?: (record: T) => string | null | undefined;
+  /**
+   * 次行是否等宽。默认: 走 `getSecondary` 时 false(部门路径), 只走 `getUserId` 时 true(标识符)。
+   */
+  mono?: boolean;
+  /** 开启文本筛选(同时匹配显示名与次行)。 */
+  filter?: boolean;
+  width?: number;
+}
+
+export interface PersonColumnConfig<T> {
+  key?: string;
+  title?: ReactNode;
+  getName: (record: T) => string | null | undefined;
+  getUserId: (record: T) => string | null | undefined;
+  /** 部门路径; 缺省或空串时次行留空(本地账号除外, 见 `userSecondaryLabel`)。 */
+  getDepartment?: (record: T) => string | null | undefined;
+  /** 本地账号次行文案需要 t("user.localAccount")。 */
+  t: Translator;
   filter?: boolean;
   width?: number;
 }
 
 /**
- * 用户列: 显示名 + 等宽 ID 两行。
+ * 用户列: 显示名 + 次行两行。
  * 沿用 ConsoleTeamMemberTable / MembershipsPanel 既有的成员单元格排版,
  * 仓库里没有表格内头像的先例, 因此不渲染头像。
+ *
+ * 次行默认等宽, 给应用 key / 邮箱这类标识符用; 人员部门请走 `personColumn`。
  */
 export function userColumn<T>({
   filter = false,
   getName,
   getUserId,
+  getSecondary,
+  mono,
   key = "user",
   title,
   width,
 }: UserColumnConfig<T>): ColumnType<T> {
+  const secondaryIsMono = mono ?? getSecondary === undefined;
   const read = (record: T) => {
     const name = getName(record);
     const userId = getUserId?.(record);
+    const secondary = getSecondary
+      ? getSecondary(record)
+      : userId;
     return {
       name: name === null || name === undefined ? "" : String(name),
       userId: userId === null || userId === undefined ? "" : String(userId),
+      secondary: secondary === null || secondary === undefined ? "" : String(secondary),
     };
   };
 
@@ -318,26 +350,68 @@ export function userColumn<T>({
     title: title ?? <UserColumnTitle />,
     width,
     render: (_value: unknown, record: T) => {
-      const { name, userId } = read(record);
-      if (name === "" && userId === "") {
+      const { name, userId, secondary } = read(record);
+      const displayName = name || userId;
+      if (displayName === "" && secondary === "") {
         return "-";
       }
+      // 未传 getSecondary 时保持旧语义: 次行是标识符, 只有主行已有姓名才展示, 避免 UUID 自己复制成两行。
+      const showSecondary = getSecondary ? secondary !== "" : Boolean(userId && name);
       return (
         <div className="flex min-w-0 flex-col gap-1">
-          <strong className="truncate">{name || userId}</strong>
-          {userId && name ? <code className={cn(MONO_TEXT_CLASS, "truncate")}>{userId}</code> : null}
+          <strong className="truncate">{displayName || secondary}</strong>
+          {showSecondary ? (
+            secondaryIsMono ? (
+              <code className={cn(MONO_TEXT_CLASS, "truncate")}>{secondary}</code>
+            ) : (
+              <span className="truncate text-body leading-5 text-ink-soft">{secondary}</span>
+            )
+          ) : null}
         </div>
       );
     },
     ...(filter
       ? textFilter<T>(key, {
           getValue: (record) => {
-            const { name, userId } = read(record);
-            return `${name} ${userId}`;
+            const { name, userId, secondary } = read(record);
+            return `${name || userId} ${secondary}`;
           },
         })
       : {}),
   };
+}
+
+/**
+ * 人员列: 姓名 + 部门路径(或「本地用户」), 次行绝不出 UUID。
+ * 姓名缺失时主行仍回退到 user_id, 与 `userOptionName` 同一条规则。
+ */
+export function personColumn<T>({
+  filter = false,
+  getDepartment,
+  getName,
+  getUserId,
+  key = "user",
+  t,
+  title,
+  width,
+}: PersonColumnConfig<T>): ColumnType<T> {
+  return userColumn<T>({
+    filter,
+    getName,
+    getUserId,
+    getSecondary: (record) =>
+      userSecondaryLabel(
+        {
+          user_id: String(getUserId(record) ?? ""),
+          department: getDepartment?.(record) ?? "",
+        },
+        t,
+      ),
+    key,
+    mono: false,
+    title,
+    width,
+  });
 }
 
 function UserColumnTitle() {

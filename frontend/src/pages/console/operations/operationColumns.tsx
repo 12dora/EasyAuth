@@ -7,7 +7,7 @@ import {
   serverColumn,
   statusColumn,
   textColumn,
-  userColumn,
+  personColumn,
   type StatusColumnOption,
 } from "../../../components/antd/columns";
 import { GrantExpiryCell } from "../../../components/grants/GrantExpiryCell";
@@ -179,11 +179,13 @@ export function accessGrantColumns(
 ): ColumnsType<AccessGrantRow> {
   const columns: ColumnsType<AccessGrantRow> = [
     serverColumn(
-      userColumn<AccessGrantRow>({
+      personColumn<AccessGrantRow>({
         key: "user_id",
         title: t("common.user"),
+        t,
         getName: (row) => row.user_name,
         getUserId: (row) => row.user_id,
+        getDepartment: (row) => row.user_department,
         filter: true,
         width: 200,
       }),
@@ -260,11 +262,13 @@ function accessRequestColumns(
   const columns: ColumnsType<OperationRow> = [
     textColumn<OperationRow>({ key: "id", title: "ID", width: 90 }),
     serverColumn(
-      userColumn<OperationRow>({
+      personColumn<OperationRow>({
         key: "user_id",
         title: t("common.user"),
+        t,
         getName: (row) => row.user_name,
         getUserId: (row) => row.user_id,
+        getDepartment: (row) => row.user_department,
         filter: true,
         width: 200,
       }),

@@ -49,6 +49,8 @@ export interface AccessGrantRow {
   status: string;
   user_id: string;
   user_name: string;
+  /** 用户部门路径; 后端未下发或为空时按空串展示。 */
+  user_department?: string;
   app_key: string;
   app_name: string;
   app_alias: string;
@@ -69,6 +71,18 @@ export class AccessGrantRowContractError extends Error {
 
 function requireString(source: JsonObject, field: string): string {
   const value = source[field];
+  if (typeof value !== "string") {
+    throw new AccessGrantRowContractError(field);
+  }
+  return value;
+}
+
+/** 可选字符串: 缺省或 null 当空串; 给了但不是字符串仍算契约违约。 */
+function optionalString(source: JsonObject, field: string): string {
+  const value = source[field];
+  if (value === undefined || value === null) {
+    return "";
+  }
   if (typeof value !== "string") {
     throw new AccessGrantRowContractError(field);
   }
@@ -141,6 +155,7 @@ export function parseAccessGrantRow(raw: JsonValue): AccessGrantRow {
     status: requireString(source, "status"),
     user_id: requireString(source, "user_id"),
     user_name: requireString(source, "user_name"),
+    user_department: optionalString(source, "user_department"),
     app_key: requireString(source, "app_key"),
     app_name: requireString(source, "app_name"),
     app_alias: requireString(source, "app_alias"),

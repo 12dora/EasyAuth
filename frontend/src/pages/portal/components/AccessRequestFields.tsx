@@ -220,6 +220,8 @@ function approverSearchText(option: ApproverOption): string {
     option.user_id,
     option.email,
     option.department,
+    option.name_pinyin,
+    option.name_pinyin_initials,
   ]
     .filter(Boolean)
     .join(" ")

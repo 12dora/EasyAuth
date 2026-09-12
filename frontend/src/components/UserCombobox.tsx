@@ -9,6 +9,7 @@ import { useI18n } from "../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../lib/api";
 import type { ListPayload } from "../lib/api";
 import { cn } from "../lib/cn";
+import type { Translator } from "../lib/status";
 
 export interface UserOption {
   user_id: string;
@@ -247,6 +248,8 @@ function UserOptionRow({
   highlighted: boolean;
   onPick: (option: UserOption) => void;
 }) {
+  const { t } = useI18n();
+  const secondary = userSecondaryLabel(option, t);
   return (
     <div
       id={optionId}
@@ -274,17 +277,33 @@ function UserOptionRow({
         ) : null}
         <span>{userOptionDisplayName(option)}</span>
       </span>
-      <span className="flex flex-wrap items-center gap-x-2 text-xs text-ink-faint">
-        <code>{option.user_id}</code>
-      </span>
+      {secondary ? <span className="text-xs text-ink-faint">{secondary}</span> : null}
     </div>
   );
 }
 
-/** 候选行的主标题: 姓名(缺失时退回用户 ID), 有部门时补上"姓名 · 部门"。 */
+/** 本地紧急管理账号的 user_id 前缀; 这类账号不在目录里, 没有部门。 */
+export const LOCAL_ADMIN_USER_ID_PREFIX = "local-admin:";
+
+/**
+ * 人员次行文案: 部门路径, 或本地账号的固定标签。
+ *
+ * UUID 不能出现在次行 —— 对着一串 Authentik 标识核对「这是谁」不可接受, 部门路径才是认人依据。
+ * 本地账号没有部门, 用「本地用户」与目录人员区分; 既不是本地账号又没有部门时返回空串, 调用方不要渲染次行。
+ */
+export function userSecondaryLabel(
+  option: Pick<UserOption, "user_id"> & { department?: string | null },
+  t: Translator,
+): string {
+  if (option.user_id.startsWith(LOCAL_ADMIN_USER_ID_PREFIX)) {
+    return t("user.localAccount");
+  }
+  return option.department?.trim() ?? "";
+}
+
+/** 候选行主标题: 只展示姓名(缺失时退回用户 ID)。部门走次行, 避免「姓名 · 部门」与次行重复。 */
 export function userOptionDisplayName(option: UserOption): string {
-  const name = userOptionName(option);
-  return option.department ? `${name} · ${option.department}` : name;
+  return userOptionName(option);
 }
 
 /**

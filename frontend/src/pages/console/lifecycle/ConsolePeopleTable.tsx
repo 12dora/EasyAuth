@@ -15,7 +15,7 @@ import {
   serverSortColumn,
   statusColumn,
   textColumn,
-  userColumn,
+  personColumn,
 } from "../../../components/antd/columns";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { PersonRow } from "../../../lib/domain";
@@ -81,12 +81,14 @@ function peopleColumns(
 ): ColumnsType<PersonRow> {
   return [
     serverSortColumn(
-      userColumn<PersonRow>({
+      personColumn<PersonRow>({
         key: "name",
         title: t("people.column.name"),
-        getName: (person) => person.name || person.user_id,
+        t,
+        getName: (person) => person.name,
         getUserId: (person) => person.user_id,
-        // 次行是 36 位 UUID(truncate 展示), 260 够放下姓名与一段可辨认的前缀。
+        getDepartment: (person) => person.department,
+        // 次行是部门路径(truncate 展示), 260 够放下姓名与一段可辨认的前缀。
         width: 260,
       }),
       sort,

@@ -1,5 +1,5 @@
 export const zhCN = {
-  "userSelect.searchPlaceholder": "搜索姓名 / 邮箱 / 用户 ID",
+  "userSelect.searchPlaceholder": "搜索姓名、拼音或邮箱",
 
   "userSelect.loading": "搜索中…",
 
@@ -42,6 +42,7 @@ export const zhCN = {
   "selector.scope.managedUsers": "管理范围",
   "selector.scope.all": "全部",
   "selector.scope.coveredByGroup": "已包含在所选权限组",
+  "selector.scope.grantedByOrganization": "由组织授权下发",
 
   "selector.group.collapse": "收起",
   "selector.group.expand": "展开",
@@ -55,7 +56,7 @@ export const zhCN = {
 } as const;
 
 export const en: Record<keyof typeof zhCN, string> = {
-  "userSelect.searchPlaceholder": "Search name / email / user ID",
+  "userSelect.searchPlaceholder": "Search name, pinyin or email",
 
   "userSelect.loading": "Searching…",
 
@@ -98,6 +99,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "selector.scope.managedUsers": "Managed users",
   "selector.scope.all": "All",
   "selector.scope.coveredByGroup": "Included in the selected group",
+  "selector.scope.grantedByOrganization": "Granted by organization",
 
   "selector.group.collapse": "Collapse",
   "selector.group.expand": "Expand",

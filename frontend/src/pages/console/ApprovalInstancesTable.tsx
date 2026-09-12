@@ -18,7 +18,7 @@ import {
   serverSortColumn,
   statusColumn,
   textColumn,
-  userColumn,
+  personColumn,
   type StatusColumnOption,
 } from "../../components/antd/columns";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -105,11 +105,13 @@ function instanceColumns(
       sort,
     ),
     textColumn<ApprovalInstanceRow>({ key: "biz_key", title: t("approvalInstances.column.bizKey"), mono: true }),
-    userColumn<ApprovalInstanceRow>({
+    personColumn<ApprovalInstanceRow>({
       key: "originator_user_id",
       title: t("approvalInstances.column.originator"),
+      t,
       getName: (row) => row.originator_name,
       getUserId: (row) => row.originator_user_id,
+      getDepartment: (row) => row.originator_department,
       width: 190,
     }),
     // 失败原因没有独立的列, 沿用旧表格挂在状态徽章上的 title 提示。

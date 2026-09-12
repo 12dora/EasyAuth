@@ -63,6 +63,8 @@ describe("ConsolePeopleList", () => {
 
     expect(await screen.findByText("张三")).toBeVisible();
     const table = within(screen.getByRole("table"));
+    expect(within(personRow("张三")).queryByText("u-1")).not.toBeInTheDocument();
+    expect(within(personRow("张三")).getAllByText("销售部").length).toBeGreaterThan(0);
     expect(table.getByText("在职")).toBeVisible();
     expect(table.getByText("李四")).toBeVisible();
     expect(table.getByText("已离职")).toBeVisible();

@@ -209,6 +209,9 @@ export const zhCN = {
 
   "table.column.user": "用户",
 
+  /* 本地紧急管理账号没有目录部门, 人员次行用这句代替 UUID。 */
+  "user.localAccount": "本地用户",
+
   /* 顶栏角色: 后端只下发 ShellRole code(admin / member), 展示名在这里。 */
   "shell.user.role.admin": "EasyAuth 管理员",
   "shell.user.role.member": "成员",
@@ -422,6 +425,8 @@ export const en: Record<keyof typeof zhCN, string> = {
   "table.empty.title": "No data",
 
   "table.column.user": "User",
+
+  "user.localAccount": "Local account",
 
   "shell.user.role.admin": "EasyAuth Admins",
   "shell.user.role.member": "Member",

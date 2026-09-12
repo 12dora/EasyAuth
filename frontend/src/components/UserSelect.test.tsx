@@ -44,16 +44,35 @@ describe("UserSelect", () => {
 
     await user.click(screen.getByRole("combobox"));
     const option = await screen.findByRole("option", { name: /张三/ });
-    expect(within(option).getByText("张三 · 销售部")).toBeVisible();
-    expect(within(option).getByText("u-1")).toBeVisible();
+    expect(within(option).getByText("张三")).toBeVisible();
+    expect(within(option).getByText("销售部")).toBeVisible();
+    expect(within(option).queryByText("u-1")).toBeNull();
     const avatar = option.querySelector("img");
     expect(avatar).toHaveAttribute("src", "https://cdn.example.com/u-1.png");
     expect(avatar).toHaveAttribute("width", "20");
 
-    // 没有部门与头像的候选只画姓名, 不塞首字母占位。
+    // 没有部门与头像的候选只画姓名, 不塞首字母占位, 也没有空次行。
     const plainOption = screen.getByRole("option", { name: /李四/ });
     expect(within(plainOption).getByText("李四")).toBeVisible();
     expect(plainOption.querySelector("img")).toBeNull();
+    expect(plainOption.querySelector("code")).toBeNull();
+  });
+
+  test("本地账号候选次行展示本地用户, 不展示 user_id", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: [{ user_id: "local-admin:admin", name: "紧急管理员", department: "", avatar_url: "" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithProviders(<UserSearchInput id="owner" value="admin" onChange={vi.fn()} />);
+
+    await user.click(screen.getByRole("combobox"));
+    const option = await screen.findByRole("option", { name: /紧急管理员/ });
+    expect(within(option).getByText("本地用户")).toBeVisible();
+    expect(within(option).queryByText("local-admin:admin")).toBeNull();
   });
 
   test("从候选里选中会把完整候选项回传给调用方", async () => {
@@ -91,11 +110,63 @@ describe("UserSelect", () => {
     expect(secondaryLine).toHaveTextContent("销售部");
     expect(secondaryLine).not.toHaveTextContent("u-1");
 
-    // 手输覆盖选择: 没有可信姓名, 原样显示输入内容。
+    // 手输覆盖选择: 没有可信姓名, 原样显示输入内容。次行是输入框下的 <p>; 下拉里的部门不算。
     await user.clear(input);
     await user.type(input, "u-9");
     expect(input).toHaveValue("u-9");
-    expect(screen.queryByText("销售部")).toBeNull();
+    expect(screen.queryByText("销售部", { selector: "p" })).toBeNull();
+  });
+
+  test("不传 selectedOption 时选中后仍显示姓名与部门", async () => {
+    const user = userEvent.setup();
+    stubUserOptions();
+
+    renderWithProviders(<UncontrolledSearchInputHarness />);
+
+    const input = screen.getByRole("combobox");
+    await user.type(input, "张");
+    await user.click(await screen.findByRole("option", { name: /张三/ }));
+
+    expect(screen.getByTestId("value")).toHaveTextContent("u-1");
+    expect(input).toHaveValue("张三");
+    const secondaryLine = screen.getByText("销售部").closest("p");
+    expect(secondaryLine).toHaveTextContent("销售部");
+    expect(secondaryLine).not.toHaveTextContent("u-1");
+  });
+
+  test("回填的 user_id 按 employee 口径解析成姓名", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes("user_ids=")) {
+        return jsonResponse({
+          data: [{ user_id: "u-1", name: "张三", department: "销售部", avatar_url: "" }],
+        });
+      }
+      return jsonResponse({ data: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithProviders(<UserSearchInput id="owner" value="u-1" onChange={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("张三"));
+    expect(screen.getByText("销售部")).toBeVisible();
+    expect(screen.queryByText("u-1")).toBeNull();
+    expect(
+      fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("user_ids=")),
+    ).toEqual(["/console/api/v1/user-options?user_ids=u-1&purpose=employee"]);
+  });
+
+  test("按 ID 解析失败时原样显示输入值", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithProviders(<UserSearchInput id="owner" value="missing" onChange={vi.fn()} />);
+
+    expect(screen.getByRole("combobox")).toHaveValue("missing");
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes("user_ids=missing"))).toBe(true);
+    });
+    expect(screen.getByRole("combobox")).toHaveValue("missing");
   });
 
   test("多选 chip 按 user_ids 批量解析姓名, 未解析出姓名时才显示 ID", async () => {
@@ -206,6 +277,17 @@ function MultiSelectHarness() {
     <>
       <span data-testid="value">{value.join(",")}</span>
       <UserMultiSelect id="approvers" value={value} onChange={setValue} />
+    </>
+  );
+}
+
+/** 多数调用方不传 selectedOption: 组件必须自己记住刚选中的人。 */
+function UncontrolledSearchInputHarness() {
+  const [userId, setUserId] = useState("");
+  return (
+    <>
+      <span data-testid="value">{userId}</span>
+      <UserSearchInput id="owner" value={userId} onChange={setUserId} />
     </>
   );
 }

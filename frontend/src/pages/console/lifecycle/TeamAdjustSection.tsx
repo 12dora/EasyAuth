@@ -5,11 +5,14 @@ import { Button } from "../../../components/Button";
 import { SelectInput } from "../../../components/Field";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { useToast } from "../../../components/ui/Toast";
+import { useUserOptionsByIds, userOptionName, userSecondaryLabel } from "../../../components/UserCombobox";
+import type { UserOption } from "../../../components/UserCombobox";
 import { UserSearchInput } from "../../../components/UserSelect";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import type { JsonObject } from "../../../lib/api";
-import type { HandoverTaskDetail, HandoverTeamItemRow } from "../../../lib/domain";
+import type { HandoverTaskDetail, HandoverTeamItemRow, HandoverUserRef } from "../../../lib/domain";
+import type { Translator } from "../../../lib/status";
 
 export interface TeamAdjustSectionProps {
   task: HandoverTaskDetail;
@@ -101,10 +104,11 @@ function TeamAdjustRow({
               <UserSearchInput
                 value={successorId}
                 aria-label={`${item.team_name} ${t("handover.team.successor")}`}
+                selectedOption={item.to_user?.name ? toUserOption(item.to_user, successorId) : null}
                 onChange={setSuccessorId}
               />
             ) : (
-              <span className="text-body text-ink-soft">{successorId || "-"}</span>
+              <SuccessorReadOnly userId={successorId} known={item.to_user} />
             )}
           </div>
         ) : null}
@@ -121,12 +125,49 @@ function TeamAdjustRow({
   );
 }
 
-function teamItemDoneLabel(item: HandoverTeamItemRow, t: ReturnType<typeof useI18n>["t"]): string {
+function teamItemDoneLabel(item: HandoverTeamItemRow, t: Translator): string {
   if (item.status === "skipped") {
     return t("handover.team.doneSkipped");
   }
   if (item.action === "deactivate") {
     return t("handover.team.doneDeactivated");
   }
-  return t("handover.team.doneAssigned", { name: item.to_user?.name || item.to_user?.user_id || "-" });
+  return t("handover.team.doneAssigned", { name: personNameWithDepartment(item.to_user, t) });
+}
+
+/** 只读态: 已有姓名就展示, 只有 ID 时按 employee 口径解析, 解析失败仍回退到 ID。 */
+function SuccessorReadOnly({ userId, known }: { userId: string; known: HandoverUserRef | null }) {
+  const { t } = useI18n();
+  const knownMatches = Boolean(known && known.user_id === userId && known.name);
+  const lookupQuery = useUserOptionsByIds(userId && !knownMatches ? [userId] : [], "employee");
+  const option = knownMatches
+    ? toUserOption(known, userId)
+    : (lookupQuery.data?.find((item) => item.user_id === userId) ?? toUserOption(known, userId));
+  if (!userId) {
+    return <span className="text-body text-ink-soft">-</span>;
+  }
+  const name = userOptionName(option ?? undefined, userId);
+  const secondary = option ? userSecondaryLabel(option, t) : "";
+  return (
+    <span className="text-body text-ink-soft">
+      {name}
+      {secondary ? <span className="ml-2 text-caption text-ink-faint">{secondary}</span> : null}
+    </span>
+  );
+}
+
+function toUserOption(user: HandoverUserRef | null | undefined, expectedUserId: string): UserOption | null {
+  if (!user || user.user_id !== expectedUserId) {
+    return null;
+  }
+  return { user_id: user.user_id, name: user.name, department: user.department ?? "" };
+}
+
+function personNameWithDepartment(user: HandoverUserRef | null | undefined, t: Translator): string {
+  if (!user) {
+    return "-";
+  }
+  const name = userOptionName(user, user.user_id);
+  const secondary = userSecondaryLabel(user, t);
+  return secondary ? `${name} · ${secondary}` : name || "-";
 }

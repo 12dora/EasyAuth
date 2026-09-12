@@ -18,6 +18,8 @@ export interface MembershipItem {
   user_id: string;
   /** 成员显示名; 目录里没有姓名时为空串, 此时界面回落展示 user_id。 */
   user_name: string;
+  /** 成员部门路径; 未同步或本地账号时缺省/空串。 */
+  user_department?: string;
   role: MembershipRole | string;
   is_active?: boolean;
 }

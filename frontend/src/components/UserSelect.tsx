@@ -4,7 +4,13 @@ import type { Dispatch, SetStateAction } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
 import { TextInput } from "./Field";
-import { UserOptionList, useUserCombobox, useUserOptionsByIds, userOptionName } from "./UserCombobox";
+import {
+  UserOptionList,
+  useUserCombobox,
+  useUserOptionsByIds,
+  userOptionName,
+  userSecondaryLabel,
+} from "./UserCombobox";
 import type { UserOption, UserSearchPurpose } from "./UserCombobox";
 
 export type { UserOption } from "./UserCombobox";
@@ -47,9 +53,18 @@ export function UserSearchInput({
   const { t } = useI18n();
   const generatedId = useId();
   const listId = `${id ?? generatedId}-listbox`;
-  // 选中的人用姓名展示: 让管理员对着一串 UUID 核对被授权人是谁是不可接受的。
-  const selected = selectedOption && selectedOption.user_id === value ? selectedOption : null;
-  const inputValue = selected ? userOptionName(selected) : value;
+  /**
+   * 本组件见过的候选项, 按 user_id 索引。
+   *
+   * 多数调用方只受控 value(ID), 不传 selectedOption: 选中后输入框必须立刻切到姓名,
+   * 不能把 UUID 留在框里。调用方回填的 ID 走按 ID 解析, 解析结果也记在这里。
+   */
+  const [seenOptions, setSeenOptions] = useState<Record<string, UserOption>>({});
+  // selectedOption 优先: 调用方手里的候选项可能比本组件见过的更新。
+  const resolved =
+    selectedOption && selectedOption.user_id === value ? selectedOption : value ? (seenOptions[value] ?? null) : null;
+  const inputValue = resolved ? userOptionName(resolved) : value;
+  const secondary = resolved ? userSecondaryLabel(resolved, t) : "";
   const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } = useUserCombobox({
     query: inputValue.trim(),
     purpose: "employee",
@@ -57,10 +72,28 @@ export function UserSearchInput({
     openOnArrowDown: false,
     closeOnPick: true,
     onPick: (option) => {
+      setSeenOptions((current) => ({ ...current, [option.user_id]: option }));
       onChange(option.user_id);
       onSelectOption?.(option);
     },
   });
+  // 回填的 ID 本轮没选过: 下拉打开时输入的是搜索词, 不要拿去按 ID 解析。
+  const shouldLookup = Boolean(value) && !resolved && !open;
+  const lookupQuery = useUserOptionsByIds(shouldLookup ? [value] : [], "employee");
+
+  useEffect(() => {
+    const match = lookupQuery.data?.find((option) => option.user_id === value);
+    if (!match) {
+      return;
+    }
+    setSeenOptions((current) => {
+      if (current[match.user_id]) {
+        return current;
+      }
+      return { ...current, [match.user_id]: match };
+    });
+  }, [lookupQuery.data, value]);
+
   const getOptionId = (option: UserOption) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
 
   return (
@@ -96,9 +129,7 @@ export function UserSearchInput({
           onRetry={() => void optionsQuery.refetch()}
         />
       ) : null}
-      {selected?.department ? (
-        <p className="mt-1 text-xs leading-5 text-ink-faint">{selected.department}</p>
-      ) : null}
+      {secondary ? <p className="mt-1 text-xs leading-5 text-ink-faint">{secondary}</p> : null}
     </div>
   );
 }

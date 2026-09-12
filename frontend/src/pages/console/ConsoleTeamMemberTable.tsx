@@ -7,7 +7,7 @@ import {
   dateTimeColumn,
   statusColumn,
   textColumn,
-  userColumn,
+  personColumn,
 } from "../../components/antd/columns";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { TeamMemberItem } from "../../lib/domain";
@@ -48,11 +48,13 @@ export function ConsoleTeamMemberTable({
 
 function teamMemberTableColumns(t: Translator, actions: TeamMemberTableActions): ColumnsType<TeamMemberItem> {
   return [
-    userColumn<TeamMemberItem>({
+    personColumn<TeamMemberItem>({
       key: "member",
       title: t("console.teams.column.member"),
-      getName: (member) => member.name || member.user_id,
+      t,
+      getName: (member) => member.name,
       getUserId: (member) => member.user_id,
+      getDepartment: (member) => member.department,
       filter: true,
     }),
     textColumn<TeamMemberItem>({

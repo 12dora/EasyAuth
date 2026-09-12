@@ -42,6 +42,8 @@ export interface ApprovalInstanceRow {
   originator_user_id: string;
   /** 发起人显示名; 目录里没有姓名时为空串, 此时界面回落展示 originator_user_id。 */
   originator_name: string;
+  /** 发起人部门路径; 未同步或本地账号时缺省/空串。 */
+  originator_department?: string;
   dingtalk_process_instance_id: string;
   delivery_state: "" | "pending" | "delivered" | "failed" | "skipped" | string;
   delivery_attempts: number;

@@ -44,6 +44,10 @@ export interface ApproverOption {
   display_name?: string;
   email?: string;
   department?: string;
+  /** 姓名全拼, 小写 ASCII; 后端未下发时按空串, 不参与展示只参与本地过滤。 */
+  name_pinyin?: string;
+  /** 姓名拼音首字母, 小写 ASCII; 后端未下发时按空串。 */
+  name_pinyin_initials?: string;
 }
 
 export type PortalCatalogAppView = PortalCatalogApp & { default_approver_user_ids?: string[] };

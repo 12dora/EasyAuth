@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
 import type { PortalGrantRow } from "../portalListPayload";
@@ -60,6 +61,33 @@ describe("AccessRequestFields", () => {
     expect(labelledBy).toBeTruthy();
     expect(document.getElementById(labelledBy as string)).toHaveTextContent("审批人");
     expect(document.querySelector('label[for][id$="-label"]')).toBeNull();
+  });
+
+  test("审批人本地过滤匹配拼音全拼与首字母", async () => {
+    const user = userEvent.setup();
+    renderFields({
+      approverOptions: [
+        {
+          user_id: "u-hu",
+          name: "胡玉琴",
+          department: "捷发-安环部",
+          name_pinyin: "huyuqin",
+          name_pinyin_initials: "hyq",
+        },
+        { user_id: "u-li", name: "李四", name_pinyin: "lisi", name_pinyin_initials: "ls" },
+      ],
+    });
+
+    const search = screen.getByLabelText("搜索审批人");
+    await user.type(search, "hyq");
+    expect(screen.getByText("胡玉琴")).toBeVisible();
+    expect(screen.getByText("· 捷发-安环部")).toBeVisible();
+    expect(screen.queryByText("李四")).not.toBeInTheDocument();
+
+    await user.clear(search);
+    await user.type(search, "huyu");
+    expect(screen.getByText("胡玉琴")).toBeVisible();
+    expect(screen.queryByText("李四")).not.toBeInTheDocument();
   });
 
   test("基础授权下拉按统一展示名渲染, 只跟版本号, 不再重复 app_key", () => {

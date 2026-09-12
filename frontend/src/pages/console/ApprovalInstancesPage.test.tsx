@@ -30,6 +30,7 @@ const INSTANCES = [
     status: "approved",
     originator_user_id: "emp-1",
     originator_name: "胡玉琴",
+    originator_department: "捷发-安环部",
     dingtalk_process_instance_id: "PROC-1",
     delivery_state: "delivered",
     delivery_attempts: 1,
@@ -48,6 +49,7 @@ const INSTANCES = [
     status: "failed",
     originator_user_id: "emp-2",
     originator_name: "李四",
+    originator_department: "客服部",
     dingtalk_process_instance_id: "",
     delivery_state: "failed",
     delivery_attempts: 3,
@@ -66,6 +68,7 @@ const INSTANCES = [
     status: "submitted",
     originator_user_id: "emp-3",
     originator_name: "",
+    originator_department: "",
     dingtalk_process_instance_id: "PROC-3",
     delivery_state: "skipped",
     delivery_attempts: 0,
@@ -104,10 +107,13 @@ describe("ApprovalInstancesPage", () => {
     expect(table.getByText("投递失败")).toBeVisible();
     expect(table.getByText("未配置推送")).toBeVisible();
     expect(table.getByText("审批中")).toBeVisible();
-    // 发起人按姓名展示, id 退到第二行; 目录里没有姓名的行才直接显示 id。
+    // 发起人按姓名展示, 次行是部门; 目录里没有姓名的行才把 id 放到主行。
     expect(table.getByText("李四")).toBeVisible();
-    expect(table.getByText("emp-2")).toBeVisible();
+    expect(table.getByText("客服部")).toBeVisible();
+    expect(table.queryByText("emp-2")).not.toBeInTheDocument();
     expect(table.getByText("emp-3")).toBeVisible();
+    expect(table.getByText("胡玉琴")).toBeVisible();
+    expect(table.getByText("捷发-安环部")).toBeVisible();
     // 应用按展示名呈现(别名 + 技术名), 没有别名时只给技术名。
     expect(table.getAllByText("客户管理 (CRM)")).toHaveLength(2);
     expect(table.getByText("ERP")).toBeVisible();

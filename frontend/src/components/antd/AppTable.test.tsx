@@ -30,6 +30,7 @@ import {
 import {
   actionsColumn,
   dateTimeColumn,
+  personColumn,
   serverColumn,
   serverSortColumn,
   statusColumn,
@@ -359,6 +360,39 @@ describe("列预设", () => {
     await user.click(within(dropdown).getByRole("button", { name: "确定" }));
 
     await waitFor(() => expect(bodyRowNames()).toHaveLength(8));
+  });
+});
+
+describe("人员列", () => {
+  test("次行展示部门或本地用户, 不展示 UUID", () => {
+    interface Person {
+      id: string;
+      name: string;
+      department: string;
+    }
+    const people: Person[] = [
+      { id: "72635468-58ca-4b3a-9c1e-aaaaaaaaaaaa", name: "张三", department: "捷发-安环部" },
+      { id: "local-admin:break-glass", name: "紧急管理员", department: "" },
+      { id: "u-empty-dept", name: "李四", department: "" },
+    ];
+    const columns: ColumnsType<Person> = [
+      personColumn<Person>({
+        t: (key) => (key === "user.localAccount" ? "本地用户" : String(key)),
+        getName: (row) => row.name,
+        getUserId: (row) => row.id,
+        getDepartment: (row) => row.department,
+      }),
+    ];
+
+    renderTable(<AppTable<Person> columns={columns} dataSource={people} pagination={false} rowKey="id" />);
+
+    expect(screen.getByText("张三")).toBeVisible();
+    expect(screen.getByText("捷发-安环部")).toBeVisible();
+    expect(screen.queryByText("72635468-58ca-4b3a-9c1e-aaaaaaaaaaaa")).not.toBeInTheDocument();
+    expect(screen.getByText("紧急管理员")).toBeVisible();
+    expect(screen.getByText("本地用户")).toBeVisible();
+    expect(screen.getByText("李四")).toBeVisible();
+    expect(screen.queryByText("u-empty-dept")).not.toBeInTheDocument();
   });
 });
 
