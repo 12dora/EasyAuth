@@ -8,6 +8,7 @@ from django.db.models import Count
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.api_payloads import paginated_list_payload
 from easyauth.admin_console.api_responses import (
@@ -33,6 +34,8 @@ from easyauth.teams.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from easyauth.applications.ownership import ConsoleActor
 
 type SuperuserResult = ConsoleActor | JsonResponse
@@ -354,7 +357,10 @@ def _team_detail_payload(team: Team) -> dict[str, JsonValue]:
         .order_by("role", "user__name", "user__authentik_user_id"),
     )
     item = _team_item_from_members(team, members)
-    members_payload: list[JsonValue] = [_member_item(member) for member in members]
+    department_labels = department_path_labels(member.user for member in members)
+    members_payload: list[JsonValue] = [
+        _member_item(member, department_labels=department_labels) for member in members
+    ]
     item["members"] = members_payload
     return {"team": item}
 
@@ -375,14 +381,20 @@ def _team_item_from_members(team: Team, members: list[TeamMember]) -> dict[str, 
     }
 
 
-def _member_item(member: TeamMember) -> dict[str, JsonValue]:
+def _member_item(
+    member: TeamMember,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> dict[str, JsonValue]:
+    user = member.user
+    labels = department_labels if department_labels is not None else department_path_labels((user,))
     return {
         "id": member.id,
-        "user_id": member.user.authentik_user_id,
-        "name": member.user.name,
-        "email": member.user.email,
-        "department": member.user.department,
-        "status": member.user.status,
+        "user_id": user.authentik_user_id,
+        "name": user.name,
+        "email": user.email,
+        "department": labels.get(user.authentik_user_id, user.department),
+        "status": user.status,
         "role": member.role,
         "added_at": member.added_at.isoformat(),
     }

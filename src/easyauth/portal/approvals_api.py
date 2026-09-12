@@ -23,6 +23,7 @@ from easyauth.access_requests.models import (
     AccessRequestGroupGrantSnapshot,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
@@ -37,6 +38,8 @@ from easyauth.portal.access_request_data import (
 from easyauth.portal.pagination import build_page, page_request
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from easyauth.portal.pagination import PortalPage
 
 type PortalApiResult = UserMirror | JsonResponse
@@ -235,11 +238,13 @@ def _approval_page(
     page_rows = tuple(visible[page.start : page.stop])
     serialized_items = access_request_items(page_rows)
     authorization_groups_by_id = _approval_authorization_groups_by_request_id(page_rows)
+    department_labels = department_path_labels(access_request.user for access_request in page_rows)
     items = tuple(
         _approval_item_from_serialized(
             access_request,
             item,
             authorization_groups=authorization_groups_by_id[access_request.id],
+            department_labels=department_labels,
         )
         for access_request, item in zip(page_rows, serialized_items, strict=True)
     )
@@ -279,14 +284,18 @@ def _approval_item_from_serialized(
     item: dict[str, JsonValue],
     *,
     authorization_groups: list[JsonValue],
+    department_labels: Mapping[str, str] | None = None,
 ) -> dict[str, JsonValue]:
     item["authorization_groups"] = authorization_groups
     applicant = access_request.user
+    labels = (
+        department_labels if department_labels is not None else department_path_labels((applicant,))
+    )
     item["applicant"] = {
         "user_id": applicant.authentik_user_id,
         "name": applicant.name,
         "email": applicant.email,
-        "department": applicant.department,
+        "department": labels.get(applicant.authentik_user_id, applicant.department),
     }
     approver_ids: list[JsonValue] = []
     approver_ids.extend(loaded_approver_user_ids(access_request))

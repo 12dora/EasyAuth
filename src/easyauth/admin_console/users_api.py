@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
@@ -25,6 +26,8 @@ from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.lifecycle.models import TASK_OPEN_STATUSES, HandoverTask
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
     from django.db.models import QuerySet
 
     from easyauth.api.errors import JsonValue
@@ -130,7 +133,10 @@ def _people_page(request: HttpRequest) -> JsonResponse:
         page = paginate_queryset(users.order_by(*ordering), request.GET)
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
-    items: list[JsonValue] = [_person_item(user) for user in page.items]
+    department_labels = department_path_labels(page.items)
+    items: list[JsonValue] = [
+        _person_item(user, department_labels=department_labels) for user in page.items
+    ]
     return json_response(
         paginated_list_payload(
             items=items,
@@ -204,46 +210,62 @@ def _user_options_search(request: HttpRequest) -> JsonResponse:
         case str() as purpose:
             pass
     users = _apply_query_filter(_active_option_users(purpose), query)
-    items: list[JsonValue] = [
-        _user_item(user) for user in users.order_by("name", "authentik_user_id")[: _limit(request)]
-    ]
-    return json_response(list_payload(items))
+    matched = tuple(users.order_by("name", "authentik_user_id")[: _limit(request)])
+    return json_response(list_payload(_user_items(matched)))
 
 
 def _user_options_for_ids(purpose: str, user_ids: tuple[str, ...]) -> JsonResponse:
     users = _active_option_users(purpose).filter(authentik_user_id__in=user_ids)
-    items: list[JsonValue] = [
-        _user_item(user) for user in users.order_by("name", "authentik_user_id")
-    ]
-    return json_response(list_payload(items))
+    matched = tuple(users.order_by("name", "authentik_user_id"))
+    return json_response(list_payload(_user_items(matched)))
 
 
 def _apply_query_filter(
     users: QuerySet[UserMirror],
     query: str,
 ) -> QuerySet[UserMirror]:
-    return users.filter(
+    filters = (
         Q(name__icontains=query)
         | Q(email__icontains=query)
         | Q(authentik_user_id__icontains=query)
-        | Q(employee_number__icontains=query),
+        | Q(employee_number__icontains=query)
     )
+    pinyin_query = query.lower().replace(" ", "")
+    if pinyin_query.isascii() and pinyin_query.isalnum():
+        filters |= Q(name_pinyin__icontains=pinyin_query) | Q(
+            name_pinyin_initials__icontains=pinyin_query,
+        )
+    return users.filter(filters)
 
 
-def _user_item(user: UserMirror) -> dict[str, JsonValue]:
+def _user_items(users: Iterable[UserMirror]) -> list[JsonValue]:
+    user_list = tuple(users)
+    department_labels = department_path_labels(user_list)
+    return [_user_item(user, department_labels=department_labels) for user in user_list]
+
+
+def _user_item(
+    user: UserMirror,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> dict[str, JsonValue]:
+    labels = department_labels if department_labels is not None else department_path_labels((user,))
     return {
         "user_id": user.authentik_user_id,
         "name": user.name,
-        "department": user.department,
+        "department": labels.get(user.authentik_user_id, user.department),
         "avatar_url": user.avatar_url,
     }
 
 
-def _person_item(user: UserMirror) -> dict[str, JsonValue]:
+def _person_item(
+    user: UserMirror,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> dict[str, JsonValue]:
     item: dict[str, JsonValue] = {
-        **_user_item(user),
+        **_user_item(user, department_labels=department_labels),
         "email": user.email,
-        "department": user.department,
     }
     item["status"] = user.status
     item["is_console_admin"] = user.is_console_admin

@@ -8,6 +8,7 @@ from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import Q
 
+from easyauth.accounts.pinyin import name_pinyin_fields
 from easyauth.config.crypto import EncryptedCharField
 
 if TYPE_CHECKING:
@@ -34,6 +35,36 @@ class UserMirrorQuerySet(models.QuerySet["UserMirror"]):
     def delete(self) -> tuple[int, dict[str, int]]:
         raise ValidationError(USER_MIRROR_DELETE_ERROR)
 
+    @override
+    def update(self, **kwargs: object) -> int:
+        name = kwargs.get("name")
+        if isinstance(name, str):
+            pinyin, initials = name_pinyin_fields(name)
+            kwargs["name_pinyin"] = pinyin
+            kwargs["name_pinyin_initials"] = initials
+        return super().update(**kwargs)
+
+    @override
+    def bulk_update(
+        self,
+        objs: Iterable[UserMirror],
+        fields: Iterable[str],
+        batch_size: int | None = None,
+    ) -> int:
+        field_names = list(fields)
+        to_update: Iterable[UserMirror] = objs
+        if "name" in field_names:
+            to_update = list(objs)
+            for obj in to_update:
+                pinyin, initials = name_pinyin_fields(obj.name)
+                obj.name_pinyin = pinyin
+                obj.name_pinyin_initials = initials
+            if "name_pinyin" not in field_names:
+                field_names.append("name_pinyin")
+            if "name_pinyin_initials" not in field_names:
+                field_names.append("name_pinyin_initials")
+        return super().bulk_update(to_update, field_names, batch_size=batch_size)
+
 
 class UserMirrorManager(models.Manager["UserMirror"]):
     @override
@@ -50,6 +81,18 @@ class UserMirror(models.Model):
         unique=True,
     )
     name: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    name_pinyin: models.CharField[str, str] = models.CharField(
+        max_length=768,
+        blank=True,
+        default="",
+        db_index=True,
+    )
+    name_pinyin_initials: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        db_index=True,
+    )
     email: models.EmailField[str, str] = models.EmailField(blank=True)
     avatar_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
     department: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
@@ -125,6 +168,30 @@ class UserMirror(models.Model):
     @override
     def __str__(self) -> str:
         return self.authentik_user_id
+
+    @override
+    def save(
+        self,
+        *,
+        force_insert: bool | tuple[ModelBase, ...] = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: Iterable[str] | None = None,
+    ) -> None:
+        effective_update_fields = None if update_fields is None else set(update_fields)
+        if effective_update_fields is None or "name" in effective_update_fields:
+            pinyin, initials = name_pinyin_fields(self.name)
+            self.name_pinyin = pinyin
+            self.name_pinyin_initials = initials
+            if effective_update_fields is not None:
+                effective_update_fields.add("name_pinyin")
+                effective_update_fields.add("name_pinyin_initials")
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=effective_update_fields,
+        )
 
     @override
     def delete(

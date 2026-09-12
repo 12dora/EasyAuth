@@ -8,7 +8,12 @@ from django.contrib.auth.models import User
 from django.test import Client
 
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
+from easyauth.accounts.models import (
+    USER_STATUS_DISABLED,
+    DingTalkDepartmentMirror,
+    DingTalkUserMirror,
+    UserMirror,
+)
 from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 if TYPE_CHECKING:
@@ -154,12 +159,10 @@ def test_user_options_lookup_by_ids_uses_same_active_and_purpose_semantics() -> 
     )
 
     employee_ids = {
-        item["user_id"]
-        for item in cast("list[dict[str, JsonValue]]", employee.json()["data"])
+        item["user_id"] for item in cast("list[dict[str, JsonValue]]", employee.json()["data"])
     }
     approver_ids = {
-        item["user_id"]
-        for item in cast("list[dict[str, JsonValue]]", approver.json()["data"])
+        item["user_id"] for item in cast("list[dict[str, JsonValue]]", approver.json()["data"])
     }
     assert employee.status_code == HTTPStatus.OK
     assert employee_ids == {active.authentik_user_id}
@@ -308,6 +311,87 @@ def test_people_page_honors_ordering_and_rejects_unknown_field() -> None:
 def _people_ids(payload: dict[str, JsonValue]) -> list[str]:
     items = cast("list[dict[str, JsonValue]]", payload["data"])
     return [str(item["user_id"]) for item in items]
+
+
+def test_user_options_search_matches_pinyin_and_initials() -> None:
+    client = _logged_in_superuser("user-options-pinyin-admin")
+    person = UserMirror.objects.create(
+        authentik_user_id="ak_uid_pinyin_huyuqin",
+        name="胡玉琴A",
+        email="huyuqin@example.com",
+    )
+
+    for query in ("hu", "huyu", "huyuqin", "hyq", "hyqa"):
+        response = client.get(USER_OPTIONS_API_URL, {"q": query})
+        payload = cast("dict[str, JsonValue]", response.json())
+        items = cast("list[dict[str, JsonValue]]", payload["data"])
+        assert response.status_code == HTTPStatus.OK
+        assert [item["user_id"] for item in items] == [person.authentik_user_id]
+
+
+def test_user_options_and_people_emit_department_path() -> None:
+    client = _logged_in_superuser("user-options-dept-path-admin")
+    person = UserMirror.objects.create(
+        authentik_user_id="ak_uid_dept_path",
+        name="路径员工",
+        department="IT维护",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-path",
+        dingtalk_userid="u-path",
+    )
+    _ = DingTalkUserMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-path",
+        user_id="u-path",
+        name="路径员工",
+        department_ids=["11", "12"],
+    )
+    _ = DingTalkDepartmentMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-path",
+        dept_id="1",
+        parent_id="",
+        name="",
+    )
+    _ = DingTalkDepartmentMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-path",
+        dept_id="10",
+        parent_id="1",
+        name="捷发",
+    )
+    _ = DingTalkDepartmentMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-path",
+        dept_id="11",
+        parent_id="10",
+        name="安环部",
+    )
+    _ = DingTalkDepartmentMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-path",
+        dept_id="12",
+        parent_id="10",
+        name="IT维护",
+    )
+
+    options = client.get(USER_OPTIONS_API_URL, {"q": "路径"})
+    options_items = cast(
+        "list[dict[str, JsonValue]]",
+        cast("dict[str, JsonValue]", options.json())["data"],
+    )
+    people = client.get(USERS_API_URL, {"q": "路径"})
+    people_items = cast(
+        "list[dict[str, JsonValue]]",
+        cast("dict[str, JsonValue]", people.json())["data"],
+    )
+    expected = "捷发-安环部 / 捷发-IT维护"
+    assert options.status_code == HTTPStatus.OK
+    assert options_items[0]["user_id"] == person.authentik_user_id
+    assert options_items[0]["department"] == expected
+    assert people.status_code == HTTPStatus.OK
+    people_by_id = {item["user_id"]: item for item in people_items}
+    assert people_by_id[person.authentik_user_id]["department"] == expected
 
 
 def test_user_search_rejects_non_superuser() -> None:

@@ -9,6 +9,7 @@ from django.db.models import Count
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import UserMirror
 from easyauth.admin_console.api_responses import (
     error_response,
@@ -166,15 +167,16 @@ def console_handover_candidates(request: HttpRequest, task_id: int) -> JsonRespo
         q=q,
         exclude_actor=False,
     )
+    labels = department_path_labels(users)
     return json_response(
         {
             "items": [
                 {
-                    "user_id": u.authentik_user_id,
-                    "name": u.name,
-                    "department": u.department,
+                    "user_id": user.authentik_user_id,
+                    "name": user.name,
+                    "department": labels.get(user.authentik_user_id, user.department),
                 }
-                for u in users
+                for user in users
             ],
         },
     )

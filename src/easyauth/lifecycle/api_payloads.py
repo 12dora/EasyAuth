@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, cast
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.api.datetime_json import datetime_value
 from easyauth.audit.models import AuditLog
 from easyauth.lifecycle.lease import action_execution_in_flight
@@ -59,10 +60,11 @@ _AUDIT_METADATA_TYPE_MESSAGE: Final = "审计 metadata 必须是 JSON 对象"
 def user_ref(user: UserMirror | None, *, include_status: bool = False) -> JsonObject | None:
     if user is None:
         return None
+    labels = department_path_labels((user,))
     payload: JsonObject = {
         "user_id": user.authentik_user_id,
         "name": user.name,
-        "department": user.department,
+        "department": labels.get(user.authentik_user_id, user.department),
     }
     if include_status:
         payload["status"] = user.status

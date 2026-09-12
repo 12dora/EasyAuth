@@ -352,7 +352,8 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 ### 用户选项
 
 **GET `/user-options`** 要求 **superuser**。成功信封 `{ "data": [...] }`，项形状固定为
-`{ "user_id", "name", "department", "avatar_url" }`。
+`{ "user_id", "name", "department", "avatar_url" }`。`department` 为部门路径（如「捷发-安环部」，
+多部门按钉钉顺序以 ` / ` 拼接）；人员列表 `GET /users` 的 `department` 同口径。
 
 查询方式：
 
@@ -368,6 +369,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 `approver` 可包含。未知 ID、停用用户不出现在 `data` 中，顺序无约定。
 
 未给 `user_ids` 时保持既有联想：空 `q` 为 422；按姓名、邮箱、用户 ID、工号模糊匹配，
+纯字母数字（可含空格）的 `q` 另按姓名全拼/首字母匹配（如 `huyu`、`hyq` 可命中「胡玉琴A」），
 并受 `limit` 截断。非法 `purpose` 无论哪条路径均为 422。
 
 ### 授权目录

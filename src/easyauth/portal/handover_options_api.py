@@ -7,6 +7,7 @@ from typing import cast
 
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import error_response, json_response
@@ -90,15 +91,16 @@ def portal_handover_candidates(request: HttpRequest) -> JsonResponse:
             "purpose 必须为 receiver 或 reassign_subject。",
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    return json_response(
+    return json_response({"items": _handover_candidate_items(users)})
+
+
+def _handover_candidate_items(users: list[UserMirror]) -> list[JsonValue]:
+    labels = department_path_labels(users)
+    return [
         {
-            "items": [
-                {
-                    "user_id": u.authentik_user_id,
-                    "name": u.name,
-                    "department": u.department,
-                }
-                for u in users
-            ],
-        },
-    )
+            "user_id": user.authentik_user_id,
+            "name": user.name,
+            "department": labels.get(user.authentik_user_id, user.department),
+        }
+        for user in users
+    ]
