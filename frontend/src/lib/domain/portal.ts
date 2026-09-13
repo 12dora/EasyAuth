@@ -39,6 +39,9 @@ export interface PortalDirectGrantItem {
 export interface PortalRequestApprover {
   user_id: string;
   name: string;
+  /** 拼音全拼 / 首字母, 门户审批人候选本地过滤用; 列表行里可省略。 */
+  name_pinyin?: string;
+  name_pinyin_initials?: string;
 }
 
 export interface PortalRequest {

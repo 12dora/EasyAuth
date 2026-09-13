@@ -253,12 +253,22 @@ function isApprovalDecisionActorType(value: unknown): value is string {
   return typeof value === "string" && APPROVAL_DECISION_ACTOR_TYPES.has(value);
 }
 
+/**
+ * 审批人项与门户 approver_option 同源: user_id + name 必填, 拼音两字段可选(供本地过滤)。
+ * 不能用 hasExactKeys 锁死键集 —— 2026-09-13 后端补拼音字段后, 精确匹配让待办列表整页解析失败。
+ */
+const APPROVER_OPTIONAL_STRING_KEYS = ["name_pinyin", "name_pinyin_initials"] as const;
+
 function isApprovalApprover(value: unknown): value is PortalRequestApprover {
-  return (
-    isRecord(value) &&
-    hasExactKeys(value, ["user_id", "name"]) &&
-    isNonEmptyString(value.user_id) &&
-    typeof value.name === "string"
+  if (!isRecord(value) || !isNonEmptyString(value.user_id) || typeof value.name !== "string") {
+    return false;
+  }
+  return Object.keys(value).every(
+    (key) =>
+      key === "user_id" ||
+      key === "name" ||
+      (APPROVER_OPTIONAL_STRING_KEYS.includes(key as (typeof APPROVER_OPTIONAL_STRING_KEYS)[number]) &&
+        typeof value[key] === "string"),
   );
 }
 

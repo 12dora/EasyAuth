@@ -94,6 +94,16 @@ describe("parseApprovalListPayload", () => {
     expect(payload.data[0].applied_at).toBe("2026-07-02T09:00:05Z");
   });
 
+  test("接受带拼音字段的审批人项(后端 approver_option 形状), 拒绝未知键", () => {
+    const withPinyin = {
+      ...pendingApproval,
+      current_approvers: [{ user_id: "me", name: "我本人", name_pinyin: "wobenren", name_pinyin_initials: "wbr" }],
+    };
+    expect(parseRow(withPinyin).data[0].current_approvers[0]).toMatchObject({ user_id: "me", name_pinyin_initials: "wbr" });
+    const unknownKey = { ...pendingApproval, current_approvers: [{ user_id: "me", name: "我本人", email: "x" }] };
+    expect(() => parseRow(unknownKey)).toThrow();
+  });
+
   test("接受已决行: current_approvers 为空且决定人三件套已填", () => {
     const payload = parseRow(
       decidedApproval({ status: "grant_applied", status_label: "已生效" }),
