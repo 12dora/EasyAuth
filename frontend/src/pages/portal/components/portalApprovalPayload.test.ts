@@ -120,6 +120,21 @@ describe("parseApprovalListPayload", () => {
     expect(payload.data[0].status).toBe("withdrawn");
   });
 
+  test("申请人 account_kind 可为 unresolved", () => {
+    const payload = parseRow({
+      ...pendingApproval,
+      applicant: {
+        user_id: "missing-user",
+        name: "",
+        email: "",
+        department: "",
+        account_kind: "unresolved",
+      },
+    });
+
+    expect(payload.data[0].applicant.account_kind).toBe("unresolved");
+  });
+
   test("接受 console_admin 决定的行", () => {
     const payload = parseRow(
       decidedApproval({ status: "rejected", status_label: "已拒绝", decision_actor_type: "console_admin" }),

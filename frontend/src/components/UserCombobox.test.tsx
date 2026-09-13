@@ -1,7 +1,13 @@
 import { describe, expect, test } from "vitest";
 
 import type { Translator } from "../lib/status";
-import { formatPeople, personNameWithDepartment, resolvePeople, userOptionName } from "./UserCombobox";
+import {
+  formatPeople,
+  personNameWithDepartment,
+  resolvePeople,
+  userOptionName,
+  userSecondaryLabel,
+} from "./UserCombobox";
 
 const t: Translator = (key) => (key === "user.localAccount" ? "本地用户" : String(key));
 
@@ -43,6 +49,13 @@ describe("personNameWithDepartment", () => {
     expect(
       personNameWithDepartment({ user_id: "local-admin:admin", name: "紧急管理员", account_kind: "local" }, t),
     ).toBe("紧急管理员 · 本地用户");
+  });
+
+  test("unresolved 次行留空, 不标成本地用户", () => {
+    expect(userSecondaryLabel({ user_id: "missing-user", department: "", account_kind: "unresolved" }, t)).toBe("");
+    expect(
+      personNameWithDepartment({ user_id: "missing-user", name: "", department: "", account_kind: "unresolved" }, t),
+    ).toBe("missing-user");
   });
 });
 

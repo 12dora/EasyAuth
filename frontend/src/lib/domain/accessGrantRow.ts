@@ -4,7 +4,7 @@
  */
 
 import type { JsonObject, JsonValue } from "../api";
-import type { AccountKind } from "./person";
+import { isAccountKind, type AccountKind } from "./person";
 
 export type GrantMembershipSource = "user" | "department";
 export type GrantLifecycleType = "permanent" | "timed" | "mixed";
@@ -141,7 +141,7 @@ function requireGrantType(source: JsonObject, field: string): GrantLifecycleType
 
 function requireAccountKind(source: JsonObject, field: string): AccountKind {
   const value = source[field];
-  if (value !== "directory" && value !== "local") {
+  if (!isAccountKind(value)) {
     throw new AccessGrantRowContractError(field);
   }
   return value;

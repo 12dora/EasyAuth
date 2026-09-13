@@ -293,7 +293,8 @@ export const LOCAL_ADMIN_USER_ID_PREFIX = "local-admin:";
  * 人员次行文案: 部门路径, 或本地账号的固定标签。
  *
  * UUID 不能出现在次行 —— 对着一串 Authentik 标识核对「这是谁」不可接受, 部门路径才是认人依据。
- * 本地账号没有部门, 用「本地用户」与目录人员区分; 既不是本地账号又没有部门时返回空串, 调用方不要渲染次行。
+ * 本地账号没有部门, 用「本地用户」与目录人员区分; `unresolved`(尚无 UserMirror)同样没有部门,
+ * 次行留空, 不得标成「本地用户」。既不是本地账号又没有部门时返回空串, 调用方不要渲染次行。
  */
 export function userSecondaryLabel(
   option: Pick<UserOption, "user_id"> & { department?: string | null; account_kind?: AccountKind | null },
