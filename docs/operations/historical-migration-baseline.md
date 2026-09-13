@@ -34,6 +34,15 @@ schema 或数据变更**之前**失败，并输出行数和最多 5 个样本主
   通道，不作为升级路径的数据清理手段（`applications.0027` 同理）。
 - 目录身份绑定形状、托管范围策略、跨 App 关系和状态机迁移都有只读扫描，坏数据时失败。
 
+## 结构迁移回滚
+
+`accounts.0020` 把 `UserMirror.avatar_url` 从 `varchar(512)` 改为 `text`。正向无数据丢失。
+在 Postgres 上回滚该迁移前必须先清空超长值，否则反向 `varchar(512)` 会失败：
+
+```sql
+UPDATE accounts_usermirror SET avatar_url='' WHERE length(avatar_url) > 512;
+```
+
 ## 验收要求
 
 - 空库 SQLite 完整迁移必须通过。

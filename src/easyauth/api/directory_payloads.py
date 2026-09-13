@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 from django.db.models import Q
 
+from easyauth.accounts.avatar_url import safe_avatar_url
 from easyauth.accounts.directory_references import (
     build_department_ref,
     build_dingtalk_user_ref,
@@ -84,7 +85,7 @@ def removed_directory_user_item(user: UserMirror) -> dict[str, JsonValue]:
         # 历史 UserMirror 没有 source_slug; 使用全局唯一 Authentik sub, 不能生成可能歧义的 dt ref。
         "user_ref": user.authentik_user_id,
         "name": user.name,
-        "avatar_url": user.avatar_url or "",
+        "avatar_url": safe_avatar_url(user.avatar_url),
         "title": "",
         "email": user.email,
         "mobile": "",

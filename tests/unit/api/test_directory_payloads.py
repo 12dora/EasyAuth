@@ -8,7 +8,11 @@ from django.test.utils import CaptureQueriesContext
 
 from easyauth.accounts.directory_references import build_dingtalk_user_ref
 from easyauth.accounts.models import DingTalkDepartmentMirror, DingTalkUserMirror, UserMirror
-from easyauth.api.directory_payloads import build_user_detail, build_user_list_items
+from easyauth.api.directory_payloads import (
+    build_user_detail,
+    build_user_list_items,
+    removed_directory_user_item,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -153,3 +157,13 @@ def test_build_user_list_items_manager_query_count_is_constant_across_page_size(
     assert large_by_id["no-boss"]["manager"] is None
     assert large_by_id["orphan-report"]["manager"] is None
     assert large_by_id[last_report_id]["manager"] == _expected_manager_summary()
+
+
+def test_removed_directory_user_item_emits_empty_avatar_url_for_unsafe_stored_value() -> None:
+    user = UserMirror.objects.create(
+        authentik_user_id="ak-legacy-removed",
+        name="离职用户",
+        avatar_url="http://legacy.example/a.png",
+    )
+
+    assert removed_directory_user_item(user)["avatar_url"] == ""

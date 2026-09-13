@@ -33,7 +33,7 @@
 
 `avatar_url` 为 `UserMirror.avatar_url`；无照片时为空字符串。有钉钉照片时为 https 地址；
 Authentik 生成的首字母图为 `data:image/svg+xml;base64,...` 内联图。写入时真实照片始终优先，
-生成图不得覆盖已有照片。前端 `safeAvatarUrl`
+生成图不得覆盖已有照片。照片不会被生成图替换；上游删除照片后旧照片 URL 会保留，只有离职清理会清空（前端 `onError` 回落首字母）。前端 `safeAvatarUrl`
 只接受 https、同源路径和白名单内联图。行字段形态为 `{prefix}avatar_url`（如 `user_avatar_url`）。
 
 ---

@@ -18,7 +18,8 @@ GENERATED_PNG = "data:image/png;base64,AAAA"
 GENERATED_JPEG = "data:image/jpeg;base64,AAAA"
 GENERATED_WEBP = "data:image/webp;base64,AAAA"
 _DATA_PREFIX = "data:image/png;base64,"
-_MAX_LENGTH = 16384
+_MAX_PHOTO_URL_LENGTH = 2048
+_MAX_GENERATED_AVATAR_LENGTH = 16384
 
 
 @pytest.mark.parametrize(
@@ -56,8 +57,14 @@ def test_safe_avatar_url_keeps_inline_generated_images(value: str) -> None:
         "data:image/gif;base64,AAAA",
         "DATA:image/png;base64,AAAA",
         "data:image/png;base64,AAA AAA",
+        "data:image/png;base64,AAA\nAAA",
+        "data:image/png;base64,AAA\rAAA",
+        "data:image/png;base64,AAA\tAAA",
         "data:image/png;base64,",
         "data:image/jpg;base64,AAAA",
+        "https://ok.example/a\\b.jpg",
+        "https://ok.example/a\tb.jpg",
+        " https://ok.example/a.jpg",
     ],
 )
 def test_safe_avatar_url_rejects_empty_and_unsafe_schemes(value: str) -> None:
@@ -67,9 +74,20 @@ def test_safe_avatar_url_rejects_empty_and_unsafe_schemes(value: str) -> None:
 
 
 def test_safe_avatar_url_rejects_inline_image_over_length_cap() -> None:
-    allowed = _DATA_PREFIX + ("A" * (_MAX_LENGTH - len(_DATA_PREFIX)))
+    allowed = _DATA_PREFIX + ("A" * (_MAX_GENERATED_AVATAR_LENGTH - len(_DATA_PREFIX)))
     too_long = allowed + "A"
     assert classify_avatar_url(allowed) == "generated"
+    assert safe_avatar_url(allowed) == allowed
+    assert classify_avatar_url(too_long) == ""
+    assert safe_avatar_url(too_long) == ""
+
+
+def test_safe_avatar_url_rejects_https_photo_over_length_cap() -> None:
+    prefix = "https://ok.example/"
+    allowed = prefix + ("a" * (_MAX_PHOTO_URL_LENGTH - len(prefix)))
+    too_long = allowed + "a"
+    assert len(allowed) == _MAX_PHOTO_URL_LENGTH
+    assert classify_avatar_url(allowed) == "photo"
     assert safe_avatar_url(allowed) == allowed
     assert classify_avatar_url(too_long) == ""
     assert safe_avatar_url(too_long) == ""

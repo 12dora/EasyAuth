@@ -22,7 +22,8 @@ __all__ = [
 
 type AvatarKind = Literal["photo", "generated", ""]
 
-_MAX_AVATAR_URL_LENGTH: Final = 16384
+_MAX_PHOTO_URL_LENGTH: Final = 2048
+_MAX_GENERATED_AVATAR_LENGTH: Final = 16384
 _DATA_IMAGE_PREFIXES: Final = (
     "data:image/svg+xml;base64,",
     "data:image/png;base64,",
@@ -36,8 +37,11 @@ _BASE64_CHARS: Final = frozenset(
 
 def classify_avatar_url(value: str) -> AvatarKind:
     """照片、生成图或缺失/不安全。"""
+    length = len(value)
+    if length > _MAX_GENERATED_AVATAR_LENGTH:
+        return ""
     if _is_photo_avatar_url(value):
-        return "photo"
+        return "photo" if length <= _MAX_PHOTO_URL_LENGTH else ""
     if _is_generated_avatar_url(value):
         return "generated"
     return ""
@@ -76,15 +80,15 @@ def preferred_avatar_url(*candidates: str) -> str:
 
 
 def _is_photo_avatar_url(value: str) -> bool:
-    if value.startswith("/") and not value.startswith("//") and "\\" not in value:
+    if "\\" in value or any(char.isspace() for char in value):
+        return False
+    if value.startswith("/") and not value.startswith("//"):
         return True
     parsed = urlsplit(value)
     return parsed.scheme == "https" and parsed.netloc != ""
 
 
 def _is_generated_avatar_url(value: str) -> bool:
-    if len(value) > _MAX_AVATAR_URL_LENGTH:
-        return False
     prefix = _matching_data_image_prefix(value)
     if prefix is None:
         return False

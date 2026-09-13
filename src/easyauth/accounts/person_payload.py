@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, Literal
 
+from easyauth.accounts.avatar_url import safe_avatar_url
 from easyauth.accounts.directory_identity import has_directory_identity
 
 if TYPE_CHECKING:
@@ -49,7 +50,7 @@ def person_payload(user: UserMirror, labels: Mapping[str, str]) -> dict[str, Jso
         "name": user.name,
         "department": labels.get(user.authentik_user_id, user.department),
         "account_kind": account_kind(user),
-        "avatar_url": user.avatar_url,
+        "avatar_url": safe_avatar_url(user.avatar_url),
     }
 
 

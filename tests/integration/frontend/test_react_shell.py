@@ -53,6 +53,28 @@ def test_console_home_serves_react_shell_for_authenticated_admin(
     assert 'name="csrfmiddlewaretoken"' in html
 
 
+def test_console_home_serves_generated_avatar_url_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated = "data:image/svg+xml;base64,PHN2Zy4uLg=="
+    _mock_authentik_current_groups(
+        monkeypatch,
+        "react-console-admin-generated-avatar",
+        ("EasyAuth Admins",),
+    )
+    client = _logged_in_console_user(
+        "react-console-admin-generated-avatar",
+        name="控制台用户",
+        avatar_url=generated,
+    )
+
+    response = client.get("/console/")
+
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert f'data-current-user-avatar-url="{generated}"' in html
+
+
 def test_console_app_detail_serves_react_shell_without_leaking_unowned_app() -> None:
     # Given: 应用负责人只拥有一个 App。
     client = _logged_in_console_user("react-console-owner")

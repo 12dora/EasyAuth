@@ -68,6 +68,16 @@ def test_person_payload_uses_batched_department_label() -> None:
     }
 
 
+def test_person_payload_emits_empty_avatar_url_for_unsafe_stored_value() -> None:
+    user = UserMirror.objects.create(
+        authentik_user_id="ak-legacy-avatar",
+        name="历史头像",
+        avatar_url="http://legacy.example/a.png",
+    )
+
+    assert person_payload(user, {})["avatar_url"] == ""
+
+
 def test_person_payload_falls_back_to_user_department_when_label_missing() -> None:
     user = UserMirror.objects.create(
         authentik_user_id="ak-fallback",
