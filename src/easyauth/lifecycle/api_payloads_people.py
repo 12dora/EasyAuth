@@ -70,9 +70,7 @@ def handover_list_people(
     related: list[UserMirror] = []
     created_by_ids: list[str] = []
     for task in tasks:
-        # subject_user 可为空(镜像被删后), 拆分前的实现就跳过; 不能无条件取 authentik_user_id。
-        if task.subject_user is not None:
-            related.append(task.subject_user)
+        related.append(task.subject_user)
         if task.assignee is not None:
             related.append(task.assignee)
         if task.created_by:
