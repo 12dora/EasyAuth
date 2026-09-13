@@ -101,9 +101,9 @@ export function PortalRequestsSection() {
       textColumn<PortalRequestRow>({
         key: "groups",
         title: t("portal.column.groups"),
-        // 与「我的权限」同一个口径: 只给组名。只申请了直接授权的行这里是 "-",
+        // 与「我的权限」同一个口径: 只给组名。只申请了直接授权的行这里是「自定义」,
         // 具体授权在详情弹窗里列。
-        getValue: (row) => formatGrantGroupNames(row.authorization_groups),
+        getValue: (row) => formatGrantGroupNames(row.authorization_groups, t),
         ellipsis: false,
         width: 160,
       }),

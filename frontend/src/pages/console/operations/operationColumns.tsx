@@ -212,7 +212,7 @@ export function accessGrantColumns(
     textColumn<AccessGrantRow>({
       key: "groups",
       title: t("console.operations.column.groups"),
-      getValue: (row) => formatGrantGroupNames(row.groups),
+      getValue: (row) => formatGrantGroupNames(row.groups, t),
       ellipsis: false,
       width: 200,
     }),

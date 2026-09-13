@@ -31,7 +31,7 @@ export function PortalRequestDetailDialog({ row, onClose }: { row: PortalRequest
             <dt className="text-ink-faint">{t("common.app")}</dt>
             <dd>{formatAppDisplayName({ name: row.app_name, alias: row.app_alias })}</dd>
             <dt className="text-ink-faint">{t("portal.column.groups")}</dt>
-            <dd>{formatGrantGroupNames(row.authorization_groups)}</dd>
+            <dd>{formatGrantGroupNames(row.authorization_groups, t)}</dd>
             <dt className="text-ink-faint">{t("portal.column.directGrants")}</dt>
             <dd>{directGrantList(row)}</dd>
             <dt className="text-ink-faint">{t("portal.column.expiresAt")}</dt>

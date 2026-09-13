@@ -212,6 +212,9 @@ export const zhCN = {
   /* 本地紧急管理账号没有目录部门, 人员次行用这句代替 UUID。 */
   "user.localAccount": "本地用户",
 
+  /* 授权未匹配任何权限组(仅直接授权)时, 权限组列展示这句而不是占位符。 */
+  "grant.customGroups": "自定义",
+
   /* 顶栏角色: 后端只下发 ShellRole code(admin / member), 展示名在这里。 */
   "shell.user.role.admin": "EasyAuth 管理员",
   "shell.user.role.member": "成员",
@@ -427,6 +430,8 @@ export const en: Record<keyof typeof zhCN, string> = {
   "table.column.user": "User",
 
   "user.localAccount": "Local account",
+
+  "grant.customGroups": "Custom",
 
   "shell.user.role.admin": "EasyAuth Admins",
   "shell.user.role.member": "Member",

@@ -130,7 +130,7 @@ describe("PortalRequestsSection 表格", () => {
     }
   });
 
-  test("权限组列只给组名, 只有直接授权的申请给 -", async () => {
+  test("权限组列只给组名, 只有直接授权的申请给自定义", async () => {
     stubRequests([
       requestRow({
         id: 1,
@@ -154,7 +154,7 @@ describe("PortalRequestsSection 表格", () => {
       expect(cellText("组申请", 3)).toBe("销售只读、订单运维");
       expect(screen.queryByText("销售只读 [角色]")).not.toBeInTheDocument();
       // 直接授权在详情弹窗里列, 表格里不再有这一列。
-      expect(cellText("直接授权申请", 3)).toBe("-");
+      expect(cellText("直接授权申请", 3)).toBe("自定义");
       expect(screen.queryByRole("columnheader", { name: "直接授权" })).not.toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();

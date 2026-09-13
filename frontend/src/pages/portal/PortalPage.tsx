@@ -136,7 +136,7 @@ function PortalGrantSection({
       textColumn<PortalGrantRow>({
         key: "groups",
         title: t("portal.column.groups"),
-        getValue: (row) => formatGrantGroupNames(row.groups),
+        getValue: (row) => formatGrantGroupNames(row.groups, t),
         ellipsis: false,
         width: 200,
       }),
