@@ -18,8 +18,7 @@ from easyauth.access_requests.services import (
     AccessRequestSubmission,
     AccessRequestSubmissionError,
 )
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.pagination import pagination_item
 from easyauth.api.responses import error_response as _error_response
@@ -38,12 +37,11 @@ from easyauth.portal.api_data import (
     current_grant_page_for_user,
     expiring_grant_page_for_user,
 )
+from easyauth.portal.identity import portal_user
 from easyauth.portal.request_catalog import request_catalog_payload
 
 if TYPE_CHECKING:
     from easyauth.portal.pagination import PortalPage
-
-type PortalApiResult = UserMirror | JsonResponse
 
 MIN_EXPIRING_DAYS = 1
 MAX_EXPIRING_DAYS = 90
@@ -58,7 +56,7 @@ class _PaginationAdapter:
 
 
 def portal_grants(request: HttpRequest) -> JsonResponse:
-    match _active_user(request):
+    match portal_user(request):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
@@ -73,7 +71,7 @@ def portal_grants(request: HttpRequest) -> JsonResponse:
 
 
 def portal_expiring_grants(request: HttpRequest) -> JsonResponse:
-    match _active_user(request):
+    match portal_user(request):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
@@ -109,7 +107,7 @@ def _query_validation_response(message: str) -> JsonResponse:
 
 
 def portal_access_requests(request: HttpRequest) -> JsonResponse:
-    match _active_user(request):
+    match portal_user(request):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
@@ -133,7 +131,7 @@ def portal_access_requests(request: HttpRequest) -> JsonResponse:
 
 
 def portal_request_catalog(request: HttpRequest) -> JsonResponse:
-    match _active_user(request):
+    match portal_user(request):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
@@ -150,7 +148,7 @@ def portal_request_catalog(request: HttpRequest) -> JsonResponse:
 
 def portal_access_request_withdraw(request: HttpRequest, request_id: int) -> JsonResponse:
     """申请人撤回本人的待审批申请。"""
-    match _active_user(request):
+    match portal_user(request):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
@@ -264,28 +262,6 @@ def _idempotency_key(request: HttpRequest) -> str | JsonResponse:
         {"idempotency_key": value},
         status=HTTPStatus.UNPROCESSABLE_ENTITY,
     )
-
-
-def _active_user(request: HttpRequest) -> PortalApiResult:
-    authentik_user_id = request.session.get(AUTHENTIK_SESSION_KEY)
-    if not isinstance(authentik_user_id, str):
-        return _error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "员工门户登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    user = UserMirror.objects.filter(
-        authentik_user_id=authentik_user_id,
-        status=USER_STATUS_ACTIVE,
-    ).first()
-    if user is None:
-        request.session.pop(AUTHENTIK_SESSION_KEY, None)
-        return _error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "员工门户登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    return user
 
 
 def _parse_days(request: HttpRequest) -> int | JsonResponse:

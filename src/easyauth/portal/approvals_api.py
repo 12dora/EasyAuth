@@ -22,9 +22,8 @@ from easyauth.access_requests.models import (
     AccessRequestGroup,
     AccessRequestGroupGrantSnapshot,
 )
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.department_paths import department_path_labels
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.models import UserMirror
 from easyauth.accounts.person_payload import person_payload
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
@@ -37,14 +36,13 @@ from easyauth.portal.access_request_data import (
     APPROVER_PREFETCH,
     access_request_items,
 )
+from easyauth.portal.identity import portal_user
 from easyauth.portal.pagination import build_page, page_request
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from easyauth.portal.pagination import PortalPage
-
-type PortalApiResult = UserMirror | JsonResponse
 
 APPROVAL_STATUS_PENDING = "pending"
 APPROVAL_STATUS_PROCESSED = "processed"
@@ -74,7 +72,7 @@ class _ApprovalDecisionPayload(BaseModel):
 
 
 def portal_approvals(request: HttpRequest) -> JsonResponse:
-    match _active_user(request):
+    match portal_user(request):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
@@ -93,7 +91,7 @@ def portal_approvals(request: HttpRequest) -> JsonResponse:
 
 
 def portal_approval_detail(request: HttpRequest, request_id: int) -> JsonResponse:
-    match _active_user(request):
+    match portal_user(request):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
@@ -115,7 +113,7 @@ def portal_approval_reject(request: HttpRequest, request_id: int) -> JsonRespons
 
 
 def _decide(request: HttpRequest, request_id: int, *, action: str) -> JsonResponse:
-    match _active_user(request):
+    match portal_user(request):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
@@ -408,28 +406,6 @@ def _snapshot_authorization_groups(
             },
         )
     return list(group_items.values())
-
-
-def _active_user(request: HttpRequest) -> PortalApiResult:
-    authentik_user_id = request.session.get(AUTHENTIK_SESSION_KEY)
-    if not isinstance(authentik_user_id, str):
-        return _unauthorized_response()
-    user = UserMirror.objects.filter(
-        authentik_user_id=authentik_user_id,
-        status=USER_STATUS_ACTIVE,
-    ).first()
-    if user is None:
-        request.session.pop(AUTHENTIK_SESSION_KEY, None)
-        return _unauthorized_response()
-    return user
-
-
-def _unauthorized_response() -> JsonResponse:
-    return _error_response(
-        ErrorCode.AUTHENTICATION_FAILED,
-        "员工门户登录已失效。",
-        status=HTTPStatus.UNAUTHORIZED,
-    )
 
 
 def _not_found_response() -> JsonResponse:

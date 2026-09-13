@@ -13,7 +13,7 @@ from django.http import HttpRequest, JsonResponse
 
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
 from easyauth.api.responses import error_response
 from easyauth.lifecycle.api_errors import reason_error
@@ -29,6 +29,7 @@ from easyauth.lifecycle.models import (
     HandoverAppAction,
     HandoverTask,
 )
+from easyauth.portal.identity import portal_user as session_portal_user
 
 type PortalApiResult = UserMirror | JsonResponse
 
@@ -48,30 +49,15 @@ def _portal_user_for_method(request: HttpRequest, method: str) -> PortalApiResul
 
 def _portal_user(request: HttpRequest) -> PortalApiResult:
     authentik_user_id = request.session.get(AUTHENTIK_SESSION_KEY)
-    if not isinstance(authentik_user_id, str):
-        return error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "员工门户登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    if authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
+    if isinstance(authentik_user_id, str) and authentik_user_id.startswith(
+        LOCAL_ADMIN_SUBJECT_PREFIX,
+    ):
         return error_response(
             ErrorCode.PERMISSION_DENIED,
             "本地管理员不能使用员工门户交接接口。",
             status=HTTPStatus.FORBIDDEN,
         )
-    user = UserMirror.objects.filter(
-        authentik_user_id=authentik_user_id,
-        status=USER_STATUS_ACTIVE,
-    ).first()
-    if user is None:
-        request.session.pop(AUTHENTIK_SESSION_KEY, None)
-        return error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "员工门户登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    return user
+    return session_portal_user(request)
 
 
 def _idempotency_key(request: HttpRequest) -> str | JsonResponse:
