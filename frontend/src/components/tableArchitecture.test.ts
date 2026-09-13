@@ -95,7 +95,7 @@ describe("表格架构", () => {
     expect(ownersPanel).toMatch(/PeopleList people=\{developers\}/);
     expect(ownersPanel).not.toMatch(/safeJoin\(\s*app\?\.developers/);
 
-    const rulesTab = readFileSync(join(sourceRoot, "pages/console/workspace/tabs/RulesTab.tsx"), "utf8");
+    const rulesTab = readFileSync(join(sourceRoot, "pages/console/workspace/tabs/rulesTabColumns.tsx"), "utf8");
     expect(rulesTab).toMatch(/formatPeople\(resolvePeople\(rule\.approver_userids/);
     expect(rulesTab).not.toMatch(/safeJoin\(\s*rule\.approver_userids/);
   });
