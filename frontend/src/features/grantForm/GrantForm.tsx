@@ -1,35 +1,20 @@
-import { Select, Tooltip } from "antd";
+import { Select } from "antd";
 import { useMemo, useState } from "react";
-import type { MouseEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 
-import { Field, SelectInput, TextArea, TextInput } from "../../components/Field";
+import { Field, SelectInput } from "../../components/Field";
 import { localizedField, useI18n } from "../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
-import { PermissionSelector } from "../../pages/portal/components/PermissionSelector";
-import { keepLockedSelectionKeys } from "../../pages/portal/components/permissionSelectorRows";
 import {
   buildCatalogView,
-  descendantGroupKeys,
   groupCoveredSelectionKeys,
 } from "../../pages/portal/hooks/accessRequestCatalog";
-import {
-  nextSelectionForGroupScopeClick,
-  permissionScopeClickSelects,
-} from "../../pages/portal/hooks/accessRequestScopeClick";
-import { nextPermissionScopeSelection, uniqueStrings } from "../../pages/portal/hooks/accessRequestSelection";
-import type {
-  PortalRequestCatalogView,
-  ScopedPermissionGroupItem,
-  ScopedPermissionItem,
-} from "../../pages/portal/hooks/accessRequestTypes";
-import { grantDraftExpiresAtError, toDatetimeLocalValue } from "./grantDraft";
-import type { GrantDraft, GrantTermType } from "./grantDraft";
-import {
-  grantDisplaySelectionKeys,
-  grantDraftWithAppKey,
-  grantDraftWithAuthorizationGroupKeys,
-  grantDraftWithSelectionChange,
-} from "./grantDraftSelection";
+import { uniqueStrings } from "../../pages/portal/hooks/accessRequestSelection";
+import type { CatalogView, PortalRequestCatalogView } from "../../pages/portal/hooks/accessRequestTypes";
+import type { GrantDraft } from "./grantDraft";
+import { GrantPermissionField, GrantTermFields } from "./GrantFormFields";
+import { LockedSelectTag, requireGrantLockedHint, wrapLockedSelectContent } from "./grantFormLocked";
+import { grantDraftWithAppKey, grantDraftWithAuthorizationGroupKeys } from "./grantDraftSelection";
 
 const EMPTY_KEYS: string[] = [];
 
@@ -102,8 +87,6 @@ export function GrantForm({
     () => groupCoveredSelectionKeys(draft.authorizationGroupKeys, catalogView),
     [draft.authorizationGroupKeys, catalogView],
   );
-  const nowMin = useMemo(() => toDatetimeLocalValue(new Date()), []);
-  const expiresAtError = grantDraftExpiresAtError(draft);
   // 锁定组始终出现在选中值里(antd 对 disabled option 的 tag 不渲染关闭按钮), 草稿本身只有本人可改的组。
   const displayedAuthorizationGroupKeys = useMemo(
     () => uniqueStrings([...lockedAuthorizationGroupKeys, ...draft.authorizationGroupKeys]),
@@ -123,267 +106,133 @@ export function GrantForm({
     return [...fromCatalog, ...extras];
   }, [catalogView.authorizationGroups, locale, lockedAuthorizationGroupKeys, lockedGroupKeySet]);
 
-  const changeSelection = (change: (selectionKeys: string[]) => string[]) => {
-    onDraftChange(
-      grantDraftWithSelectionChange(draft, catalogView, (keys) =>
-        change(keys).filter((key) => !lockedSelectionKeySet.has(key)),
-      ),
-    );
-  };
-
   return (
     <div className="flex flex-col gap-5">
       {header}
-      <div className="grid gap-4 md:grid-cols-2">
-        <Field label={t("grantForm.app")}>
-          <SelectInput
-            value={appKey}
-            disabled={disabled || Boolean(lockedAppKey)}
-            onChange={(event) => {
-              setExpandedGroupKeys([]);
-              onDraftChange(grantDraftWithAppKey(draft, event.currentTarget.value));
-            }}
-          >
-            <option value="">{t("grantForm.appPlaceholder")}</option>
-            {(catalog?.apps ?? []).map((app) => (
-              <option key={app.app_key} value={app.app_key}>
-                {formatAppDisplayName(app)}
-              </option>
-            ))}
-          </SelectInput>
-        </Field>
-        {/*
-          一条授权可以同时挂多个授权组, 因此这里是多选。高度与圆角来自 APP_ANTD_THEME 的
-          controlHeight 36 / borderRadius 2, 与 SelectInput 的 h-9 rounded-[2px] 是同一组设计令牌。
-        */}
-        <Field label={t("grantForm.authorizationGroup")}>
-          <Select
-            className="w-full"
-            mode="multiple"
-            value={displayedAuthorizationGroupKeys}
-            options={authorizationGroupOptions}
-            placeholder={t("grantForm.authorizationGroupNone")}
-            notFoundContent={t("grantForm.authorizationGroupEmpty")}
-            allowClear
-            maxTagCount="responsive"
-            // 目录里的授权组可以有几十个, 按展示给用户的组名过滤; antd 默认拿 value(group.key)比对,
-            // 用户看不到 key 就无从下手。
-            optionFilterProp="label"
-            disabled={disabled || !appKey}
-            optionRender={(option) =>
-              wrapLockedSelectContent(String(option.value), option.label, lockedGroupKeySet, resolvedLockedHint)
-            }
-            tagRender={(props) => (
-              <LockedSelectTag
-                label={props.label}
-                value={String(props.value)}
-                closable={props.closable && !lockedGroupKeySet.has(String(props.value))}
-                onClose={props.onClose}
-                lockedGroupKeySet={lockedGroupKeySet}
-                lockedHint={resolvedLockedHint}
-              />
-            )}
-            onChange={(groupKeys: string[]) =>
-              onDraftChange(
-                grantDraftWithAuthorizationGroupKeys(
-                  draft,
-                  // allowClear / 关 tag 都可能把锁定组带下来; 从交给草稿的值里剥掉, 展示值再拼回去。
-                  groupKeys.filter((key) => !lockedGroupKeySet.has(key)),
-                  catalogView,
-                ),
-              )
-            }
-          />
-        </Field>
-      </div>
-      <Field as="group" label={t("grantForm.permissions")}>
-        <PermissionSelector
-          appKey={appKey}
-          groups={catalogView.permissionGroups}
-          ungroupedPermissions={catalogView.ungroupedPermissions}
-          selectedKeys={draft.selectedPermissionKeys}
-          coveredKeys={coveredSelectionKeys}
-          lockedKeys={lockedSelectionKeys}
-          lockedHint={resolvedLockedHint || undefined}
-          revokeBaseGrant={null}
-          expandedGroupKeys={expandedGroupKeys}
-          loading={catalogIsLoading}
-          errorMessage={catalogErrorMessage}
-          disabled={disabled}
-          onPermissionScopeChange={(permission: ScopedPermissionItem, scopeKey: string) => {
-            // 勾选态看的是展示态: 授权组覆盖的权限也画成勾选, 再点一次就是"取消"。方向只按展示态定一次,
-            // 后面对直接权限集合重放同一次变更时不能再算一遍, 否则被覆盖的项会反向变成"选中"。
-            const shouldSelect = permissionScopeClickSelects(
-              permission,
-              scopeKey,
-              grantDisplaySelectionKeys(draft, catalogView),
-            );
-            changeSelection((current) => nextPermissionScopeSelection(permission, scopeKey, shouldSelect, current));
-          }}
-          onPermissionGroupScopeChange={(group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => {
-            if (!scopeKey) {
-              return;
-            }
-            changeSelection((current) =>
-              keepLockedSelectionKeys(
-                current,
-                nextSelectionForGroupScopeClick(group, scopeKey, shouldSelect, current),
-                lockedSelectionKeySet,
-              ),
-            );
-          }}
-          onSelectPermissionKeys={(keys: string[]) => {
-            changeSelection((current) => uniqueStrings([...current, ...keys]));
-          }}
-          onClearPermissionKeys={(keys: string[]) => {
-            const keySet = new Set(keys);
-            changeSelection((current) => current.filter((key) => !keySet.has(key)));
-          }}
-          onExpandGroups={(keys: string[]) => setExpandedGroupKeys((current) => uniqueStrings([...current, ...keys]))}
-          onCollapseGroups={(keys: string[]) => {
-            const keySet = collapseKeySet(keys, catalogView.permissionGroups);
-            setExpandedGroupKeys((current) => current.filter((key) => !keySet.has(key)));
-          }}
-          onToggleGroup={(key: string) =>
-            setExpandedGroupKeys((current) => {
-              if (!current.includes(key)) {
-                return [...current, key];
-              }
-              const keySet = collapseKeySet([key], catalogView.permissionGroups);
-              return current.filter((item) => !keySet.has(item));
-            })
-          }
-        />
-      </Field>
-      <div className="grid gap-4 md:grid-cols-2">
-        <Field label={t("grantForm.term")}>
-          <SelectInput
-            value={draft.grantType}
-            disabled={disabled}
-            onChange={(event) => {
-              const grantType = event.currentTarget.value as GrantTermType;
-              // 切回长期必须同时清掉到期时间与它的回填来源, 否则草稿会带着不会被提交的残值。
-              onDraftChange(
-                grantType === "timed"
-                  ? { ...draft, grantType }
-                  : { ...draft, grantType, expiresAt: "", expiresAtSource: "" },
-              );
-            }}
-          >
-            <option value="permanent">{t("grantForm.term.permanent")}</option>
-            <option value="timed">{t("grantForm.term.timed")}</option>
-          </SelectInput>
-        </Field>
-        <Field
-          label={t("grantForm.expiresAt")}
-          error={expiresAtError ? t("grantForm.expiresAtInvalid") : undefined}
-        >
-          <TextInput
-            type="datetime-local"
-            value={draft.expiresAt}
-            min={nowMin}
-            disabled={disabled || draft.grantType !== "timed"}
-            // 用户一动控件, 回填来源(带秒/微秒的原始时间戳)立即作废, 以控件值为准。
-            onChange={(event) =>
-              onDraftChange({ ...draft, expiresAt: event.currentTarget.value, expiresAtSource: "" })
-            }
-          />
-        </Field>
-      </div>
-      <Field label={t("grantForm.reason")}>
-        <TextArea
-          rows={4}
-          value={draft.reason}
-          disabled={disabled}
-          placeholder={t("grantForm.reasonPlaceholder")}
-          onChange={(event) => onDraftChange({ ...draft, reason: event.currentTarget.value })}
-        />
-      </Field>
+      <GrantAppAndGroupFields
+        appKey={appKey}
+        authorizationGroupOptions={authorizationGroupOptions}
+        catalog={catalog}
+        catalogView={catalogView}
+        disabled={disabled}
+        displayedAuthorizationGroupKeys={displayedAuthorizationGroupKeys}
+        draft={draft}
+        lockedAppKey={lockedAppKey}
+        lockedGroupKeySet={lockedGroupKeySet}
+        resolvedLockedHint={resolvedLockedHint}
+        onDraftChange={onDraftChange}
+        setExpandedGroupKeys={setExpandedGroupKeys}
+      />
+      <GrantPermissionField
+        appKey={appKey}
+        catalogErrorMessage={catalogErrorMessage}
+        catalogIsLoading={catalogIsLoading}
+        catalogView={catalogView}
+        coveredSelectionKeys={coveredSelectionKeys}
+        disabled={disabled}
+        draft={draft}
+        expandedGroupKeys={expandedGroupKeys}
+        lockedSelectionKeySet={lockedSelectionKeySet}
+        lockedSelectionKeys={lockedSelectionKeys}
+        resolvedLockedHint={resolvedLockedHint}
+        onDraftChange={onDraftChange}
+        setExpandedGroupKeys={setExpandedGroupKeys}
+      />
+      <GrantTermFields disabled={disabled} draft={draft} onDraftChange={onDraftChange} />
     </div>
   );
 }
 
-/** 收起一个权限分组时, 它的所有后代分组一起收起, 否则再展开会露出上次的深层展开态。 */
-function collapseKeySet(keys: string[], permissionGroups: ScopedPermissionGroupItem[]): Set<string> {
-  return new Set(keys.flatMap((key) => [key, ...descendantGroupKeys(permissionGroups, key)]));
-}
-
-function requireGrantLockedHint(
-  lockedGroupKeys: string[],
-  lockedSelectionKeys: string[],
-  lockedHint: string | undefined,
-): string {
-  if (lockedGroupKeys.length === 0 && lockedSelectionKeys.length === 0) {
-    return "";
-  }
-  if (!lockedHint) {
-    throw new Error("GrantForm: lockedHint is required when locked keys are present");
-  }
-  return lockedHint;
-}
-
-function wrapLockedSelectContent(
-  value: string,
-  label: ReactNode,
-  lockedGroupKeySet: Set<string>,
-  lockedHint: string,
-): ReactNode {
-  if (!lockedGroupKeySet.has(value) || !lockedHint) {
-    return label;
-  }
-  return (
-    <Tooltip title={lockedHint}>
-      <span className="inline-flex w-full cursor-not-allowed pointer-events-auto">
-        {label}
-      </span>
-    </Tooltip>
-  );
-}
-
-function LockedSelectTag({
-  label,
-  value,
-  closable,
-  onClose,
+function GrantAppAndGroupFields({
+  appKey,
+  authorizationGroupOptions,
+  catalog,
+  catalogView,
+  disabled,
+  displayedAuthorizationGroupKeys,
+  draft,
+  lockedAppKey,
   lockedGroupKeySet,
-  lockedHint,
+  resolvedLockedHint,
+  onDraftChange,
+  setExpandedGroupKeys,
 }: {
-  label: ReactNode;
-  value: string;
-  closable: boolean;
-  onClose: (event: MouseEvent<HTMLElement>) => void;
+  appKey: string;
+  authorizationGroupOptions: Array<{ label: string; value: string; disabled: boolean }>;
+  catalog: PortalRequestCatalogView | undefined;
+  catalogView: CatalogView;
+  disabled: boolean;
+  displayedAuthorizationGroupKeys: string[];
+  draft: GrantDraft;
+  lockedAppKey?: string;
   lockedGroupKeySet: Set<string>;
-  lockedHint: string;
+  resolvedLockedHint: string;
+  onDraftChange(next: GrantDraft): void;
+  setExpandedGroupKeys: (updater: (current: string[]) => string[]) => void;
 }) {
-  const locked = lockedGroupKeySet.has(value);
-  const onPreventMouseDown = (event: MouseEvent<HTMLSpanElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-  };
-  const tag = (
-    <span
-      className="ant-select-selection-item"
-      onMouseDown={onPreventMouseDown}
-    >
-      <span className="ant-select-selection-item-content">{label}</span>
-      {closable && !locked ? (
-        <span
-          className="ant-select-selection-item-remove"
-          onClick={onClose}
-          role="img"
-          aria-label="close"
-        >
-          ×
-        </span>
-      ) : null}
-    </span>
-  );
-  if (!locked || !lockedHint) {
-    return tag;
-  }
+  const { t } = useI18n();
   return (
-    <Tooltip title={lockedHint}>
-      <span className="inline-flex cursor-not-allowed">{tag}</span>
-    </Tooltip>
+    <div className="grid gap-4 md:grid-cols-2">
+      <Field label={t("grantForm.app")}>
+        <SelectInput
+          value={appKey}
+          disabled={disabled || Boolean(lockedAppKey)}
+          onChange={(event) => {
+            setExpandedGroupKeys(() => []);
+            onDraftChange(grantDraftWithAppKey(draft, event.currentTarget.value));
+          }}
+        >
+          <option value="">{t("grantForm.appPlaceholder")}</option>
+          {(catalog?.apps ?? []).map((app) => (
+            <option key={app.app_key} value={app.app_key}>
+              {formatAppDisplayName(app)}
+            </option>
+          ))}
+        </SelectInput>
+      </Field>
+      {/*
+        一条授权可以同时挂多个授权组, 因此这里是多选。高度与圆角来自 APP_ANTD_THEME 的
+        controlHeight 36 / borderRadius 2, 与 SelectInput 的 h-9 rounded-[2px] 是同一组设计令牌。
+      */}
+      <Field label={t("grantForm.authorizationGroup")}>
+        <Select
+          className="w-full"
+          mode="multiple"
+          value={displayedAuthorizationGroupKeys}
+          options={authorizationGroupOptions}
+          placeholder={t("grantForm.authorizationGroupNone")}
+          notFoundContent={t("grantForm.authorizationGroupEmpty")}
+          allowClear
+          maxTagCount="responsive"
+          // 目录里的授权组可以有几十个, 按展示给用户的组名过滤; antd 默认拿 value(group.key)比对,
+          // 用户看不到 key 就无从下手。
+          optionFilterProp="label"
+          disabled={disabled || !appKey}
+          optionRender={(option) =>
+            wrapLockedSelectContent(String(option.value), option.label, lockedGroupKeySet, resolvedLockedHint)
+          }
+          tagRender={(props) => (
+            <LockedSelectTag
+              label={props.label}
+              value={String(props.value)}
+              closable={props.closable && !lockedGroupKeySet.has(String(props.value))}
+              onClose={props.onClose}
+              lockedGroupKeySet={lockedGroupKeySet}
+              lockedHint={resolvedLockedHint}
+            />
+          )}
+          onChange={(groupKeys: string[]) =>
+            onDraftChange(
+              grantDraftWithAuthorizationGroupKeys(
+                draft,
+                // allowClear / 关 tag 都可能把锁定组带下来; 从交给草稿的值里剥掉, 展示值再拼回去。
+                groupKeys.filter((key) => !lockedGroupKeySet.has(key)),
+                catalogView,
+              ),
+            )
+          }
+        />
+      </Field>
+    </div>
   );
 }
