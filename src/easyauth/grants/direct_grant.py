@@ -44,6 +44,47 @@ def apply_admin_direct_grant(
     targets: ResolvedAdminGrantTargets,
     actor_id: str,
 ) -> AccessGrant:
+    submitted_groups, submitted_directs = _submitted_user_memberships(targets)
+    with transaction.atomic():
+        current = (
+            AccessGrant.objects.select_for_update()
+            .filter(user=user, app=targets.app, is_current=True)
+            .first()
+        )
+        existing_groups, existing_directs = _live_user_memberships(current)
+        removed_group_keys, removed_permission_keys = _removed_user_membership_keys(
+            existing_groups=existing_groups,
+            existing_directs=existing_directs,
+            submitted_groups=submitted_groups,
+            submitted_directs=submitted_directs,
+        )
+        grant = _replace_admin_user_memberships(
+            user=user,
+            targets=targets,
+            actor_id=actor_id,
+            current=current,
+            existing_groups=existing_groups,
+            existing_directs=existing_directs,
+            submitted_groups=submitted_groups,
+            submitted_directs=submitted_directs,
+        )
+        _record_direct_grant_applied(
+            grant=grant,
+            actor_id=actor_id,
+            group_keys=tuple(item.authorization_group.key for item in submitted_groups),
+            permission_keys=tuple(item.permission.key for item in submitted_directs),
+            removed_group_keys=removed_group_keys,
+            removed_permission_keys=removed_permission_keys,
+            grant_type=targets.grant_type,
+            expires_at=targets.grant_expires_at,
+            reason=targets.reason,
+        )
+        return grant
+
+
+def _submitted_user_memberships(
+    targets: ResolvedAdminGrantTargets,
+) -> tuple[tuple[AuthorizationGroupGrantInput, ...], tuple[ScopedDirectGrantInput, ...]]:
     submitted_groups = tuple(
         AuthorizationGroupGrantInput(
             authorization_group=group,
@@ -61,63 +102,51 @@ def apply_admin_direct_grant(
         )
         for item in targets.direct_grants
     )
-    with transaction.atomic():
-        current = (
-            AccessGrant.objects.select_for_update()
-            .filter(user=user, app=targets.app, is_current=True)
-            .first()
-        )
-        existing_groups, existing_directs = _live_user_memberships(current)
-        removed_group_keys, removed_permission_keys = _removed_user_membership_keys(
-            existing_groups=existing_groups,
-            existing_directs=existing_directs,
-            submitted_groups=submitted_groups,
-            submitted_directs=submitted_directs,
-        )
-        if not submitted_groups and not submitted_directs:
-            grant = _replace_with_empty_user_memberships(
-                user=user,
-                app=targets.app,
-                actor_id=actor_id,
-                reason=targets.reason,
-                current=current,
-            )
-        else:
-            term_changed = _term_changed(
-                existing_groups=existing_groups,
-                existing_directs=existing_directs,
-                grant_type=targets.grant_type,
-                grant_expires_at=targets.grant_expires_at,
-            )
-            desired_groups, desired_directs = _replaced_user_memberships(
-                existing_groups=existing_groups,
-                existing_directs=existing_directs,
-                submitted_groups=submitted_groups,
-                submitted_directs=submitted_directs,
-                term_changed=term_changed,
-            )
-            grant = GrantService.change_grant(
-                GrantMutationInput(
-                    user=user,
-                    app=targets.app,
-                    authorization_groups=desired_groups,
-                    direct_grants=desired_directs,
-                    actor_type="admin",
-                    actor_id=actor_id,
-                ),
-            )
-        _record_direct_grant_applied(
-            grant=grant,
+    return submitted_groups, submitted_directs
+
+
+def _replace_admin_user_memberships(  # noqa: PLR0913 - 替换路径需要当前授权、提交集与审计 actor 同时在场。
+    *,
+    user: UserMirror,
+    targets: ResolvedAdminGrantTargets,
+    actor_id: str,
+    current: AccessGrant | None,
+    existing_groups: dict[int, AuthorizationGroupGrantInput],
+    existing_directs: dict[tuple[int, str], ScopedDirectGrantInput],
+    submitted_groups: tuple[AuthorizationGroupGrantInput, ...],
+    submitted_directs: tuple[ScopedDirectGrantInput, ...],
+) -> AccessGrant:
+    if not submitted_groups and not submitted_directs:
+        return _replace_with_empty_user_memberships(
+            user=user,
+            app=targets.app,
             actor_id=actor_id,
-            group_keys=tuple(item.authorization_group.key for item in submitted_groups),
-            permission_keys=tuple(item.permission.key for item in submitted_directs),
-            removed_group_keys=removed_group_keys,
-            removed_permission_keys=removed_permission_keys,
-            grant_type=targets.grant_type,
-            expires_at=targets.grant_expires_at,
             reason=targets.reason,
+            current=current,
         )
-        return grant
+    term_changed = _term_changed(
+        existing_groups=existing_groups,
+        existing_directs=existing_directs,
+        grant_type=targets.grant_type,
+        grant_expires_at=targets.grant_expires_at,
+    )
+    desired_groups, desired_directs = _replaced_user_memberships(
+        existing_groups=existing_groups,
+        existing_directs=existing_directs,
+        submitted_groups=submitted_groups,
+        submitted_directs=submitted_directs,
+        term_changed=term_changed,
+    )
+    return GrantService.change_grant(
+        GrantMutationInput(
+            user=user,
+            app=targets.app,
+            authorization_groups=desired_groups,
+            direct_grants=desired_directs,
+            actor_type="admin",
+            actor_id=actor_id,
+        ),
+    )
 
 
 def _replace_with_empty_user_memberships(

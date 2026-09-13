@@ -279,6 +279,23 @@ def async_abandon_action(
         # done + 有 batch: 保持人工 owner/fence, 退出本事务后走 complete_data_phase。
         # is_final 是批次计划事实, 人工确认不得篡改。
 
+    return _complete_async_abandon_with_batch(
+        action,
+        claim,
+        summary=summary,
+        reason=reason_stripped,
+        actor_id=actor_id,
+    )
+
+
+def _complete_async_abandon_with_batch(
+    action: HandoverAppAction,
+    claim: _ManualClaim,
+    *,
+    summary: dict[str, JsonValue] | None,
+    reason: str,
+    actor_id: str,
+) -> HandoverAppAction:
     # 人工结案: 有 summary 则落库; 无则不伪造 skipped==count
     payload: dict[str, JsonValue] | None = (
         {"summary": cast("JsonValue", summary)} if summary else None
@@ -300,7 +317,7 @@ def async_abandon_action(
                         action,
                         app_key=claim.app_key,
                         summary=summary,
-                        reason=reason_stripped,
+                        reason=reason,
                         generation=action.generation,
                     ),
                 },

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Final
 
 from celery import shared_task
@@ -315,40 +315,9 @@ def lifecycle_poll_async_actions_task() -> dict[str, int]:
             status=ACTION_STATUS_ASYNC_PENDING,
         ).values_list("id", flat=True)[:50],
     )
-    # renewed_at / updated_at 作为 last_polled 近似; 优先用租约 renewed_at
-    attention_qs = HandoverAppAction.objects.filter(
-        status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
-    )
-    attention_ids: list[int] = []
-    for action in attention_qs.select_related("task")[:50]:
-        lease = HandoverExecutionLease.objects.filter(
-            subject_user_id=action.task.subject_user_id,
-            app_id=action.app_id,
-            released_at__isnull=True,
-        ).first()
-        last = None
-        if lease is not None:
-            last = getattr(lease, "renewed_at", None) or lease.lease_expires_at
-        if last is None or last <= attention_cutoff:
-            attention_ids.append(action.id)
-
+    attention_ids = _due_async_attention_action_ids(attention_cutoff=attention_cutoff)
     action_ids = pending_ids + attention_ids
-    polled = 0
-    errors = 0
-    skipped = 0
-    worker_id = f"async-poll:{uuid.uuid4().hex[:10]}"
-    for action_id in action_ids:
-        try:
-            action = HandoverAppAction.objects.select_related(
-                "app",
-                "task",
-                "task__subject_user",
-            ).get(pk=action_id)
-            _ = poll_async_action(action, worker_id=worker_id)
-            polled += 1
-        except Exception:
-            logger.exception("poll async failed action_id=%s", action_id)
-            errors += 1
+    polled, errors = _poll_async_actions(action_ids)
     # 因 30min 退避跳过的 attention 数量
     skipped = max(
         0,
@@ -363,6 +332,45 @@ def lifecycle_poll_async_actions_task() -> dict[str, int]:
         "scanned": len(action_ids),
         "attention_skipped": skipped,
     }
+
+
+def _due_async_attention_action_ids(*, attention_cutoff: datetime) -> list[int]:
+    # renewed_at / updated_at 作为 last_polled 近似; 优先用租约 renewed_at
+    attention_ids: list[int] = []
+    attention_qs = HandoverAppAction.objects.filter(
+        status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+    )
+    for action in attention_qs.select_related("task")[:50]:
+        lease = HandoverExecutionLease.objects.filter(
+            subject_user_id=action.task.subject_user_id,
+            app_id=action.app_id,
+            released_at__isnull=True,
+        ).first()
+        last = None
+        if lease is not None:
+            last = getattr(lease, "renewed_at", None) or lease.lease_expires_at
+        if last is None or last <= attention_cutoff:
+            attention_ids.append(action.id)
+    return attention_ids
+
+
+def _poll_async_actions(action_ids: list[int]) -> tuple[int, int]:
+    polled = 0
+    errors = 0
+    worker_id = f"async-poll:{uuid.uuid4().hex[:10]}"
+    for action_id in action_ids:
+        try:
+            action = HandoverAppAction.objects.select_related(
+                "app",
+                "task",
+                "task__subject_user",
+            ).get(pk=action_id)
+            _ = poll_async_action(action, worker_id=worker_id)
+            polled += 1
+        except Exception:
+            logger.exception("poll async failed action_id=%s", action_id)
+            errors += 1
+    return polled, errors
 
 
 def _record_disable_event(user: UserMirror, *, ok: bool, detail: str) -> None:

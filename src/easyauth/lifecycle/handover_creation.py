@@ -439,20 +439,7 @@ def upgrade_pre_offboard_to_offboard(
     snapshot_grant_ids: tuple[int, ...] | None = None,
 ) -> HandoverTask:
     """00 §8.3 / 01 §5.1.2: pre_offboard → offboard 升级。调用方须已锁 task。"""
-    if task.kind != HANDOVER_KIND_PRE_OFFBOARD:
-        raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
-    if task.status not in TASK_OPEN_STATUSES:
-        raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
-
-    # 任何 action 有未释放租约 → 409
-    actions = list(HandoverAppAction.objects.select_for_update().filter(task=task))
-    for action in actions:
-        if has_active_lease(
-            subject_user_id=int(task.subject_user_id),  # type: ignore[arg-type]
-            app_id=int(action.app_id),  # type: ignore[arg-type]
-        ):
-            raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
-
+    actions = _locked_actions_for_pre_offboard_upgrade(task)
     old_kind = task.kind
     task.kind = HANDOVER_KIND_OFFBOARD
     task.generation += 1
@@ -472,15 +459,7 @@ def upgrade_pre_offboard_to_offboard(
     for action in actions:
         _ = reset_action_for_upgrade(action, task=task)
 
-    # 重新快照授权 + 重新盘点 APP action / 主管团队(00 §8.3 / D7)
-    grants = _snapshot.snapshot_grants(
-        subject=task.subject_user,
-        explicit_grant_ids=snapshot_grant_ids,
-    )
-    _snapshot.snapshot_grant_items(task, grants=grants)
-    _snapshot.snapshot_app_actions(task, grants=grants, app_keys=None)
-    _snapshot.snapshot_leader_teams(task)
-
+    _resnapshot_upgraded_offboard_task(task, snapshot_grant_ids=snapshot_grant_ids)
     reassign_approvals_for_departed(
         subject=task.subject_user,
         task=task,
@@ -493,3 +472,33 @@ def upgrade_pre_offboard_to_offboard(
         extra={"old_kind": old_kind, "generation": task.generation},
     )
     return refresh_task_status(task)
+
+
+def _locked_actions_for_pre_offboard_upgrade(task: HandoverTask) -> list[HandoverAppAction]:
+    if task.kind != HANDOVER_KIND_PRE_OFFBOARD:
+        raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
+    if task.status not in TASK_OPEN_STATUSES:
+        raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
+    actions = list(HandoverAppAction.objects.select_for_update().filter(task=task))
+    for action in actions:
+        if has_active_lease(
+            subject_user_id=int(task.subject_user_id),  # type: ignore[arg-type]
+            app_id=int(action.app_id),  # type: ignore[arg-type]
+        ):
+            raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+    return actions
+
+
+def _resnapshot_upgraded_offboard_task(
+    task: HandoverTask,
+    *,
+    snapshot_grant_ids: tuple[int, ...] | None,
+) -> None:
+    # 重新快照授权 + 重新盘点 APP action / 主管团队(00 §8.3 / D7)
+    grants = _snapshot.snapshot_grants(
+        subject=task.subject_user,
+        explicit_grant_ids=snapshot_grant_ids,
+    )
+    _snapshot.snapshot_grant_items(task, grants=grants)
+    _snapshot.snapshot_app_actions(task, grants=grants, app_keys=None)
+    _snapshot.snapshot_leader_teams(task)

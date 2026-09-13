@@ -229,41 +229,70 @@ def preempt_expired_lease(
         return None
     new_fence = allocate_fence(subject_user=lease.subject_user, app=lease.app)
     now = timezone.now()
-    expires = now + LEASE_TTL
     if connection.vendor == "postgresql":
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE lifecycle_handoverexecutionlease
-                SET owner = %s,
-                    fence = %s,
-                    renewed_at = NOW(),
-                    lease_expires_at = NOW() + (%s * INTERVAL '1 second')
-                WHERE id = %s
-                  AND owner = %s
-                  AND fence = %s
-                  AND released_at IS NULL
-                  AND lease_expires_at <= NOW()
-                """,
-                [
-                    new_owner,
-                    new_fence,
-                    LEASE_TTL.total_seconds(),
-                    lease.id,
-                    lease.owner,
-                    lease.fence,
-                ],
-            )
-            affected = cast("int", cursor.rowcount)
-            if affected != 1:
-                return None
-        refreshed = HandoverExecutionLease.objects.get(pk=lease.id)
-        return LeaseHandle(
-            lease_id=lease.id,
-            owner=new_owner,
-            fence=new_fence,
-            expires_at=refreshed.lease_expires_at,
+        return _preempt_expired_lease_postgresql(
+            lease,
+            new_owner=new_owner,
+            new_fence=new_fence,
         )
+    return _preempt_expired_lease_sqlite(
+        lease,
+        new_owner=new_owner,
+        new_fence=new_fence,
+        now=now,
+        expires=now + LEASE_TTL,
+    )
+
+
+def _preempt_expired_lease_postgresql(
+    lease: HandoverExecutionLease,
+    *,
+    new_owner: str,
+    new_fence: int,
+) -> LeaseHandle | None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE lifecycle_handoverexecutionlease
+            SET owner = %s,
+                fence = %s,
+                renewed_at = NOW(),
+                lease_expires_at = NOW() + (%s * INTERVAL '1 second')
+            WHERE id = %s
+              AND owner = %s
+              AND fence = %s
+              AND released_at IS NULL
+              AND lease_expires_at <= NOW()
+            """,
+            [
+                new_owner,
+                new_fence,
+                LEASE_TTL.total_seconds(),
+                lease.id,
+                lease.owner,
+                lease.fence,
+            ],
+        )
+        affected = cast("int", cursor.rowcount)
+        if affected != 1:
+            return None
+    refreshed = HandoverExecutionLease.objects.get(pk=lease.id)
+    return LeaseHandle(
+        lease_id=lease.id,
+        owner=new_owner,
+        fence=new_fence,
+        expires_at=refreshed.lease_expires_at,
+    )
+
+
+def _preempt_expired_lease_sqlite(
+    lease: HandoverExecutionLease,
+    *,
+    new_owner: str,
+    new_fence: int,
+    now: datetime,
+    expires: datetime,
+) -> LeaseHandle | None:
     if lease.lease_expires_at > now:
         return None
     updated = HandoverExecutionLease.objects.filter(

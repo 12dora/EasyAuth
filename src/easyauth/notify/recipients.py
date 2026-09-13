@@ -12,7 +12,7 @@ from easyauth.accounts.directory_references import (
     InvalidDirectoryReferenceError,
     resolve_directory_user,
 )
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.capabilities import app_capability_config
 from easyauth.applications.models import CAPABILITY_NOTIFY, AppNotificationChannel
 from easyauth.notify.contracts import (
@@ -100,6 +100,40 @@ def _resolve_one_recipient(raw_ref: str) -> ResolvedRecipient:
                 error="用户存在但无钉钉绑定。",
             ),
         )
+    mirror = _directory_mirror_for_ref(raw_ref, preferred_user)
+    if isinstance(mirror, ResolvedRecipient):
+        return mirror
+    if mirror.status != DINGTALK_USER_STATUS_ACTIVE:
+        status_label = mirror.status or "unknown"
+        return _failed_recipient(
+            FailedRecipientInput(
+                raw_ref=raw_ref,
+                user=preferred_user
+                or _lookup_user_mirror(mirror.source_slug, mirror.corp_id, mirror.user_id),
+                dingtalk_source_slug=mirror.source_slug,
+                dingtalk_corp_id=mirror.corp_id,
+                dingtalk_userid=mirror.user_id,
+                error_code=NOTIFY_ERROR_USER_INACTIVE,
+                error=f"目录状态为 {status_label}, 拒绝投递。",
+            ),
+        )
+    user = preferred_user or _lookup_user_mirror(mirror.source_slug, mirror.corp_id, mirror.user_id)
+    return ResolvedRecipient(
+        raw_ref=raw_ref,
+        user=user,
+        dingtalk_source_slug=mirror.source_slug,
+        dingtalk_corp_id=mirror.corp_id,
+        dingtalk_userid=mirror.user_id,
+        status=NOTIFY_RECIPIENT_STATUS_PENDING,
+        error_code="",
+        error="",
+    )
+
+
+def _directory_mirror_for_ref(
+    raw_ref: str,
+    preferred_user: UserMirror | None,
+) -> ResolvedRecipient | DingTalkUserMirror:
     try:
         mirror = resolve_directory_user(raw_ref)
     except AmbiguousDirectoryReferenceError:
@@ -129,31 +163,7 @@ def _resolve_one_recipient(raw_ref: str) -> ResolvedRecipient:
                 error="用户引用无法解析到目录用户。",
             ),
         )
-    if mirror.status != DINGTALK_USER_STATUS_ACTIVE:
-        status_label = mirror.status or "unknown"
-        return _failed_recipient(
-            FailedRecipientInput(
-                raw_ref=raw_ref,
-                user=preferred_user
-                or _lookup_user_mirror(mirror.source_slug, mirror.corp_id, mirror.user_id),
-                dingtalk_source_slug=mirror.source_slug,
-                dingtalk_corp_id=mirror.corp_id,
-                dingtalk_userid=mirror.user_id,
-                error_code=NOTIFY_ERROR_USER_INACTIVE,
-                error=f"目录状态为 {status_label}, 拒绝投递。",
-            ),
-        )
-    user = preferred_user or _lookup_user_mirror(mirror.source_slug, mirror.corp_id, mirror.user_id)
-    return ResolvedRecipient(
-        raw_ref=raw_ref,
-        user=user,
-        dingtalk_source_slug=mirror.source_slug,
-        dingtalk_corp_id=mirror.corp_id,
-        dingtalk_userid=mirror.user_id,
-        status=NOTIFY_RECIPIENT_STATUS_PENDING,
-        error_code="",
-        error="",
-    )
+    return mirror
 
 
 def enforce_channel_scope(
