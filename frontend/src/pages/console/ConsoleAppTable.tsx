@@ -111,6 +111,7 @@ function appColumns(
         key: "configuration_status",
         title: t("appList.column.configuration"),
         filter: false,
+        plain: true,
         options: READINESS_VALUES.map((status) => ({
           value: status,
           label: readinessLabel(t, status),
@@ -127,6 +128,7 @@ function appColumns(
         activeStatusColumn<AppSummary>({
           t,
           getActive: (app) => app.is_active,
+          plain: true,
         }),
         filters.status,
       ),

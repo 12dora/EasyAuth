@@ -136,6 +136,41 @@ describe("ConsoleAppList", () => {
     expect(within(row).queryByText("本地用户")).not.toBeInTheDocument();
   });
 
+  test("配置与状态列渲染纯文本, 不画徽章", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({
+          data: [
+            {
+              id: 1,
+              app_key: "crm",
+              name: "CRM",
+              alias: "",
+              owners: [ownerRef("owner-a")],
+              is_active: true,
+              configuration_status: "ready",
+              updated_at: "2026-07-01T09:00:00Z",
+              capabilities: {},
+            },
+          ],
+        }),
+      ),
+    );
+
+    renderList();
+
+    const row = await screen.findByRole("row", { name: /CRM/ });
+    const configuration = within(row).getByText("就绪");
+    const status = within(row).getByText("启用");
+    expect(configuration).toBeVisible();
+    expect(status).toBeVisible();
+    expect(configuration).not.toHaveClass("tracking-caps-wide", "font-mono");
+    expect(status).not.toHaveClass("tracking-caps-wide", "font-mono");
+    expect(row.querySelector(".tracking-caps-wide")).toBeNull();
+  });
+
   test("表头状态筛选映射成后端 status 查询参数并回到第 1 页", async () => {
     document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [], pagination: emptyPagination() }));

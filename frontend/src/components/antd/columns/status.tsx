@@ -28,6 +28,11 @@ export interface StatusColumnConfig<T> {
    * 服务端分页表不要开, 改过 `serverSortColumn`(它会覆盖掉比较函数)。
    */
   sorter?: boolean;
+  /**
+   * 为 true 时单元格只渲染本地化文案, 不画 Badge、不加色调。
+   * 筛选、排序、空值 "-" 不变。默认 false。
+   */
+  plain?: boolean;
 }
 
 /**
@@ -55,14 +60,16 @@ export function compareStatusByOptionIndex(
 }
 
 /**
- * 状态列: Badge 渲染 + 内建 enumFilter。
+ * 状态列: 默认 Badge 渲染 + 内建 enumFilter。
  * 未在 options 里出现的值按 neutral 原样展示, 空值展示 "-"。
+ * `plain` 时只输出文案, 筛选 / 排序 / 空值规则不变。
  */
 export function statusColumn<T>({
   filter = true,
   getValue,
   key,
   options,
+  plain = false,
   sorter = false,
   title,
   width,
@@ -83,7 +90,11 @@ export function statusColumn<T>({
         return "-";
       }
       const option = options.find((item) => item.value === value);
-      return <Badge tone={option?.tone ?? "neutral"}>{option?.label ?? value}</Badge>;
+      const label = option?.label ?? value;
+      if (plain) {
+        return <span>{label}</span>;
+      }
+      return <Badge tone={option?.tone ?? "neutral"}>{label}</Badge>;
     },
     ...(filter
       ? enumFilter<T>(
@@ -105,6 +116,7 @@ export function activeStatusColumn<T>({
   filter = true,
   getActive,
   key = "status",
+  plain = false,
   sorter = true,
   t,
   width = 120,
@@ -115,6 +127,7 @@ export function activeStatusColumn<T>({
   width?: number;
   filter?: boolean;
   sorter?: boolean;
+  plain?: boolean;
 }): ColumnType<T> {
   return statusColumn<T>({
     filter,
@@ -124,6 +137,7 @@ export function activeStatusColumn<T>({
       { value: "active", label: t("common.enabled"), tone: "evergreen" },
       { value: "inactive", label: t("common.disabled"), tone: "neutral" },
     ],
+    plain,
     sorter,
     title: t("common.status"),
     width,
