@@ -42,7 +42,7 @@ export function ConsolePeopleTable({
   tableProps: UseServerTableResult<PersonRow>["tableProps"];
   /** 列 key -> 已选筛选值, 来自 useServerTable 的查询状态(status 在后端筛)。 */
   filters: Record<string, string[]>;
-  /** 当前排序, 来自同一份查询状态(四列都在后端排)。 */
+  /** 当前排序, 来自同一份查询状态(数据列都在后端排)。 */
   sort: ServerSortState;
   actions: PeopleRowActions;
 }) {
@@ -59,8 +59,8 @@ export function ConsolePeopleTable({
       loading={isLoading}
       // 固定布局下每列都必须声明宽度, minWidth 必须正好等于它们的和, 否则没宽度的列
       // 只能分摊剩余量, 剩余量不够时会被压成一个字宽。
-      // 姓名 260 + 部门 180 + 邮箱 240 + 状态 140 + 管理员 90 + 操作 280 = 1190。
-      minWidth={1190}
+      // 姓名 260 + 邮箱 240 + 状态 140 + 管理员 90 + 操作 280 = 1010。
+      minWidth={1010}
       rowKey="user_id"
     />
   );
@@ -104,11 +104,8 @@ function peopleColumns(
       }),
       sort,
     ),
-    // 部门与邮箱后端不支持单列过滤(它们由工具栏的 q 一起做跨列搜索), 但支持排序。
-    serverSortColumn(
-      textColumn<PersonRow>({ key: "department", title: t("people.column.department"), width: 180 }),
-      sort,
-    ),
+    // 邮箱后端不支持单列过滤(由工具栏的 q 做跨列搜索), 但支持排序。
+    // 部门不再单独成列: 姓名列次行已经是部门路径。
     serverSortColumn(
       textColumn<PersonRow>({ key: "email", title: t("people.column.email"), width: 240 }),
       sort,

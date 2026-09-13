@@ -15,11 +15,11 @@ import { DEFAULT_PAGE_SIZE, PEOPLE_QUERY_PREFIX, type HandoverStartTarget } from
 
 /**
  * 列 key -> 后端 `ordering` 字段。姓名列的 key 就是 name, 与后端字段同名。
+ * 部门列已从表格移除(姓名次行已展示部门路径); 后端仍接受 `department` ordering, 前端不再映射。
  */
 const PEOPLE_ORDERING_FIELDS = {
   name: "name",
   is_console_admin: "is_console_admin",
-  department: "department",
   email: "email",
   status: "status",
 } as const;

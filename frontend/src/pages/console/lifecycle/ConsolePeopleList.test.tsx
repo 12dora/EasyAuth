@@ -249,22 +249,24 @@ describe("ConsolePeopleList", () => {
     // 表格不设默认排序: 首屏不带 ordering, 表头也没有指示器。
     await screen.findByText("员工1");
     expect(columnSortOrder("姓名")).toBeNull();
+    // 部门已从表格移除: 姓名列次行已经是部门路径。
+    expect(theadTexts().some((text) => text.includes("部门"))).toBe(false);
 
     await user.click(screen.getByTitle("下一页"));
     await screen.findByText("员工2");
 
-    await sortByColumn(user, "部门");
+    await sortByColumn(user, "邮箱");
     await waitFor(() =>
-      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/users?page=1&page_size=20&ordering=department"),
+      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/users?page=1&page_size=20&ordering=email"),
     );
-    expect(columnSortOrder("部门")).toBe("ascend");
+    expect(columnSortOrder("邮箱")).toBe("ascend");
     expect(columnSortOrder("姓名")).toBeNull();
 
-    await sortByColumn(user, "部门");
+    await sortByColumn(user, "邮箱");
     await waitFor(() =>
-      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/users?page=1&page_size=20&ordering=-department"),
+      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/users?page=1&page_size=20&ordering=-email"),
     );
-    expect(columnSortOrder("部门")).toBe("descend");
+    expect(columnSortOrder("邮箱")).toBe("descend");
   });
 
   test("发起离职交接: 确认对话框提交后建单并跳转交接单详情", async () => {
@@ -318,6 +320,10 @@ describe("ConsolePeopleList", () => {
     expect(await screen.findByTestId("location")).toHaveTextContent("/console/lifecycle/handover-tasks/9");
   });
 });
+
+function theadTexts(): string[] {
+  return [...document.querySelectorAll("thead th")].map((cell) => (cell.textContent ?? "").trim());
+}
 
 function lastListUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
   return fetchMock.mock.calls
