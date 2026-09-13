@@ -301,6 +301,36 @@ def test_s12_callback_persists_authentik_profile_picture(
     EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
     EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
 )
+def test_s12_callback_overwrites_existing_picture_when_authentik_picture_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = Client()
+    _ = UserMirror.objects.create(
+        authentik_user_id=OIDC_SUBJECT,
+        avatar_url="/media/avatars/old.png",
+    )
+    _seed_oidc_attempt(client)
+    _patch_claim_exchange(
+        monkeypatch,
+        {
+            **_valid_claims(),
+            "picture": "https://static-legacy.dingtalk.com/media/oidc.jpg",
+        },
+    )
+
+    response = client.get(f"/auth/callback/?code={OIDC_CODE}&state={OIDC_STATE}")
+
+    assert response.status_code == HTTPStatus.FOUND
+    user = UserMirror.objects.get(authentik_user_id=OIDC_SUBJECT)
+    assert user.avatar_url == "https://static-legacy.dingtalk.com/media/oidc.jpg"
+
+
+@override_settings(
+    EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
+)
 @pytest.mark.parametrize(
     ("extra_claims", "expected_name"),
     [
@@ -331,7 +361,7 @@ def test_s12_callback_uses_dingtalk_name_when_oidc_name_is_missing(
     EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
     EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
 )
-def test_s12_callback_clears_existing_picture_when_authentik_picture_is_empty(
+def test_s12_callback_keeps_existing_picture_when_authentik_picture_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = Client()
@@ -346,7 +376,7 @@ def test_s12_callback_clears_existing_picture_when_authentik_picture_is_empty(
 
     assert response.status_code == HTTPStatus.FOUND
     user = UserMirror.objects.get(authentik_user_id=OIDC_SUBJECT)
-    assert user.avatar_url == ""
+    assert user.avatar_url == "/media/avatars/old.png"
 
 
 @override_settings(
@@ -358,6 +388,41 @@ def test_s12_callback_clears_existing_picture_when_authentik_picture_is_empty(
 @pytest.mark.parametrize(
     "unsafe_picture",
     [
+        "data:image/svg+xml;base64,PHN2Zy4uLg==",
+        "http://authentik.example.test/avatar.png",
+        "javascript:alert(1)",
+        "//evil.example.test/avatar.png",
+    ],
+)
+def test_s12_callback_keeps_existing_picture_when_authentik_picture_is_unsafe(
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_picture: str,
+) -> None:
+    client = Client()
+    _ = UserMirror.objects.create(
+        authentik_user_id=OIDC_SUBJECT,
+        avatar_url="/media/avatars/old.png",
+    )
+    _seed_oidc_attempt(client)
+    _patch_claim_exchange(monkeypatch, {**_valid_claims(), "picture": unsafe_picture})
+
+    response = client.get(f"/auth/callback/?code={OIDC_CODE}&state={OIDC_STATE}")
+
+    assert response.status_code == HTTPStatus.FOUND
+    user = UserMirror.objects.get(authentik_user_id=OIDC_SUBJECT)
+    assert user.avatar_url == "/media/avatars/old.png"
+
+
+@override_settings(
+    EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
+)
+@pytest.mark.parametrize(
+    "unsafe_picture",
+    [
+        "data:image/svg+xml;base64,PHN2Zy4uLg==",
         "http://authentik.example.test/avatar.png",
         "javascript:alert(1)",
         "//evil.example.test/avatar.png",

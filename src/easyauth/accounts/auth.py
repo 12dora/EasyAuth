@@ -8,6 +8,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from django.contrib.sessions.models import Session
 from django.db import transaction
 
+from easyauth.accounts.avatar_url import safe_avatar_url
 from easyauth.accounts.models import USER_STATUS_ACTIVE, OidcSessionBinding, UserMirror
 from easyauth.accounts.org_context import apply_dingtalk_org_context
 
@@ -313,7 +314,8 @@ def _update_existing_user_profile(user: UserMirror, claims: VerifiedOidcClaims) 
     if claims.email and user.email != claims.email:
         user.email = claims.email
         changed_fields.append("email")
-    if user.avatar_url != claims.avatar_url:
+    # 空或不安全的 picture 视为缺失, 不得覆盖目录同步已经写入的头像。
+    if claims.avatar_url and user.avatar_url != claims.avatar_url:
         user.avatar_url = claims.avatar_url
         changed_fields.append("avatar_url")
     if changed_fields:
@@ -342,19 +344,7 @@ def _dingtalk_display_name_claim(claims: OidcClaimsInput) -> str:
 
 
 def _avatar_url_claim(claims: OidcClaimsInput) -> str:
-    avatar_url = _optional_string_claim(claims, FIELD_AVATAR_URL)
-    if _is_safe_avatar_url(avatar_url):
-        return avatar_url
-    return ""
-
-
-def _is_safe_avatar_url(value: str) -> bool:
-    if value == "":
-        return True
-    if value.startswith("/") and not value.startswith("//") and "\\" not in value:
-        return True
-    parsed = urlsplit(value)
-    return parsed.scheme == "https" and parsed.netloc != ""
+    return safe_avatar_url(_optional_string_claim(claims, FIELD_AVATAR_URL))
 
 
 def revoke_authentik_sessions(*, sid: str = "", subject: str = "") -> int:
