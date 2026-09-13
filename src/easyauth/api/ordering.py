@@ -80,7 +80,7 @@ def apply_ordering[T: models.Model](
     *,
     annotations: Mapping[str, Callable[[], Combinable]] | None = None,
 ) -> models.QuerySet[T] | JsonResponse:
-    """统一校验并在分页前排序；仅构建当前排序所需注解，升序空值置后。"""
+    """统一校验并在分页前排序; 仅构建当前排序所需注解, 升序空值置后。"""
     ordering = parse_ordering(request, allowed, default)
     if isinstance(ordering, JsonResponse):
         return ordering

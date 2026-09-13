@@ -58,7 +58,7 @@ type JsonObject = dict[str, JsonValue]
 
 SYNC_RUN_ORDERING: Final[dict[str, str]] = {
     "error": "error",
-    # NetBird 正常同步固定记录 API 调用次数，无 processed 指标；缺失值排序置后。
+    # NetBird 正常同步固定记录 API 调用次数, 无 processed 指标; 缺失值排序置后。
     "stats": "stats__api_calls",
     "started_at": "started_at",
     "trigger": "trigger",

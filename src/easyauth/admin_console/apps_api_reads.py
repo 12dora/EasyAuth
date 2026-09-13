@@ -75,7 +75,7 @@ CONSOLE_APP_DEFAULT_ORDER: Final[tuple[str, ...]] = ("app_key",)
 
 
 def list_console_apps(request: HttpRequest) -> JsonResponse:
-    """应用数量较少，配置状态按声明顺序 blocking < warning < ready 全量计算后分页。"""
+    """应用数量较少, 配置状态按声明顺序 blocking < warning < ready 全量计算后分页。"""
     if request.method != "GET":
         return method_not_allowed_response()
 

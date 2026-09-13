@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import importlib
 from http import HTTPStatus
 from json import loads
 from typing import TYPE_CHECKING, Final, cast
 
+import pytest
+from django.db.models import Value
 from django.http import JsonResponse
 from django.test import RequestFactory
-import pytest
 
+from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.api.ordering import parse_ordering, with_tiebreaker
+from easyauth.api.ordering import apply_ordering, parse_ordering, with_tiebreaker
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -76,12 +79,9 @@ def _request(ordering: str | None = None) -> HttpRequest:
         return factory.get("/list")
     return factory.get("/list", {"ordering": ordering})
 
+
 @pytest.mark.django_db
 def test_apply_ordering_adds_requested_annotation_and_places_empty_last() -> None:
-    from django.db.models import Value
-    from easyauth.accounts.models import UserMirror
-    from easyauth.api.ordering import apply_ordering
-
     UserMirror.objects.create(authentik_user_id="u1", name="")
     UserMirror.objects.create(authentik_user_id="u2", name="乙")
     UserMirror.objects.create(authentik_user_id="u3", name="甲")
@@ -99,7 +99,7 @@ def test_apply_ordering_adds_requested_annotation_and_places_empty_last() -> Non
 
 
 @pytest.mark.parametrize(
-    "module_name, constant_name",
+    ("module_name", "constant_name"),
     [
         ("easyauth.portal.api_data", "PORTAL_GRANT_ORDERING"),
         ("easyauth.portal.access_request_data", "PORTAL_ACCESS_REQUEST_ORDERING"),
@@ -116,20 +116,22 @@ def test_apply_ordering_adds_requested_annotation_and_places_empty_last() -> Non
         ("easyauth.admin_console.audit_api", "AUDIT_LOG_ORDERING"),
     ],
 )
-def test_every_endpoint_ordering_key_accepts_both_directions(module_name: str, constant_name: str) -> None:
-    import importlib
-
+def test_every_endpoint_ordering_key_accepts_both_directions(
+    module_name: str,
+    constant_name: str,
+) -> None:
     module = importlib.import_module(module_name)
     allowed = getattr(module, constant_name)
     for field in allowed:
         ascending = parse_ordering(_request(field), allowed, (field,))
-        assert isinstance(ascending, tuple) and ascending[-1] in {"pk", "id"}
+        assert isinstance(ascending, tuple)
+        assert ascending[-1] in {"pk", "id"}
         descending = parse_ordering(_request(f"-{field}"), allowed, (field,))
-        assert isinstance(descending, tuple) and descending[0].startswith("-")
+        assert isinstance(descending, tuple)
+        assert descending[0].startswith("-")
 
 
 def test_new_operations_and_audit_ordering_reject_unknown_values() -> None:
-    import importlib
     for module_name, constant_name in (
         ("easyauth.admin_console.operations_api", "ACCESS_REQUEST_ORDERING"),
         ("easyauth.admin_console.operations_api", "ACCESS_GRANT_ORDERING"),
