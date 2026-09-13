@@ -3,14 +3,5 @@
     "src/easyauth/access_requests/models.py": 604,
     "src/easyauth/grants/query.py": 619
   },
-  "functions": {
-    "src/easyauth/grants/direct_grant.py:apply_admin_direct_grant": 80,
-    "src/easyauth/integrations/authentik/directory_sync.py:sync_authentik_dingtalk_directory": 61,
-    "src/easyauth/lifecycle/handover_creation.py:upgrade_pre_offboard_to_offboard": 62,
-    "src/easyauth/lifecycle/handover_manual.py:async_abandon_action": 62,
-    "src/easyauth/lifecycle/lease.py:preempt_expired_lease": 67,
-    "src/easyauth/lifecycle/management/commands/seed_handover_e2e.py:Command.handle": 90,
-    "src/easyauth/notify/recipients.py:_resolve_one_recipient": 65,
-    "src/easyauth/tasks/lifecycle.py:lifecycle_poll_async_actions_task": 61
-  }
+  "functions": {}
 }
