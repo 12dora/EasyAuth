@@ -431,3 +431,37 @@ export function parseHandoverTaskPersonContract(
   };
 }
 
+/** 把人员契约写回 task, 缺 created_by_person / actor_person 立即失败。 */
+function overlayHandoverTaskPersonContract<T>(raw: JsonValue, field: string): T {
+  const person = parseHandoverTaskPersonContract(raw, field);
+  const source = raw as JsonObject;
+  const escalation = source.escalation as JsonObject;
+  return {
+    ...(source as unknown as T),
+    created_by_person: person.created_by_person,
+    escalation: {
+      ...(escalation as unknown as HandoverEscalation),
+      defer_history: person.defer_history,
+    },
+  };
+}
+
+/** 控制台交接单列表行: 校验 created_by_person 与 defer_history[].actor_person。 */
+export function parseHandoverTaskListItem(raw: JsonValue, field = "task"): HandoverTaskListItem {
+  return overlayHandoverTaskPersonContract<HandoverTaskListItem>(raw, field);
+}
+
+/** 详情信封 `{ handover_task }`; 缺任务或人员字段立即失败。 */
+export function parseHandoverTaskPayload(raw: JsonValue): HandoverTaskPayload {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new HandoverContractError("payload");
+  }
+  const source = raw as JsonObject;
+  if (!Object.prototype.hasOwnProperty.call(source, "handover_task")) {
+    throw new HandoverContractError("handover_task");
+  }
+  return {
+    handover_task: overlayHandoverTaskPersonContract<HandoverTaskDetail>(source.handover_task, "handover_task"),
+  };
+}
+

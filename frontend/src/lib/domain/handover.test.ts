@@ -4,6 +4,8 @@ import {
   HandoverContractError,
   parseHandoverDeferRecord,
   parseHandoverPersonRef,
+  parseHandoverTaskListItem,
+  parseHandoverTaskPayload,
   parseHandoverTaskPersonContract,
   parseNullableHandoverPersonRef,
 } from "./handover";
@@ -111,5 +113,35 @@ describe("parseHandoverTaskPersonContract", () => {
       created_by_person: null,
       defer_history: [],
     });
+  });
+});
+
+describe("parseHandoverTaskPayload", () => {
+  test("把人员契约写回详情信封", () => {
+    expect(
+      parseHandoverTaskPayload({
+        handover_task: {
+          id: 1,
+          created_by: "u-1",
+          created_by_person: directoryPerson,
+          escalation: { defer_history: [] },
+        },
+      }).handover_task?.created_by_person,
+    ).toEqual(directoryPerson);
+  });
+
+  test("缺少 created_by_person 立即失败", () => {
+    expect(() =>
+      parseHandoverTaskPayload({
+        handover_task: { escalation: { defer_history: [] } },
+      }),
+    ).toThrow(/created_by_person/);
+  });
+});
+
+describe("parseHandoverTaskListItem", () => {
+  test("缺少 created_by_person 立即失败, null 合法", () => {
+    expect(() => parseHandoverTaskListItem({ escalation: { defer_history: [] } })).toThrow(/created_by_person/);
+    expect(parseHandoverTaskListItem({ created_by_person: null, escalation: { defer_history: [] } }).created_by_person).toBeNull();
   });
 });

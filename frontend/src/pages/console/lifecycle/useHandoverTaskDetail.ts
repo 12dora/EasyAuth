@@ -5,9 +5,13 @@ import { useNavigate } from "react-router-dom";
 import { useToast } from "../../../components/ui/Toast";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
-import type { JsonObject } from "../../../lib/api";
-import type { HandoverAction, HandoverTaskPayload } from "../../../lib/domain";
+import type { ApiRequestOptions, JsonObject, JsonValue } from "../../../lib/api";
+import { parseHandoverTaskPayload, type HandoverAction, type HandoverTaskPayload } from "../../../lib/domain";
 import { shouldPollTaskDetail } from "./handoverTaskDetailModel";
+
+async function requestHandoverTaskPayload(path: string, options?: ApiRequestOptions): Promise<HandoverTaskPayload> {
+  return parseHandoverTaskPayload(await apiRequest<JsonValue>(path, options));
+}
 
 /** 交接任务详情的数据装载与任务级操作(取消/删除/认领/延期)。 */
 export function useHandoverTaskDetail(taskId: string) {
@@ -25,7 +29,7 @@ export function useHandoverTaskDetail(taskId: string) {
 
   const taskQuery = useQuery({
     queryKey: detailQueryKey,
-    queryFn: () => apiRequest<HandoverTaskPayload>(taskPath),
+    queryFn: () => requestHandoverTaskPayload(taskPath),
     enabled: Boolean(taskId),
     refetchInterval: (query) => shouldPollTaskDetail(query.state.data?.handover_task),
   });
@@ -46,7 +50,7 @@ export function useHandoverTaskDetail(taskId: string) {
 
   const cancelMutation = useMutation({
     mutationFn: () =>
-      apiRequest<HandoverTaskPayload>(taskPath, {
+      requestHandoverTaskPayload(taskPath, {
         method: "PATCH",
         body: { cancel: true } satisfies JsonObject,
       }),
@@ -69,7 +73,7 @@ export function useHandoverTaskDetail(taskId: string) {
 
   const claimMutation = useMutation({
     mutationFn: () =>
-      apiRequest<HandoverTaskPayload>(`${taskPath}/claim`, {
+      requestHandoverTaskPayload(`${taskPath}/claim`, {
         method: "POST",
         body: {},
       }),
@@ -82,7 +86,7 @@ export function useHandoverTaskDetail(taskId: string) {
 
   const deferMutation = useMutation({
     mutationFn: () =>
-      apiRequest<HandoverTaskPayload>(`${taskPath}/escalation/defer`, {
+      requestHandoverTaskPayload(`${taskPath}/escalation/defer`, {
         method: "POST",
         body: { reason: deferReason.trim() },
       }),

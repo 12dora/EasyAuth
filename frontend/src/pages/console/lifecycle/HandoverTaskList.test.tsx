@@ -26,25 +26,7 @@ describe("HandoverTaskList", () => {
       const url = String(input);
       const page = url.includes("page=2") ? 2 : 1;
       return jsonResponse({
-        data: [
-          {
-            id: page,
-            kind: "offboard",
-            status: "pending",
-            allowed_actions: [],
-            subject: {
-              user_id: `u-${page}`,
-              name: `员工${page}`,
-              email: "",
-              department: "",
-              status: "active",
-            },
-            reason: "",
-            created_by: "admin",
-            created_at: "2026-07-10T00:00:00Z",
-            updated_at: "2026-07-10T00:00:00Z",
-          },
-        ],
+        data: [taskRow(page, `员工${page}`, "pending", [])],
         pagination: { page, page_size: 10, total_items: 11, total_pages: 2 },
       });
     });
@@ -227,6 +209,8 @@ function taskRow(id: number, name: string, status: string, allowedActions: strin
     },
     reason: "",
     created_by: "admin",
+    created_by_person: null,
+    escalation: { deadline: null, days_left: null, level: 0, deferred_at: null, defer_history: [] },
     created_at: "2026-07-10T00:00:00Z",
     updated_at: "2026-07-10T00:00:00Z",
   };

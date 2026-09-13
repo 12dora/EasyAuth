@@ -10,8 +10,8 @@ import {
 import { useToast } from "../../../components/ui/Toast";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
-import type { ListPayload } from "../../../lib/api";
-import type { HandoverTaskRow } from "../../../lib/domain";
+import type { JsonValue, ListPayload } from "../../../lib/api";
+import { parseHandoverTaskListItem, type HandoverTaskRow } from "../../../lib/domain";
 
 /**
  * 列 key -> 后端 `ordering` 字段。
@@ -46,7 +46,17 @@ export function useHandoverTaskList() {
 
   const tasksQuery = useQuery({
     queryKey: ["console", "handover-tasks", tasksSearch],
-    queryFn: () => apiRequest<ListPayload<HandoverTaskRow>>(`/console/api/v1/lifecycle/handover-tasks?${tasksSearch}`),
+    queryFn: async () => {
+      const payload = await apiRequest<ListPayload<JsonValue>>(
+        `/console/api/v1/lifecycle/handover-tasks?${tasksSearch}`,
+      );
+      return {
+        ...payload,
+        data: itemsFromPayload<JsonValue>(payload).map((row, index) =>
+          parseHandoverTaskListItem(row, `data[${index}]`),
+        ),
+      };
+    },
     placeholderData: (previous) => previous,
   });
   const deleteMutation = useMutation({
