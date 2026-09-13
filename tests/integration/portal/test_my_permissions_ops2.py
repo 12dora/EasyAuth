@@ -27,6 +27,7 @@ from easyauth.grants.models import (
     GRANT_STATUS_REVOKED,
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
+    MEMBERSHIP_SOURCE_USER,
     AccessGrant,
     AccessGrantGroup,
     AccessGrantPermission,
@@ -105,7 +106,21 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
     assert GRANT_TYPE_PERMANENT in body
     assert "其他用户应用" not in body
     assert "已撤销应用" not in body
-    grants_by_permission = _expanded_grants_by_permission(response.json()["data"][0])
+    item = response.json()["data"][0]
+    assert item["authorization_groups"] == [
+        {
+            "key": "auditor",
+            "kind": "role",
+            "name": "CRM 审计员",
+            "expires_at": None,
+            "source": MEMBERSHIP_SOURCE_USER,
+        },
+    ]
+    assert {
+        (entry["permission"], entry["scope"], entry["source"])
+        for entry in item["direct_grants"]
+    } >= {("invoice.approve", "SELF", MEMBERSHIP_SOURCE_USER)}
+    grants_by_permission = _expanded_grants_by_permission(item)
     assert grants_by_permission["invoice.read"] == {
         "permission": "invoice.read",
         "scope": "SELF",

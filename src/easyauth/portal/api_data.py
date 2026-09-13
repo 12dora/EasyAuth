@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final
 
-from django.db.models import DateTimeField, Min, OuterRef, Q, QuerySet, Subquery
+from django.db.models import DateTimeField, Min, OuterRef, Prefetch, Q, QuerySet, Subquery
 from django.db.models.functions import Coalesce, Least
 from django.utils import timezone
 
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import JsonValue
+from easyauth.grants.grant_row_items import authorization_group_items, direct_grant_items
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
     AccessGrant,
@@ -16,7 +17,7 @@ from easyauth.grants.models import (
     AccessGrantPermission,
 )
 from easyauth.grants.permission_aggregation import grant_lifecycle_summary
-from easyauth.grants.query import resolve_user_permissions
+from easyauth.grants.query import expansion_catalog_for_grants, resolve_user_permissions
 from easyauth.portal.access_request_data import (
     access_request_item,
     access_request_page_for_user,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 
     from easyauth.accounts.models import UserMirror
     from easyauth.grants.managed_users import ManagedUsersDirectoryCache
+    from easyauth.grants.query import GrantExpansionCatalog
 
 DEFAULT_EXPIRING_DAYS: Final = 14
 __all__: Final = (
@@ -160,6 +162,17 @@ def _current_visible_grants(
 ) -> QuerySet[AccessGrant]:
     return (
         AccessGrant.objects.select_related("app")
+        .prefetch_related(
+            Prefetch(
+                "grant_groups",
+                queryset=AccessGrantGroup.objects.select_related("authorization_group"),
+            ),
+            Prefetch(
+                "grant_permissions",
+                queryset=AccessGrantPermission.objects.select_related("permission"),
+            ),
+            "app__scopes",
+        )
         .filter(
             user=user,
             app__is_active=True,
@@ -180,12 +193,14 @@ def _current_visible_grants(
 def _grant_items(grants: tuple[AccessGrant, ...]) -> tuple[PortalJsonObject, ...]:
     # 整页 grant 共享同一份目录缓存, MANAGED_USERS 解析最多发一次 HTTP。
     directory_cache: ManagedUsersDirectoryCache = {}
-    return tuple(_grant_item(grant, directory_cache) for grant in grants)
+    catalog = expansion_catalog_for_grants(grants)
+    return tuple(_grant_item(grant, directory_cache, catalog) for grant in grants)
 
 
 def _grant_item(
     grant: AccessGrant,
     directory_cache: ManagedUsersDirectoryCache,
+    catalog: GrantExpansionCatalog,
 ) -> PortalJsonObject:
     snapshot = resolve_user_permissions(
         user=grant.user,
@@ -206,4 +221,6 @@ def _grant_item(
         "snapshot_version": snapshot.snapshot_version,
         "grant_type": grant_type,
         "grant_expires_at": datetime_value(grant_expires_at),
+        "authorization_groups": authorization_group_items(grant),
+        "direct_grants": direct_grant_items(grant, catalog),
     }

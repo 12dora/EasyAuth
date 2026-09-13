@@ -14,7 +14,13 @@ from easyauth.applications.models import (
     AuthorizationGroupGrant,
     Permission,
 )
-from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
+from easyauth.grants.models import (
+    MEMBERSHIP_SOURCE_DEPARTMENT,
+    MEMBERSHIP_SOURCE_USER,
+    AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
 from easyauth.grants.query import ExpandedGrant, GroupSnapshot
 from easyauth.portal.api_data import current_grant_items_for_user
 from easyauth.portal.permission_aggregation import json_expanded_grants, json_groups
@@ -51,6 +57,7 @@ def test_current_permission_api_returns_groups_and_expanded_scoped_grants() -> N
         grant=grant,
         permission=refund_permission,
         scope_key=team_scope.key,
+        source=MEMBERSHIP_SOURCE_DEPARTMENT,
     )
 
     # When: 当前权限 API 聚合授权事实。
@@ -78,6 +85,25 @@ def test_current_permission_api_returns_groups_and_expanded_scoped_grants() -> N
             "permission_name_en": "Approve refunds",
             "scope_name": "团队",
             "scope_name_en": "Team",
+        },
+    ]
+    assert item["authorization_groups"] == [
+        {
+            "key": "sales-reader",
+            "kind": "role",
+            "name": "销售只读",
+            "expires_at": None,
+            "source": MEMBERSHIP_SOURCE_USER,
+        },
+    ]
+    assert item["direct_grants"] == [
+        {
+            "permission": "orders.refund.approve",
+            "permission_name": "审批退款",
+            "scope": "TEAM",
+            "scope_name": "团队",
+            "expires_at": None,
+            "source": MEMBERSHIP_SOURCE_DEPARTMENT,
         },
     ]
     assert item["grant_version"] == grant.version
@@ -169,6 +195,9 @@ def test_current_permission_api_reports_mixed_membership_lifecycles_without_prom
     # Then: 不把限时项提升为永久, 也不把永久项压成限时。
     assert item["grant_type"] == "mixed"
     assert item["grant_expires_at"] == expires_at.isoformat()
+    assert item["authorization_groups"][0]["source"] == MEMBERSHIP_SOURCE_USER
+    assert item["direct_grants"][0]["source"] == MEMBERSHIP_SOURCE_USER
+    assert item["direct_grants"][0]["expires_at"] == expires_at.isoformat()
 
 
 def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 from django.db.models import Prefetch, QuerySet
 
@@ -8,6 +8,7 @@ from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.person_payload import person_row_fields
 from easyauth.api.datetime_json import datetime_value
 from easyauth.applications.models import AuthorizationGroupGrant
+from easyauth.grants.grant_row_items import authorization_group_items, direct_grant_items
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 from easyauth.grants.permission_aggregation import grant_lifecycle_summary
 from easyauth.grants.query import (
@@ -18,7 +19,7 @@ from easyauth.grants.query import (
 from easyauth.portal.permission_aggregation import json_expanded_grants, json_groups
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Mapping, Sequence
 
     from easyauth.api.errors import JsonValue
     from easyauth.grants.managed_users import ManagedUsersDirectoryCache
@@ -101,63 +102,8 @@ def serialize_access_grant_row(
         "app_alias": grant.app.alias,
         "grant_type": grant_type,
         "grant_expires_at": datetime_value(grant_expires_at),
-        "authorization_groups": _authorization_group_rows(grant),
-        "direct_grants": _direct_grant_rows(grant, catalog),
+        "authorization_groups": authorization_group_items(grant),
+        "direct_grants": direct_grant_items(grant, catalog),
         "groups": json_groups(snapshot.groups),
         "grants": json_expanded_grants(snapshot.grants),
     }
-
-
-def _authorization_group_rows(grant: AccessGrant) -> list[JsonValue]:
-    cache = getattr(grant, "_prefetched_objects_cache", {})
-    if "grant_groups" in cache:
-        rows = cast(
-            "Iterable[AccessGrantGroup]",
-            grant.grant_groups.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        )
-    else:
-        rows = AccessGrantGroup.objects.select_related("authorization_group").filter(grant=grant)
-    items: list[JsonValue] = []
-    for link in sorted(rows, key=lambda item: (item.authorization_group.key, item.source)):
-        group = link.authorization_group
-        items.append(
-            {
-                "key": group.key,
-                "kind": group.kind,
-                "name": group.name,
-                "expires_at": datetime_value(link.expires_at),
-                "source": link.source,
-            },
-        )
-    return items
-
-
-def _direct_grant_rows(
-    grant: AccessGrant,
-    catalog: GrantExpansionCatalog,
-) -> list[JsonValue]:
-    cache = getattr(grant, "_prefetched_objects_cache", {})
-    if "grant_permissions" in cache:
-        rows = cast(
-            "Iterable[AccessGrantPermission]",
-            grant.grant_permissions.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        )
-    else:
-        rows = AccessGrantPermission.objects.select_related("permission").filter(grant=grant)
-    scope_names = {
-        scope.key: scope.name for scope in catalog.scopes_by_app_id.get(grant.app_id, ())
-    }
-    items: list[JsonValue] = []
-    for link in sorted(rows, key=lambda item: (item.permission.key, item.scope_key, item.source)):
-        permission = link.permission
-        items.append(
-            {
-                "permission": permission.key,
-                "permission_name": permission.name,
-                "scope": link.scope_key,
-                "scope_name": scope_names.get(link.scope_key, link.scope_key),
-                "expires_at": datetime_value(link.expires_at),
-                "source": link.source,
-            },
-        )
-    return items

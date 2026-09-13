@@ -54,6 +54,35 @@
 时必须把这两个值原样作为 `base_grant_id` 与 `base_grant_revision` 提交，用来固定申请基于的
 授权修订。
 
+每条还包含与控制台授权行同形的成员明细（必填，不得省略）：
+
+```json
+{
+  "authorization_groups": [
+    {
+      "key": "sales",
+      "kind": "role",
+      "name": "销售",
+      "expires_at": null,
+      "source": "user"
+    }
+  ],
+  "direct_grants": [
+    {
+      "permission": "order.order.view",
+      "permission_name": "查看订单",
+      "scope": "GLOBAL",
+      "scope_name": "全局",
+      "expires_at": null,
+      "source": "department"
+    }
+  ]
+}
+```
+
+`source` 为 `user`（本人授权）或 `department`（组织授权下发）。`groups` / `grants` 仍是展开后的有效快照。
+`GET /portal/api/v1/me/grants/expiring` 使用同一项形状。
+
 ---
 
 ## GET /portal/api/v1/me/grants/expiring
