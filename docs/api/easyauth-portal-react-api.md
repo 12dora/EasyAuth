@@ -39,6 +39,7 @@
 
 可选 `ordering=<field>` 或 `ordering=-<field>`（单字段；`-` 表示降序）。未知字段返回
 `400 VALIDATION_ERROR`。省略时保持各列表原默认顺序，并附加稳定并列键 `pk`/`id`。
+`null` 与空字符串在升序、降序下都排在最后，空单元格始终留在表格底部。
 
 人员对象 `{ user_id, name, department, account_kind }` 的 `account_kind`：
 
