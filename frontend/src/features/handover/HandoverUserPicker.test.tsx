@@ -61,4 +61,38 @@ describe("HandoverUserPicker", () => {
     await user.click(screen.getByRole("combobox", { name: "接收人" }));
     expect(await screen.findByTestId("handover-user-picker-empty")).toBeVisible();
   });
+
+  test("键盘导航与 combobox 无障碍属性", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        new Response(
+          JSON.stringify({
+            items: [
+              { user_id: "u-1", name: "张某某", department: "销售" },
+              { user_id: "u-2", name: "李某某", department: "研发" },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    renderPicker(onChange);
+
+    const input = screen.getByRole("combobox", { name: "接收人" });
+    await user.click(input);
+    const first = await screen.findByRole("option", { name: /张某某/ });
+    expect(input).toHaveAttribute("aria-controls", first.id.replace(/-option-.*$/, ""));
+    expect(input).toHaveAttribute("aria-activedescendant", first.id);
+    expect(screen.getByRole("listbox")).toBeVisible();
+
+    await user.keyboard("{ArrowDown}");
+    expect(input).toHaveFocus();
+    const second = screen.getByRole("option", { name: /李某某/ });
+    expect(input).toHaveAttribute("aria-activedescendant", second.id);
+    await user.keyboard("{Enter}");
+    expect(onChange).toHaveBeenCalledWith({ user_id: "u-2", name: "李某某", department: "研发" });
+  });
 });

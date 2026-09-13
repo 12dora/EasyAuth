@@ -26,13 +26,29 @@ export interface UserOption {
 
 export type UserSearchPurpose = "employee" | "approver";
 
+/** 可插拔候选源: 交接候选人、转出方列表等走自己的接口, 键盘与下拉仍共用 combobox。 */
+export interface UserOptionQuerySource {
+  queryKey: readonly unknown[];
+  queryFn: (debouncedQuery: string) => Promise<UserOption[]>;
+  /** 除下拉打开外的额外开关; 默认 true。 */
+  enabled?: boolean;
+  /** 空搜索词也请求; 交接候选人打开即拉取。默认 false。 */
+  allowEmptyQuery?: boolean;
+}
+
 const OPTION_BASE_CLASS =
   "flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-[2px] px-2.5 py-1.5 text-left transition-colors";
 
+const DEFAULT_DEBOUNCE_MS = 250;
+
 interface UserComboboxOptions {
   query: string;
-  purpose: UserSearchPurpose;
+  /** 控制台 user-options 的 purpose; 与 optionSource 二选一。 */
+  purpose?: UserSearchPurpose;
+  /** 自定义候选源; 提供时不再打 user-options。 */
+  optionSource?: UserOptionQuerySource;
   excludedUserIds?: string[];
+  debounceMs?: number;
   navigateWhenClosed: boolean;
   openOnArrowDown: boolean;
   closeOnPick: boolean;
@@ -44,7 +60,9 @@ interface UserComboboxOptions {
 export function useUserCombobox({
   query,
   purpose,
+  optionSource,
   excludedUserIds = EMPTY_USER_IDS,
+  debounceMs = DEFAULT_DEBOUNCE_MS,
   navigateWhenClosed,
   openOnArrowDown,
   closeOnPick,
@@ -55,7 +73,7 @@ export function useUserCombobox({
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const containerRef = useCloseOnOutsidePointerDown(() => setOpen(false));
-  const optionsQuery = useUserOptions(query, open, purpose);
+  const optionsQuery = useUserOptionQuery(query, open, purpose, optionSource, debounceMs);
   const options = useMemo(
     () => (optionsQuery.data ?? []).filter((option) => !excludedUserIds.includes(option.user_id)),
     [excludedUserIds, optionsQuery.data],
@@ -121,22 +139,41 @@ export function useUserCombobox({
 
 const EMPTY_USER_IDS: string[] = [];
 
-function useUserOptions(query: string, enabled: boolean, purpose: UserSearchPurpose) {
+function useUserOptionQuery(
+  query: string,
+  open: boolean,
+  purpose: UserSearchPurpose | undefined,
+  optionSource: UserOptionQuerySource | undefined,
+  debounceMs: number,
+) {
   const [debouncedQuery, setDebouncedQuery] = useState(query);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
+    const timer = window.setTimeout(() => setDebouncedQuery(query), debounceMs);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [query, debounceMs]);
+
+  const allowEmpty = Boolean(optionSource?.allowEmptyQuery);
+  const extraEnabled = optionSource?.enabled ?? true;
+  const enabled = open && extraEnabled && (allowEmpty || debouncedQuery !== "");
 
   return useQuery({
-    queryKey: ["console", "user-search", purpose, debouncedQuery],
-    queryFn: () =>
-      apiRequest<ListPayload<UserOption>>(
+    queryKey: optionSource
+      ? [...optionSource.queryKey, debouncedQuery]
+      : ["console", "user-search", purpose, debouncedQuery],
+    queryFn: async (): Promise<UserOption[]> => {
+      if (optionSource) {
+        return optionSource.queryFn(debouncedQuery);
+      }
+      if (!purpose) {
+        throw new Error("useUserCombobox 需要 purpose 或 optionSource");
+      }
+      const payload = await apiRequest<ListPayload<UserOption>>(
         `/console/api/v1/user-options?q=${encodeURIComponent(debouncedQuery)}&purpose=${purpose}`,
-      ),
-    enabled: enabled && debouncedQuery !== "",
-    select: (payload) => itemsFromPayload<UserOption>(payload),
+      );
+      return itemsFromPayload<UserOption>(payload);
+    },
+    enabled,
     placeholderData: (previous) => previous,
   });
 }
@@ -189,6 +226,9 @@ export function UserOptionList({
   getOptionId,
   onPick,
   onRetry,
+  emptyLabel,
+  loadingLabel,
+  emptyTestId,
 }: {
   listId: string;
   options: UserOption[];
@@ -198,6 +238,9 @@ export function UserOptionList({
   getOptionId: (option: UserOption) => string;
   onPick: (option: UserOption) => void;
   onRetry: () => void;
+  emptyLabel?: string;
+  loadingLabel?: string;
+  emptyTestId?: string;
 }) {
   const { t } = useI18n();
 
@@ -221,10 +264,12 @@ export function UserOptionList({
         </div>
       ) : null}
       {!error && isLoading && options.length === 0 ? (
-        <p className="px-2.5 py-1.5 text-body text-ink-faint">{t("userSelect.loading")}</p>
+        <p className="px-2.5 py-1.5 text-body text-ink-faint">{loadingLabel ?? t("userSelect.loading")}</p>
       ) : null}
       {!error && !isLoading && options.length === 0 ? (
-        <p className="px-2.5 py-1.5 text-body text-ink-faint">{t("userSelect.empty")}</p>
+        <p className="px-2.5 py-1.5 text-body text-ink-faint" data-testid={emptyTestId}>
+          {emptyLabel ?? t("userSelect.empty")}
+        </p>
       ) : null}
       {!error
         ? options.map((option, index) => (
@@ -241,7 +286,7 @@ export function UserOptionList({
   );
 }
 
-function UserOptionRow({
+export function UserOptionRow({
   option,
   optionId,
   highlighted,

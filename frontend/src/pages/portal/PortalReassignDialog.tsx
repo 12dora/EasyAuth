@@ -1,18 +1,17 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
 import { Field, TextArea, TextInput } from "../../components/Field";
 import { StatusBanner } from "../../components/StatusBanner";
-import { TruncatedText } from "../../components/TruncatedText";
-import { userOptionName, userSecondaryLabel } from "../../components/UserCombobox";
+import { UserOptionList, useUserCombobox } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
 import { apiErrorReason } from "../../lib/apiErrorReason";
-import type { HandoverTaskPayload, HandoverUserRef } from "../../lib/domain";
+import type { HandoverCandidate, HandoverTaskPayload, HandoverUserRef } from "../../lib/domain";
 
 interface AppOption {
   app_key: string;
@@ -182,32 +181,48 @@ function ReassignSubjectPicker({
   onChange: (user: HandoverUserRef | null) => void;
 }) {
   const { t } = useI18n();
+  const generatedId = useId();
+  const listId = `${generatedId}-listbox`;
   const [input, setInput] = useState(value?.name ?? "");
-  const [debounced, setDebounced] = useState("");
-  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     setInput(value?.name ?? "");
   }, [value?.name, value?.user_id]);
 
-  useEffect(() => {
-    const id = window.setTimeout(() => setDebounced(input.trim()), 300);
-    return () => window.clearTimeout(id);
-  }, [input]);
+  const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } =
+    useUserCombobox({
+      query: input.trim(),
+      optionSource: {
+        queryKey: ["portal", "reassign-subject-candidates"],
+        queryFn: async (debouncedQuery) => {
+          const payload = await apiRequest<{ items: HandoverCandidate[] }>(
+            `/portal/api/v1/handover-candidates?purpose=reassign_subject&q=${encodeURIComponent(debouncedQuery)}`,
+          );
+          return payload.items ?? [];
+        },
+        allowEmptyQuery: true,
+      },
+      debounceMs: 300,
+      navigateWhenClosed: false,
+      openOnArrowDown: false,
+      closeOnPick: true,
+      onPick: (option) => {
+        onChange({ user_id: option.user_id, name: option.name, department: option.department });
+        setInput(option.name);
+      },
+    });
 
-  const query = useQuery({
-    queryKey: ["portal", "reassign-subject-candidates", debounced],
-    queryFn: () =>
-      apiRequest<{ items: Array<{ user_id: string; name: string; department?: string }> }>(
-        `/portal/api/v1/handover-candidates?purpose=reassign_subject&q=${encodeURIComponent(debounced)}`,
-      ),
-    enabled: open,
-    placeholderData: (previous) => previous,
-  });
+  const getOptionId = (option: { user_id: string }) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <TextInput
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        aria-controls={listId}
+        aria-activedescendant={activeOption ? getOptionId(activeOption) : undefined}
+        autoComplete="off"
         aria-label={t("handover.portal.reassign.subject")}
         value={input}
         placeholder={t("handover.userPicker.placeholder")}
@@ -219,32 +234,21 @@ function ReassignSubjectPicker({
           }
           setOpen(true);
         }}
+        onKeyDown={onKeyDown}
       />
       {open ? (
-        <div className="absolute left-0 right-0 z-20 mt-1 max-h-48 overflow-auto rounded-[3px] border border-ink/12 bg-paper p-1 shadow-lg">
-          {(query.data?.items ?? []).length === 0 ? (
-            <p className="px-2 py-1.5 text-body text-ink-faint">{t("handover.userPicker.empty")}</p>
-          ) : (
-            (query.data?.items ?? []).map((item) => {
-              const secondary = userSecondaryLabel(item, t);
-              return (
-              <button
-                key={item.user_id}
-                type="button"
-                className="block w-full px-2 py-1.5 text-left text-body hover:bg-paper-deep"
-                onClick={() => {
-                  onChange({ user_id: item.user_id, name: item.name, department: item.department });
-                  setInput(userOptionName(item));
-                  setOpen(false);
-                }}
-              >
-                {userOptionName(item)}
-                {secondary ? <TruncatedText className="ml-2 text-caption text-ink-faint" text={secondary} /> : null}
-              </button>
-              );
-            })
-          )}
-        </div>
+        <UserOptionList
+          listId={listId}
+          options={options}
+          isLoading={optionsQuery.isLoading || optionsQuery.isFetching}
+          error={optionsQuery.error as Error | null}
+          highlightIndex={highlightIndex}
+          getOptionId={getOptionId}
+          onPick={pick}
+          onRetry={() => void optionsQuery.refetch()}
+          emptyLabel={t("handover.userPicker.empty")}
+          loadingLabel={t("handover.userPicker.loading")}
+        />
       ) : null}
     </div>
   );

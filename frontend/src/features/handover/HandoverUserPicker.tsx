@@ -1,17 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { TextInput } from "../../components/Field";
-import { TruncatedText } from "../../components/TruncatedText";
-import { userOptionName, userSecondaryLabel } from "../../components/UserCombobox";
+import { UserOptionList, useUserCombobox } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
-import { cn } from "../../lib/cn";
 import type { HandoverCandidate, HandoverUserRef } from "../../lib/domain";
 import { handoverCandidatesUrl, type HandoverSurface } from "./surface";
-
-const OPTION_BASE_CLASS =
-  "flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-[2px] px-2.5 py-1.5 text-left transition-colors";
 
 export interface HandoverUserPickerProps {
   surface: HandoverSurface;
@@ -38,83 +32,44 @@ export function HandoverUserPicker({
   const generatedId = useId();
   const listId = `${id ?? generatedId}-listbox`;
   const [inputValue, setInputValue] = useState(value?.name ?? "");
-  const [open, setOpen] = useState(false);
-  const [highlightIndex, setHighlightIndex] = useState(0);
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setInputValue(value?.name ?? "");
   }, [value?.name, value?.user_id]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedQuery(inputValue.trim()), 300);
-    return () => window.clearTimeout(timer);
-  }, [inputValue]);
-
-  useEffect(() => {
-    function closeOnOutside(event: PointerEvent) {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("pointerdown", closeOnOutside);
-    return () => document.removeEventListener("pointerdown", closeOnOutside);
-  }, []);
-
-  const optionsQuery = useQuery({
-    queryKey: ["handover", "candidates", surface, String(taskId), debouncedQuery],
-    queryFn: async () => {
-      const payload = await apiRequest<{ items: HandoverCandidate[] }>(
-        handoverCandidatesUrl(surface, taskId, debouncedQuery),
-      );
-      return payload.items ?? [];
-    },
-    enabled: open && !disabled,
-    placeholderData: (previous) => previous,
-  });
-  const options = useMemo(() => optionsQuery.data ?? [], [optionsQuery.data]);
-
-  useEffect(() => {
-    setHighlightIndex(0);
-  }, [options]);
-
-  const pick = (option: HandoverCandidate) => {
-    onChange({
-      user_id: option.user_id,
-      name: option.name,
-      department: option.department,
+  const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } =
+    useUserCombobox({
+      query: inputValue.trim(),
+      optionSource: {
+        queryKey: ["handover", "candidates", surface, String(taskId)],
+        queryFn: async (debouncedQuery) => {
+          const payload = await apiRequest<{ items: HandoverCandidate[] }>(
+            handoverCandidatesUrl(surface, taskId, debouncedQuery),
+          );
+          return payload.items ?? [];
+        },
+        enabled: !disabled,
+        allowEmptyQuery: true,
+      },
+      debounceMs: 300,
+      navigateWhenClosed: false,
+      openOnArrowDown: false,
+      closeOnPick: true,
+      onPick: (option) => {
+        onChange({
+          user_id: option.user_id,
+          name: option.name,
+          department: option.department,
+        });
+        setInputValue(option.name);
+      },
     });
-    setInputValue(option.name);
-    setOpen(false);
-  };
+
+  const getOptionId = (option: { user_id: string }) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
 
   const clear = () => {
     onChange(null);
     setInputValue("");
-  };
-
-  const activeOption = open ? options[highlightIndex] : undefined;
-  const getOptionId = (option: HandoverCandidate) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
-
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Escape") {
-      setOpen(false);
-      return;
-    }
-    if (!open) {
-      return;
-    }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setHighlightIndex((index) => Math.min(index + 1, Math.max(options.length - 1, 0)));
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setHighlightIndex((index) => Math.max(index - 1, 0));
-    } else if (event.key === "Enter" && options[highlightIndex]) {
-      event.preventDefault();
-      pick(options[highlightIndex]);
-    }
   };
 
   return (
@@ -158,47 +113,19 @@ export function HandoverUserPicker({
         ) : null}
       </div>
       {open && !disabled ? (
-        <div
-          id={listId}
-          role="listbox"
-          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-64 overflow-y-auto rounded-[3px] border border-ink/12 bg-paper p-1 shadow-lg"
-        >
-          {optionsQuery.error ? (
-            <p className="px-2.5 py-1.5 text-body text-signal">{(optionsQuery.error as Error).message}</p>
-          ) : null}
-          {!optionsQuery.error && (optionsQuery.isLoading || optionsQuery.isFetching) && options.length === 0 ? (
-            <p className="px-2.5 py-1.5 text-body text-ink-faint">{t("handover.userPicker.loading")}</p>
-          ) : null}
-          {!optionsQuery.error && !optionsQuery.isLoading && options.length === 0 ? (
-            <p className="px-2.5 py-1.5 text-body text-ink-faint" data-testid="handover-user-picker-empty">
-              {t("handover.userPicker.empty")}
-            </p>
-          ) : null}
-          {!optionsQuery.error
-            ? options.map((option, index) => {
-                const secondary = userSecondaryLabel(option, t);
-                return (
-                <div
-                  key={option.user_id}
-                  id={getOptionId(option)}
-                  role="option"
-                  aria-selected={index === highlightIndex}
-                  className={cn(
-                    OPTION_BASE_CLASS,
-                    index === highlightIndex ? "bg-paper-deep text-ink" : "text-ink-soft hover:bg-paper-deep hover:text-ink",
-                  )}
-                  onPointerDown={(event) => {
-                    event.preventDefault();
-                    pick(option);
-                  }}
-                >
-                  <span className="text-body font-medium">{userOptionName(option)}</span>
-                  {secondary ? <TruncatedText className="w-full text-xs text-ink-faint" text={secondary} /> : null}
-                </div>
-                );
-              })
-            : null}
-        </div>
+        <UserOptionList
+          listId={listId}
+          options={options}
+          isLoading={optionsQuery.isLoading || optionsQuery.isFetching}
+          error={optionsQuery.error as Error | null}
+          highlightIndex={highlightIndex}
+          getOptionId={getOptionId}
+          onPick={pick}
+          onRetry={() => void optionsQuery.refetch()}
+          emptyLabel={t("handover.userPicker.empty")}
+          loadingLabel={t("handover.userPicker.loading")}
+          emptyTestId="handover-user-picker-empty"
+        />
       ) : null}
     </div>
   );

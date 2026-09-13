@@ -47,9 +47,9 @@ describe("PortalReassignDialog", () => {
     );
 
     // 选转出方
-    const subjectInput = screen.getByRole("textbox", { name: "转出方" });
+    const subjectInput = screen.getByRole("combobox", { name: "转出方" });
     await user.click(subjectInput);
-    await user.click(await screen.findByRole("button", { name: /下属甲/ }));
+    await user.click(await screen.findByRole("option", { name: /下属甲/ }));
     // 选应用
     await user.click(await screen.findByRole("checkbox", { name: /EasyTrade/ }));
     // 理由过短
@@ -65,6 +65,48 @@ describe("PortalReassignDialog", () => {
     await waitFor(() => {
       expect(screen.getByText("你没有该员工的管理权限，请联系管理员处理。")).toBeVisible();
     });
+  });
+
+  test("转出方选择框支持键盘导航与 combobox 无障碍属性", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url.includes("purpose=reassign_subject")) {
+          return new Response(
+            JSON.stringify({
+              items: [
+                { user_id: "u-sub", name: "下属甲", department: "销售" },
+                { user_id: "u-sub-2", name: "下属乙", department: "研发" },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        throw new Error(`GET ${url}`);
+      }),
+    );
+    const user = userEvent.setup();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <PortalReassignDialog onClose={() => undefined} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const input = screen.getByRole("combobox", { name: "转出方" });
+    await user.click(input);
+    const first = await screen.findByRole("option", { name: /下属甲/ });
+    expect(screen.getByRole("listbox")).toBeVisible();
+    expect(input).toHaveAttribute("aria-activedescendant", first.id);
+    await user.keyboard("{ArrowDown}");
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute(
+      "aria-activedescendant",
+      screen.getByRole("option", { name: /下属乙/ }).id,
+    );
   });
 });
 

@@ -1,10 +1,14 @@
-import { describe, expect, test } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { Translator } from "../lib/status";
 import {
   formatPeople,
   personNameWithDepartment,
   resolvePeople,
+  useUserCombobox,
   userOptionName,
   userSecondaryLabel,
 } from "./UserCombobox";
@@ -66,5 +70,48 @@ describe("resolvePeople", () => {
       { user_id: "u-1", name: "张三", department: "销售部" },
     ]);
     expect(userOptionName({ user_id: "u-2", name: "" })).toBe("u-2");
+  });
+});
+
+describe("useUserCombobox optionSource", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("打开后走调用方 queryFn, 不打 user-options", async () => {
+    const queryFn = vi.fn(async () => [{ user_id: "u-1", name: "甲", department: "销售" }]);
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(
+      () =>
+        useUserCombobox({
+          query: "",
+          optionSource: {
+            queryKey: ["custom", "people"],
+            queryFn,
+            allowEmptyQuery: true,
+          },
+          navigateWhenClosed: false,
+          openOnArrowDown: false,
+          closeOnPick: true,
+          onPick: () => undefined,
+        }),
+      { wrapper },
+    );
+
+    expect(queryFn).not.toHaveBeenCalled();
+    act(() => {
+      result.current.setOpen(true);
+    });
+    await waitFor(() =>
+      expect(result.current.options).toEqual([{ user_id: "u-1", name: "甲", department: "销售" }]),
+    );
+    expect(queryFn).toHaveBeenCalledWith("");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
