@@ -5,6 +5,9 @@ from typing import TYPE_CHECKING, Final, cast
 
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.accounts.department_paths import department_path_labels
+from easyauth.accounts.models import UserMirror
+from easyauth.accounts.person_payload import person_payload, unresolved_person_payload
 from easyauth.admin_console.api_payloads import paginated_list_payload
 from easyauth.admin_console.api_responses import (
     error_response as _error_response,
@@ -48,7 +51,7 @@ from easyauth.applications.ownership import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from django.db.models import QuerySet
 
@@ -161,12 +164,13 @@ def _listed_app_items(
     readiness_statuses = configuration_readiness_statuses_for_apps(apps)
     # 列表只展示 owner; 一次查出可见集合, 再交给 item presenter, 避免按 App 打 membership。
     owner_ids_by_app_id = _member_ids_by_app_id(apps, "owner")
+    owners_by_app_id = _owner_people_by_app_id(owner_ids_by_app_id)
     return tuple(
         _app_item(
             actor,
             app,
             readiness_statuses.get(app.id),
-            owner_ids=owner_ids_by_app_id.get(app.id, []),
+            owners=owners_by_app_id.get(app.id, []),
         )
         for app in apps
     )
@@ -177,13 +181,13 @@ def _app_item(
     app: App,
     readiness_status: str | None = None,
     *,
-    owner_ids: list[JsonValue] | None = None,
+    owners: list[JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     if readiness_status is None:
         readiness_status = configuration_readiness_for_app(app).status
     capabilities = _app_capabilities(actor, app)
-    if owner_ids is None:
-        owner_ids = _app_owner_ids(app)
+    if owners is None:
+        owners = _app_owners(app)
     return {
         "id": app.id,
         "app_key": app.app_key,
@@ -191,7 +195,7 @@ def _app_item(
         "alias": app.alias,
         "description": app.description,
         "is_active": app.is_active,
-        "owners": owner_ids,
+        "owners": owners,
         "configuration_status": readiness_status,
         "updated_at": app.updated_at.isoformat(),
         "can_manage": capabilities["can_edit_basic_info"],
@@ -226,8 +230,9 @@ def _configuration_issue_item(issue: ConfigurationIssue) -> dict[str, JsonValue]
     }
 
 
-def _app_owner_ids(app: App) -> list[JsonValue]:
-    return _app_member_ids(app, "owner")
+def _app_owners(app: App) -> list[JsonValue]:
+    owner_ids = [str(user_id) for user_id in _app_member_ids(app, "owner")]
+    return _owner_people_by_app_id({app.id: owner_ids}).get(app.id, [])
 
 
 def _app_member_ids(app: App, role: str) -> list[JsonValue]:
@@ -239,9 +244,9 @@ def _app_member_ids(app: App, role: str) -> list[JsonValue]:
     return result
 
 
-def _member_ids_by_app_id(apps: tuple[App, ...], role: str) -> dict[int, list[JsonValue]]:
+def _member_ids_by_app_id(apps: tuple[App, ...], role: str) -> dict[int, list[str]]:
     app_ids = tuple(app.id for app in apps)
-    member_ids_by_app_id: dict[int, list[JsonValue]] = {app_id: [] for app_id in app_ids}
+    member_ids_by_app_id: dict[int, list[str]] = {app_id: [] for app_id in app_ids}
     if not app_ids:
         return member_ids_by_app_id
     membership_rows = (
@@ -257,6 +262,54 @@ def _member_ids_by_app_id(apps: tuple[App, ...], role: str) -> dict[int, list[Js
         app_id = cast("int", raw_app_id)
         member_ids_by_app_id.setdefault(app_id, []).append(cast("str", raw_user_id))
     return member_ids_by_app_id
+
+
+def _owner_people_by_app_id(
+    owner_ids_by_app_id: Mapping[int, list[str]],
+) -> dict[int, list[JsonValue]]:
+    unique_ids = tuple(
+        dict.fromkeys(
+            user_id for user_ids in owner_ids_by_app_id.values() for user_id in user_ids
+        ),
+    )
+    users = _users_by_id(unique_ids)
+    labels = department_path_labels(users.values())
+    return {
+        app_id: _sorted_owner_people(user_ids, users=users, labels=labels)
+        for app_id, user_ids in owner_ids_by_app_id.items()
+    }
+
+
+def _users_by_id(user_ids: tuple[str, ...]) -> dict[str, UserMirror]:
+    if not user_ids:
+        return {}
+    return {
+        user.authentik_user_id: user
+        for user in UserMirror.objects.filter(authentik_user_id__in=user_ids)
+    }
+
+
+def _sorted_owner_people(
+    user_ids: list[str],
+    *,
+    users: Mapping[str, UserMirror],
+    labels: Mapping[str, str],
+) -> list[JsonValue]:
+    people: list[JsonValue] = [
+        person_payload(users[user_id], labels)
+        if user_id in users
+        else unresolved_person_payload(user_id)
+        for user_id in user_ids
+    ]
+    people.sort(key=_owner_sort_key)
+    return people
+
+
+def _owner_sort_key(person: JsonValue) -> tuple[str, str]:
+    if not isinstance(person, dict):
+        message = "应用 owner 必须是人员对象"
+        raise TypeError(message)
+    return (str(person.get("name", "")), str(person.get("user_id", "")))
 
 
 def _visible_apps_queryset(actor: ConsoleActor) -> QuerySet[App]:

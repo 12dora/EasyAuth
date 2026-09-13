@@ -64,7 +64,7 @@ def test_apps_list_includes_documented_contract_fields() -> None:
     assert item["alias"] == ""
     assert item["description"] == ""
     assert item["id"] == app.id
-    assert item["owners"] == ["apps-contract-owner"]
+    assert item["owners"] == [_local_person("apps-contract-owner")]
     assert item["configuration_status"] == "blocking"
     assert _json_object(item["capabilities"])["can_toggle_active"] is True
     assert isinstance(item["updated_at"], str)
@@ -223,7 +223,7 @@ def test_app_detail_includes_documented_summary_fields() -> None:
     item = _json_object(body["app"])
     assert response.status_code == HTTPStatus.OK
     assert active_token.credential.id != inactive_token.credential.id
-    assert item["owners"] == ["apps-contract-detail-owner"]
+    assert item["owners"] == [_local_person("apps-contract-detail-owner")]
     assert item["developers"] == ["apps-contract-detail-developer"]
     assert item["authorization_group_count"] == EXPECTED_DETAIL_COUNT
     assert item["permission_count"] == EXPECTED_DETAIL_COUNT
@@ -269,7 +269,7 @@ def test_apps_create_success_response_uses_detail_contract() -> None:
     assert item["app_key"] == "apps-contract-create-crm"
     assert item["alias"] == ""
     assert item["description"] == "客户管理"
-    assert item["owners"] == ["apps-contract-create-owner"]
+    assert item["owners"] == [_local_person("apps-contract-create-owner")]
     assert item["developers"] == ["apps-contract-create-dev"]
 
 
@@ -428,6 +428,15 @@ def _authorization_group_with_rule(*, app: App, key: str, name: str) -> Authoriz
         approver_userids=["manager-001"],
     )
     return group
+
+
+def _local_person(user_id: str) -> dict[str, str]:
+    return {
+        "user_id": user_id,
+        "name": "",
+        "department": "",
+        "account_kind": "local",
+    }
 
 
 def _expected_detail_fields() -> set[str]:

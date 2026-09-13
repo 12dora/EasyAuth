@@ -9,6 +9,7 @@ from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
 
+from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import (
     App,
@@ -237,7 +238,7 @@ def test_ops1_apps_api_superuser_creates_app_with_memberships_and_audit() -> Non
     assert owners == ["owner-a", "shared-user"]
     assert developers == ["dev-a"]
     assert response_app["app_key"] == app.app_key
-    assert response_app["owners"] == owners
+    assert response_app["owners"] == [_local_person(user_id) for user_id in owners]
     assert response_app["developers"] == developers
     assert AuditLog.objects.filter(
         actor_id="ops1-app-create-admin",
@@ -264,13 +265,55 @@ def test_ops1_apps_api_create_defaults_owner_to_current_actor() -> None:
     # Then: 当前 actor 自动成为 owner。
     app = App.objects.get(app_key="ops1-api-create-default-owner")
     assert response.status_code == HTTPStatus.CREATED
-    assert response.json()["app"]["owners"] == ["ops1-app-create-default-owner"]
+    assert response.json()["app"]["owners"] == [
+        _local_person("ops1-app-create-default-owner"),
+    ]
     assert AppMembership.objects.filter(
         app=app,
         user_id="ops1-app-create-default-owner",
         role="owner",
         is_active=True,
     ).exists()
+
+
+def test_ops1_apps_api_owners_are_person_refs_sorted_by_name_then_user_id() -> None:
+    client = _logged_in_superuser("ops1-apps-owner-sort-admin")
+    app = App.objects.create(app_key="ops1-owner-sort-app", name="CRM")
+    _ = UserMirror.objects.create(
+        authentik_user_id="ops1-owner-z",
+        name="Alice",
+        department="销售部",
+    )
+    _ = UserMirror.objects.create(
+        authentik_user_id="ops1-owner-a",
+        name="Alice",
+        department="研发部",
+    )
+    _ = UserMirror.objects.create(
+        authentik_user_id="ops1-owner-b",
+        name="Bob",
+        department="安环部",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="dt-owner-b",
+    )
+    _ = AppMembership.objects.create(app=app, user_id="ops1-owner-b", role="owner")
+    _ = AppMembership.objects.create(app=app, user_id="ops1-owner-z", role="owner")
+    _ = AppMembership.objects.create(app=app, user_id="ops1-owner-a", role="owner")
+
+    response = client.get(f"{APPS_API_URL}/{app.app_key}")
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["app"]["owners"] == [
+        _local_person("ops1-owner-a", name="Alice", department="研发部"),
+        _local_person("ops1-owner-z", name="Alice", department="销售部"),
+        {
+            "user_id": "ops1-owner-b",
+            "name": "Bob",
+            "department": "安环部",
+            "account_kind": "directory",
+        },
+    ]
 
 
 def test_ops1_apps_api_non_superuser_cannot_create_app() -> None:
@@ -972,12 +1015,21 @@ def test_ops1_apps_api_honors_ordering_and_rejects_unknown_field() -> None:
     }
 
 
-def _seed_list_query_app(index: int, owner_user_ids: tuple[str, ...]) -> list[str]:
+def _seed_list_query_app(index: int, owner_user_ids: tuple[str, ...]) -> list[dict[str, str]]:
     app = App.objects.create(app_key=f"ops1-list-nplusone-{index}", name=f"App {index}")
     for user_id in owner_user_ids:
         _ = AppMembership.objects.create(app=app, user_id=user_id, role="owner")
     _ = AppCredentialService.create_static_token(app=app, name=f"token-{index}")
-    return list(owner_user_ids)
+    return [_local_person(user_id) for user_id in owner_user_ids]
+
+
+def _local_person(user_id: str, *, name: str = "", department: str = "") -> dict[str, str]:
+    return {
+        "user_id": user_id,
+        "name": name,
+        "department": department,
+        "account_kind": "local",
+    }
 
 
 def _table_query_count(queries: CaptureQueriesContext, table: str) -> int:

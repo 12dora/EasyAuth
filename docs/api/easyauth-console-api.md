@@ -45,6 +45,11 @@
 | GET | `/apps/{app_key}/managed-users-preview` | 管理范围预览 |
 | POST | `/apps/{app_key}/permission-query-tests` | 权限查询联调 |
 
+应用列表和详情项的 `owners` 为人员对象数组（`user_id`、`name`、`department`、`account_kind`），
+按姓名再按 `user_id` 排序；整页 owner 成员关系、UserMirror 与部门路径一次性批量解析，不按 App
+回源。`developers` 仍为 Authentik 用户 ID 字符串数组。筛选参数 `owner_user_id` 不变，仍按成员
+关系的用户 ID 过滤。
+
 应用列表和详情项返回同一份细粒度能力事实：
 
 ```json
