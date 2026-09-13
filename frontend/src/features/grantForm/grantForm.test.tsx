@@ -456,6 +456,22 @@ describe("GrantForm", () => {
     expect(drafts.at(-1)?.authorizationGroupKeys).not.toContain("audit");
   });
 
+  test("锁定的授权组标签不渲染关闭按钮", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm(undefined, EMPTY_GRANT_DRAFT, {
+      lockedAuthorizationGroupKeys: ["audit"],
+    });
+
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    const auditOption = await authorizationGroupOption(user, "审计");
+    expect(auditOption).toHaveAttribute("aria-selected", "true");
+
+    const select = screen.getByLabelText("授权组").closest(".ant-select");
+    expect(select).not.toBeNull();
+    // maxTagCount=responsive 在 jsdom 里可能把 tag 收进 overflow, 但仍会渲染 selection-item。
+    expect(select?.querySelectorAll(".ant-select-selection-item-remove")).toHaveLength(0);
+  });
+
   test("组织授权锁定的权限不进草稿", async () => {
     const user = userEvent.setup({ delay: null });
     const drafts: GrantDraft[] = [];

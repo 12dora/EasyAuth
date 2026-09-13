@@ -177,7 +177,7 @@ export function GrantForm({
               <LockedSelectTag
                 label={props.label}
                 value={String(props.value)}
-                closable={props.closable}
+                closable={props.closable && !lockedGroupKeySet.has(String(props.value))}
                 onClose={props.onClose}
                 lockedGroupKeySet={lockedGroupKeySet}
                 lockedHint={resolvedLockedHint}
@@ -366,7 +366,7 @@ function LockedSelectTag({
       onMouseDown={onPreventMouseDown}
     >
       <span className="ant-select-selection-item-content">{label}</span>
-      {closable ? (
+      {closable && !locked ? (
         <span
           className="ant-select-selection-item-remove"
           onClick={onClose}
