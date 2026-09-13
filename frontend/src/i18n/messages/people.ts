@@ -115,10 +115,8 @@ export const zhCN = {
   "people.permissions": "权限",
 
   "people.permissionsDialog.title": "配置权限",
-  "people.permissionsDialog.message": "为「{name}」配置权限。目前仅可配置管理员身份，其余授权请在应用权限矩阵中处理。",
   "people.permissionsDialog.consoleAdmin": "管理员",
-  "people.permissionsDialog.consoleAdminCheckbox": "设为管理员，可进入管理后台",
-  "people.permissionsDialog.consoleAdminHint": "勾选后该人员门户右上角会出现「管理后台」入口，可进入控制台管理应用、权限与人员；取消勾选即收回该入口。",
+  "people.permissionsDialog.consoleAdminCheckbox": "系统管理员",
   "people.permissionsDialog.failed": "权限保存失败",
 } as const;
 
@@ -239,11 +237,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "people.permissions": "Permissions",
 
   "people.permissionsDialog.title": "Configure permissions",
-  "people.permissionsDialog.message":
-    "Configure permissions for \"{name}\". Only the administrator role is configurable here; other grants are managed in the application permission matrix.",
   "people.permissionsDialog.consoleAdmin": "Administrator",
-  "people.permissionsDialog.consoleAdminCheckbox": "Make this person an administrator with console access",
-  "people.permissionsDialog.consoleAdminHint":
-    "When checked, the person sees the \"Console\" entry in the portal's top-right corner and can manage applications, permissions and people. Unchecking removes that entry.",
+  "people.permissionsDialog.consoleAdminCheckbox": "System administrator",
   "people.permissionsDialog.failed": "Failed to save permissions",
 };

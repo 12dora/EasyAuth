@@ -75,9 +75,10 @@ describe("ConsolePeopleList", () => {
     // 管理员身份与在职状态无关, 因此「权限」入口每行都有(含已离职行)。
     expect(within(personRow("张三")).getByRole("button", { name: "权限" })).toBeVisible();
     expect(within(personRow("李四")).getByRole("button", { name: "权限" })).toBeVisible();
-    // 管理员列: 李四是管理员 → 徽章; 张三不是 → statusColumn 的空值占位。
+    // 管理员列: 李四是管理员 → 「是」; 张三不是 → textColumn 空值占位 "-"。
     expect(within(personRow("李四")).getByText("是")).toBeVisible();
     expect(within(personRow("张三")).queryByText("是")).not.toBeInTheDocument();
+    expect(within(personRow("张三")).getByText("-")).toBeVisible();
   });
 
   test("权限弹窗: 勾选管理员后 PUT console-admin, 成功即关闭并重新拉列表", async () => {
@@ -107,7 +108,7 @@ describe("ConsolePeopleList", () => {
     await user.click(within(personRow("张三")).getByRole("button", { name: "权限" }));
 
     const dialog = await screen.findByRole("dialog");
-    const checkbox = within(dialog).getByRole("checkbox", { name: "设为管理员，可进入管理后台" });
+    const checkbox = within(dialog).getByRole("checkbox", { name: "系统管理员" });
     expect(checkbox).not.toBeChecked();
     await user.click(checkbox);
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
@@ -119,7 +120,7 @@ describe("ConsolePeopleList", () => {
       );
       expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({ is_console_admin: true });
     });
-    // 成功后弹窗关闭, 且列表被重新拉取(新的一页里张三带上了管理员徽章)。
+    // 成功后弹窗关闭, 且列表被重新拉取(新的一页里张三管理员列为「是」)。
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await waitFor(() => expect(within(personRow("张三")).getByText("是")).toBeVisible());
   });
@@ -148,7 +149,7 @@ describe("ConsolePeopleList", () => {
 
     const dialog = await screen.findByRole("dialog");
     // 李四已是管理员, 弹窗初值就是勾选态; 取消勾选后保存。
-    const checkbox = within(dialog).getByRole("checkbox", { name: "设为管理员，可进入管理后台" });
+    const checkbox = within(dialog).getByRole("checkbox", { name: "系统管理员" });
     expect(checkbox).toBeChecked();
     await user.click(checkbox);
     await user.click(within(dialog).getByRole("button", { name: "保存" }));

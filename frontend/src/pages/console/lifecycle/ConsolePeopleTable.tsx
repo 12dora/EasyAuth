@@ -29,9 +29,6 @@ export interface PeopleRowActions {
   onOpenPermissions: (person: PersonRow) => void;
 }
 
-/** 管理员列的枚举值; 只用于让 statusColumn 渲染徽章, 不是后端字段的取值。 */
-const CONSOLE_ADMIN_VALUE = "yes";
-
 export function ConsolePeopleTable({
   people,
   isLoading,
@@ -95,16 +92,14 @@ function peopleColumns(
       sort,
     ),
     // 管理员是只读展示: 后端 GET /users 不支持按它筛选也不支持按它排序,
-    // 所以既不套 serverColumn 也不套 serverSortColumn, 并显式关掉内建筛选下拉;
-    // 写入只走行内「权限」弹窗。非管理员按 statusColumn 的空值约定展示 "-"。
+    // 所以既不套 serverColumn 也不套 serverSortColumn; 写入只走行内「权限」弹窗。
+    // 用纯文本而不是状态徽章: 管理员显示「是」, 非管理员按 textColumn 空值约定显示 "-"。
     // 位置紧跟姓名: 操作列是 fixed: "right" 的粘性列, 排在它前面的列在默认视口下会被
     // 压在粘性列底下要横向滚动才看得见, 而这一列的意义正是「不点开就能一眼扫出谁是管理员」。
-    statusColumn<PersonRow>({
+    textColumn<PersonRow>({
       key: "is_console_admin",
       title: t("people.column.consoleAdmin"),
-      getValue: (person) => (person.is_console_admin ? CONSOLE_ADMIN_VALUE : ""),
-      options: [{ value: CONSOLE_ADMIN_VALUE, label: t("people.consoleAdmin.yes"), tone: "bond" }],
-      filter: false,
+      getValue: (person) => (person.is_console_admin ? t("people.consoleAdmin.yes") : ""),
       width: 90,
     }),
     // 部门与邮箱后端不支持单列过滤(它们由工具栏的 q 一起做跨列搜索), 但支持排序。
