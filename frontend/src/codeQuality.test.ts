@@ -98,6 +98,35 @@ describe("前端体积棘轮", () => {
       }),
     ).not.toThrow();
   });
+
+  test("countStateEffect 只计 hook 体顶层 useState/useEffect, 不进入嵌套函数", () => {
+    const sourceFile = ts.createSourceFile(
+      "useExample.ts",
+      `
+function useExample() {
+  const [a, setA] = useState(0);
+  useEffect(() => {
+    const [inner, setInner] = useState(1);
+    useEffect(() => undefined, []);
+  }, []);
+  function localHelper() {
+    const [b, setB] = useState(2);
+    useEffect(() => undefined, []);
+  }
+  const nested = () => {
+    useState(3);
+  };
+  return { a, localHelper, nested };
+}
+`,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    const hook = collectFunctions(sourceFile).find((fn) => fn.name === "useExample");
+    expect(hook).toBeDefined();
+    expect(countStateEffect(hook!.node)).toBe(2);
+  });
 });
 
 interface MeasuredTree {
@@ -216,6 +245,9 @@ function nodeSpan(node: ts.Node, sourceFile: ts.SourceFile): number {
 function countStateEffect(fn: ts.FunctionLikeDeclaration): number {
   let count = 0;
   const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node)) {
+      return;
+    }
     if (ts.isCallExpression(node)) {
       const name = callName(node.expression);
       if (name === "useState" || name === "useEffect") {
