@@ -10,13 +10,12 @@ import {
   serverSortColumn,
   textColumn,
 } from "../../../components/antd/columns";
+import { GrantExpiryCell } from "../../../components/grants/GrantExpiryCell";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
 
 import {
   accessRequestStatusLabel,
   badgeToneForAccessRequestStatus,
-  formatDateTime,
-  grantTypeLabel,
 } from "../../../lib/status";
 import type { Translator } from "../../../lib/status";
 
@@ -101,12 +100,7 @@ function requestColumns(t: Translator, sort: ServerSortState): ColumnsType<Porta
         title: t("portal.column.term"),
         width: 130,
         render: (_value: unknown, approval: PortalApprovalRow) => (
-          <div className="flex min-w-0 flex-col gap-1">
-            <span>{grantTypeLabel(t, approval.grant_type)}</span>
-            {approval.grant_expires_at ? (
-              <span className="text-xs leading-4 text-ink-faint">{formatDateTime(approval.grant_expires_at)}</span>
-            ) : null}
-          </div>
+          <GrantExpiryCell grantType={approval.grant_type} expiresAt={approval.grant_expires_at} />
         ),
       },
       sort,

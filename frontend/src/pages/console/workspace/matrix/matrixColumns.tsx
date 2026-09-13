@@ -6,6 +6,7 @@ import { enumFilter, type ColumnsType } from "../../../../components/antd/AppTab
 import { RowActionButton, actionsColumn, textColumn } from "../../../../components/antd/columns";
 import type { AuthorizationGroupGrantItem, AuthorizationGroupItem } from "../../../../lib/domain";
 import type { Translator } from "../../../../lib/status";
+import { authorizationGroupKindLabel } from "../../../portal/authorizationGroupLabel";
 import { removeGrant, updateGrant, updateGrantManagedScopePolicy, type AuthorizationGroupForm } from "./grantFormUpdates";
 import {
   isManagedUsersGrant,
@@ -40,11 +41,11 @@ export function authorizationGroupColumns({
       title: t("common.type"),
       width: 120,
       sorter: (a: AuthorizationGroupItem, b: AuthorizationGroupItem) =>
-        authorizationGroupKindLabel(t, a.kind).localeCompare(authorizationGroupKindLabel(t, b.kind)),
-      render: (_value: unknown, group: AuthorizationGroupItem) => authorizationGroupKindLabel(t, group.kind),
+        authorizationGroupKindLabel(a.kind, t).localeCompare(authorizationGroupKindLabel(b.kind, t)),
+      render: (_value: unknown, group: AuthorizationGroupItem) => authorizationGroupKindLabel(group.kind, t),
       ...enumFilter<AuthorizationGroupItem>("kind", [
-        { label: t("common.role"), value: "role" },
-        { label: t("console.matrix.kindBundle"), value: "bundle" },
+        { label: authorizationGroupKindLabel("role", t), value: "role" },
+        { label: authorizationGroupKindLabel("bundle", t), value: "bundle" },
       ]),
     },
     {
@@ -94,16 +95,6 @@ export function authorizationGroupColumns({
       ),
     }),
   ];
-}
-
-function authorizationGroupKindLabel(t: Translator, kind: string): string {
-  if (kind === "role") {
-    return t("common.role");
-  }
-  if (kind === "bundle") {
-    return t("console.matrix.kindBundle");
-  }
-  return kind;
 }
 
 export function authorizationGroupGrantColumns({

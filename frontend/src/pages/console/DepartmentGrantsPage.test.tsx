@@ -246,7 +246,7 @@ describe("DepartmentGrantsPage", () => {
     expect(await screen.findByText("直属 5 人 · 含子部门 21 人")).toBeVisible();
     expect(await screen.findByText("客户管理 (CRM)")).toBeVisible();
     expect(screen.getByText("本部门")).toBeVisible();
-    expect(screen.getByText("永久")).toBeVisible();
+    expect(screen.getByText("长期")).toBeVisible();
 
     const url = policiesRequestUrl(fetchMock, "1");
     expect(url).not.toBeNull();

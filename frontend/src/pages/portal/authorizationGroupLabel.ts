@@ -15,7 +15,7 @@ export interface AuthorizationGroupLabelSource {
   name: string;
 }
 
-export function authorizationGroupKindLabel(kind: AuthorizationGroupKind, t: Translator): string {
+export function authorizationGroupKindLabel(kind: string, t: Translator): string {
   switch (kind) {
     case "role":
       return t("portal.authorizationGroup.kind.role");

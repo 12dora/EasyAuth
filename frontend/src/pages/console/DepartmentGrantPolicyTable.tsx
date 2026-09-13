@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { AppTable, type ColumnsType } from "../../components/antd/AppTable";
 import { RowActionButton, actionsColumn, textColumn } from "../../components/antd/columns";
 import { Badge } from "../../components/Badge";
+import { GrantExpiryCell } from "../../components/grants/GrantExpiryCell";
 import { useI18n } from "../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
 import { departmentDisplayName } from "../../lib/departmentDisplayName";
@@ -29,7 +30,7 @@ export function DepartmentGrantPolicyTable({
   onEdit,
   onDelete,
 }: DepartmentGrantPolicyTableProps) {
-  const { t, formatDateTime } = useI18n();
+  const { t } = useI18n();
 
   const columns = useMemo<ColumnsType<DepartmentGrantPolicy>>(
     () => [
@@ -57,9 +58,7 @@ export function DepartmentGrantPolicyTable({
         width: 170,
         sorter: (a: DepartmentGrantPolicy, b: DepartmentGrantPolicy) => policyTermTimestamp(a) - policyTermTimestamp(b),
         render: (_value: unknown, policy: DepartmentGrantPolicy) => (
-          <span className="whitespace-nowrap tabular">
-            {policy.grant_type === "permanent" ? t("departmentGrants.term.permanent") : formatDateTime(policy.expires_at)}
-          </span>
+          <GrantExpiryCell grantType={policy.grant_type} expiresAt={policy.expires_at} />
         ),
       },
       {
@@ -119,7 +118,7 @@ export function DepartmentGrantPolicyTable({
         ),
       }),
     ],
-    [actionsDisabled, formatDateTime, onDelete, onEdit, t],
+    [actionsDisabled, onDelete, onEdit, t],
   );
 
   return (
@@ -164,7 +163,7 @@ function GrantContentCell({ policy }: { policy: DepartmentGrantPolicy }) {
   const chips: ContentChip[] = [
     ...policy.authorization_groups.map((group) => ({
       key: `group:${group.key}`,
-      label: group.name,
+      label: group.name || group.key,
       isGroup: true,
     })),
     ...policy.permissions.map((permission) => ({
