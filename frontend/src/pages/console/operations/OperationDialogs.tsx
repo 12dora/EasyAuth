@@ -15,7 +15,7 @@ import type { OperationsSectionController } from "./useOperationsSection";
 /** 弹窗里的操作对象一律按姓名与应用展示名描述; 目录里没有姓名时才回落到 user_id。 */
 function rowTarget(t: Translator, row: OperationRow): string {
   return t("console.accessRequests.target", {
-    user: userOptionName({ user_id: row.user_id, name: row.user_name }) || stringValue(row.user_id),
+    user: userOptionName({ user_id: row.user_id ?? "", name: row.user_name }) || stringValue(row.user_id),
     app: operationAppDisplayName(row),
   });
 }
@@ -63,8 +63,10 @@ export function OperationDialogs({
           title={t("console.operations.retryGrant")}
           description={t("console.operations.retryGrantDescription", {
             user:
-              userOptionName({ user_id: pendingAction.row.user_id, name: pendingAction.row.user_name }) ||
-              stringValue(pendingAction.row.user_id),
+              userOptionName({
+                user_id: pendingAction.row.user_id ?? "",
+                name: pendingAction.row.user_name,
+              }) || stringValue(pendingAction.row.user_id),
             app: operationAppDisplayName(pendingAction.row),
           })}
           confirmLabel={t("console.operations.retryGrant")}
