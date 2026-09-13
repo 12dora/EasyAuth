@@ -9,6 +9,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
 import { PanelSurface } from "../../components/ui/PanelSurface";
 import { daysLeftTone } from "../../features/handover/surface";
+import { personNameWithDepartment } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
 import type { HandoverMeTasksPayload, HandoverTaskListItem } from "../../lib/domain";
@@ -121,18 +122,12 @@ function HandoverTaskCard({ task, interactive }: { task: HandoverTaskListItem; i
   const { t } = useI18n();
   const daysLeft = task.escalation?.days_left;
   const daysTone = daysLeftTone(daysLeft);
-  const subjectName = task.subject.name || task.subject.user_id;
-  const department = task.subject.department || "";
-
   return (
     <li>
       <PanelSurface padding="lg" className="space-y-2">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <p className="text-body font-semibold text-ink">
-              {subjectName}
-              {department ? <span className="font-normal text-ink-soft"> · {department}</span> : null}
-            </p>
+            <p className="text-body font-semibold text-ink">{personNameWithDepartment(task.subject, t)}</p>
             <div className="mt-1 flex flex-wrap gap-1.5">
               <Badge tone="bond">{kindLabel(t, task.kind)}</Badge>
               {task.escalation?.deadline == null ? (

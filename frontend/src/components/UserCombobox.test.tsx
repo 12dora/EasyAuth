@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { Translator } from "../lib/status";
-import { formatPeople, resolvePeople, userOptionName } from "./UserCombobox";
+import { formatPeople, personNameWithDepartment, resolvePeople, userOptionName } from "./UserCombobox";
 
 const t: Translator = (key) => (key === "user.localAccount" ? "本地用户" : String(key));
 
@@ -28,6 +28,21 @@ describe("formatPeople", () => {
     expect(
       formatPeople([{ user_id: uuid, name: "系统管理员", department: "", account_kind: "local" }], t),
     ).toBe("系统管理员 · 本地用户");
+  });
+});
+
+describe("personNameWithDepartment", () => {
+  test("空值与本地账号、目录人员分别给出一行文案", () => {
+    expect(personNameWithDepartment(null, t)).toBe("-");
+    expect(
+      personNameWithDepartment(
+        { user_id: "u-1", name: "张三", department: "捷发-安环部", account_kind: "directory" },
+        t,
+      ),
+    ).toBe("张三 · 捷发-安环部");
+    expect(
+      personNameWithDepartment({ user_id: "local-admin:admin", name: "紧急管理员", account_kind: "local" }, t),
+    ).toBe("紧急管理员 · 本地用户");
   });
 });
 

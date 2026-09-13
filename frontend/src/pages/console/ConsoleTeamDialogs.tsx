@@ -5,7 +5,7 @@ import { Dialog } from "../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../components/Field";
 import { StatusBanner } from "../../components/StatusBanner";
 import { UserSearchInput, userSearchFieldHint } from "../../components/UserSelect";
-import type { UserOption } from "../../components/UserCombobox";
+import { userOptionName, type UserOption } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { TeamDetail, TeamMemberItem } from "../../lib/domain";
 import type { TeamInfoFormPayload, TeamMemberCreatePayload, TeamMemberRole } from "./consoleTeamDetailModel";
@@ -194,7 +194,7 @@ export function TeamMemberRemoveDialog({
     >
       <div className="grid gap-3">
         <p className="text-body leading-5 text-ink-soft">
-          {t("console.teams.removeMemberConfirm", { name: member.name || member.user_id })}
+          {t("console.teams.removeMemberConfirm", { name: userOptionName(member) })}
         </p>
       </div>
     </Dialog>

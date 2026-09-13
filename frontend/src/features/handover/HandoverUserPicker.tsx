@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { TextInput } from "../../components/Field";
+import { TruncatedText } from "../../components/TruncatedText";
+import { userOptionName, userSecondaryLabel } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
 import { cn } from "../../lib/cn";
@@ -173,7 +175,9 @@ export function HandoverUserPicker({
             </p>
           ) : null}
           {!optionsQuery.error
-            ? options.map((option, index) => (
+            ? options.map((option, index) => {
+                const secondary = userSecondaryLabel(option, t);
+                return (
                 <div
                   key={option.user_id}
                   id={getOptionId(option)}
@@ -188,12 +192,11 @@ export function HandoverUserPicker({
                     pick(option);
                   }}
                 >
-                  <span className="text-body font-medium">{option.name || option.user_id}</span>
-                  {option.department ? (
-                    <span className="text-xs text-ink-faint">{option.department}</span>
-                  ) : null}
+                  <span className="text-body font-medium">{userOptionName(option)}</span>
+                  {secondary ? <TruncatedText className="w-full text-xs text-ink-faint" text={secondary} /> : null}
                 </div>
-              ))
+                );
+              })
             : null}
         </div>
       ) : null}

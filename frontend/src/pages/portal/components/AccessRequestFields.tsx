@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { Field, SelectInput, TextArea, TextInput } from "../../../components/Field";
+import { userOptionName, userSecondaryLabel } from "../../../components/UserCombobox";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { AccessGrantType, AccessRequestType, ApproverOption } from "../hooks/accessRequestTypes";
@@ -167,7 +168,9 @@ function ApproverMultiSelect({
         <div className="max-h-40 overflow-auto rounded-[2px] border border-ink/15 bg-paper-soft p-2">
           {visibleOptions.length > 0 ? (
             <div className="flex flex-col gap-1.5">
-              {visibleOptions.map((option) => (
+              {visibleOptions.map((option) => {
+                const secondary = userSecondaryLabel(option, t);
+                return (
                 <label key={option.user_id} className="inline-flex items-center gap-2 rounded-[2px] px-2 py-1.5 text-body text-ink-soft hover:bg-ink/5">
                   <input
                     type="checkbox"
@@ -176,10 +179,11 @@ function ApproverMultiSelect({
                     disabled={controlsDisabled}
                     aria-label={t("portal.request.approverSelect", { userId: option.user_id })}
                   />
-                  <span className="text-ink">{approverOptionLabel(option, t("portal.request.approverUnnamed"))}</span>
-                  {option.department ? <span className="text-ink-faint">· {option.department}</span> : null}
+                  <span className="text-ink">{userOptionName(option)}</span>
+                  {secondary ? <span className="text-ink-faint">· {secondary}</span> : null}
                 </label>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <span className="block px-2 py-1.5 text-body text-ink-faint">
@@ -206,10 +210,6 @@ function filterApproverOptions(options: ApproverOption[], selectedUserIds: strin
   return Array.from(optionsById.values()).filter((option) => {
     return approverSearchText(option).includes(normalizedSearch);
   });
-}
-
-function approverOptionLabel(option: ApproverOption, fallback: string): string {
-  return option.name ?? option.display_name ?? option.label ?? fallback;
 }
 
 function approverSearchText(option: ApproverOption): string {

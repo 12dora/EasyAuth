@@ -6,7 +6,12 @@ import { SelectInput } from "../../../components/Field";
 import { TruncatedText } from "../../../components/TruncatedText";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { useToast } from "../../../components/ui/Toast";
-import { useUserOptionsByIds, userOptionName, userSecondaryLabel } from "../../../components/UserCombobox";
+import {
+  personNameWithDepartment,
+  useUserOptionsByIds,
+  userOptionName,
+  userSecondaryLabel,
+} from "../../../components/UserCombobox";
 import type { UserOption } from "../../../components/UserCombobox";
 import { UserSearchInput } from "../../../components/UserSelect";
 import { useI18n } from "../../../i18n/I18nProvider";
@@ -169,11 +174,4 @@ function toUserOption(user: HandoverUserRef | null | undefined, expectedUserId: 
   };
 }
 
-function personNameWithDepartment(user: HandoverUserRef | null | undefined, t: Translator): string {
-  if (!user) {
-    return "-";
-  }
-  const name = userOptionName(user, user.user_id);
-  const secondary = userSecondaryLabel(user, t);
-  return secondary ? `${name} · ${secondary}` : name || "-";
-}
+

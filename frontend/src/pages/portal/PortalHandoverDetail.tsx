@@ -10,6 +10,7 @@ import { PageState } from "../../components/ui/PageState";
 import { PanelSurface } from "../../components/ui/PanelSurface";
 import { HandoverActionPanel } from "../../features/handover/HandoverActionPanel";
 import { daysLeftTone } from "../../features/handover/surface";
+import { personNameWithDepartment, userOptionName } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
 import type { HandoverAction, HandoverTaskDetail, HandoverTaskPayload } from "../../lib/domain";
@@ -71,7 +72,7 @@ export function PortalHandoverDetail() {
     <>
       <PageHeader
         eyebrow={t("shell.portal.title")}
-        title={task ? `${kindLabel(t, task.kind)} · ${task.subject.name || task.subject.user_id}` : t("handover.portal.detail.title")}
+        title={task ? `${kindLabel(t, task.kind)} · ${userOptionName(task.subject)}` : t("handover.portal.detail.title")}
         description={task?.reason || undefined}
         actions={<ButtonLink to="/portal/handovers">{t("handover.portal.detail.back")}</ButtonLink>}
       />
@@ -119,12 +120,14 @@ function DetailBody({
         <dl className="grid gap-2 text-body sm:grid-cols-2">
           <div>
             <dt className="text-caption text-ink-faint">{t("handover.detail.subject")}</dt>
-            <dd className="m-0 font-medium text-ink">{task.subject.name || task.subject.user_id}</dd>
+            <dd className="m-0 font-medium text-ink">{personNameWithDepartment(task.subject, t)}</dd>
           </div>
           <div>
             <dt className="text-caption text-ink-faint">{t("handover.portal.detail.assignee")}</dt>
             <dd className="m-0 font-medium text-ink">
-              {task.assignee?.name || task.assignee?.user_id || t("handover.assigneeState.superuser_pool")}
+              {task.assignee
+                ? personNameWithDepartment(task.assignee, t)
+                : t("handover.assigneeState.superuser_pool")}
             </dd>
           </div>
         </dl>

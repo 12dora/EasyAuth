@@ -326,8 +326,21 @@ export type PersonLike = {
  * 姓名可能是空串(目录镜像没同步到姓名, 见批次契约 A3), 那时显示 ID 是唯一诚实的选择,
  * 不能拿 ID 拼一个假名字。
  */
-export function userOptionName(option: PersonLike | undefined, fallbackUserId: string = ""): string {
+export function userOptionName(option: PersonLike | null | undefined, fallbackUserId: string = ""): string {
   return option?.name || option?.user_id || fallbackUserId;
+}
+
+/**
+ * 非表格场景的「姓名 · 部门/本地用户」一行文案。
+ * 表格走 `personColumn`; 这里给交接卡片、接任确认、审批人选项等复用。
+ */
+export function personNameWithDepartment(person: PersonLike | null | undefined, t: Translator): string {
+  if (!person) {
+    return "-";
+  }
+  const name = userOptionName(person);
+  const secondary = userSecondaryLabel(person, t);
+  return secondary ? `${name} · ${secondary}` : name || "-";
 }
 
 /**
@@ -350,13 +363,7 @@ export function formatPeople(people: readonly PersonLike[] | undefined, t: Trans
   if (!people || people.length === 0) {
     return "-";
   }
-  return people
-    .map((person) => {
-      const name = userOptionName(person);
-      const secondary = userSecondaryLabel(person, t);
-      return secondary ? `${name} · ${secondary}` : name;
-    })
-    .join("、");
+  return people.map((person) => personNameWithDepartment(person, t)).join("、");
 }
 
 /** 把 `formatPeople` 渲染成节点, 给定义列表 / 摘要用。 */

@@ -1,5 +1,6 @@
 import { ApprovalDecisionDialog } from "../../../components/ApprovalDecisionDialog";
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
+import { userOptionName } from "../../../components/UserCombobox";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { AccessGrantRow } from "../../../lib/domain/accessGrantRow";
@@ -14,14 +15,14 @@ import type { OperationsSectionController } from "./useOperationsSection";
 /** 弹窗里的操作对象一律按姓名与应用展示名描述; 目录里没有姓名时才回落到 user_id。 */
 function rowTarget(t: Translator, row: OperationRow): string {
   return t("console.accessRequests.target", {
-    user: row.user_name || stringValue(row.user_id),
+    user: userOptionName({ user_id: row.user_id, name: row.user_name }) || stringValue(row.user_id),
     app: operationAppDisplayName(row),
   });
 }
 
 function grantTarget(row: AccessGrantRow): { user: string; app: string } {
   return {
-    user: row.user_name || row.user_id,
+    user: userOptionName({ user_id: row.user_id, name: row.user_name }),
     app: formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
   };
 }
@@ -61,7 +62,9 @@ export function OperationDialogs({
         <ReasonActionDialog
           title={t("console.operations.retryGrant")}
           description={t("console.operations.retryGrantDescription", {
-            user: pendingAction.row.user_name || stringValue(pendingAction.row.user_id),
+            user:
+              userOptionName({ user_id: pendingAction.row.user_id, name: pendingAction.row.user_name }) ||
+              stringValue(pendingAction.row.user_id),
             app: operationAppDisplayName(pendingAction.row),
           })}
           confirmLabel={t("console.operations.retryGrant")}

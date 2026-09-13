@@ -69,6 +69,7 @@ describe("parseApprovalListPayload", () => {
         name: "胡玉琴A",
         email: "",
         department: "",
+        account_kind: "directory",
       },
       approver_user_ids: ["1294dde0-4c54-460f-9728-0f4f54b91414"],
     });

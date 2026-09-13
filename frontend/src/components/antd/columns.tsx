@@ -8,7 +8,7 @@ import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { ButtonLink } from "../ButtonLink";
 import { TruncatedText } from "../TruncatedText";
-import { userSecondaryLabel } from "../UserCombobox";
+import { userOptionName, userSecondaryLabel } from "../UserCombobox";
 import { enumFilter, readField, textFilter, type ColumnType, type ServerSortState } from "./AppTable";
 
 /**
@@ -545,7 +545,7 @@ export function peopleColumn<T>({
       ? textFilter<T>(key, {
           getValue: (record) =>
             read(record)
-              .map((person) => `${person.name || person.user_id} ${userSecondaryLabel(person, t)}`)
+              .map((person) => `${userOptionName(person)} ${userSecondaryLabel(person, t)}`)
               .join(" "),
         })
       : {}),
@@ -574,7 +574,7 @@ export function peopleColumn<T>({
 }
 
 function PersonStack({ person, t }: { person: PersonRef; t: Translator }) {
-  const displayName = person.name || person.user_id;
+  const displayName = userOptionName(person);
   const secondary = userSecondaryLabel(person, t);
   return (
     <div className="flex min-w-0 flex-col gap-1">

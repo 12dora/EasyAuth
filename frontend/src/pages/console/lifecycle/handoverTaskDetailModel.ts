@@ -6,6 +6,7 @@ import type {
   TransferPlanItem,
 } from "../../../lib/domain";
 import type { AppShellOutletContext } from "../../../components/AppShell";
+import { userOptionName } from "../../../components/UserCombobox";
 import type { Translator } from "../../../lib/status";
 import { handoverKindLabel, type ParsedGrantKey } from "./lifecycleLabels";
 
@@ -78,7 +79,7 @@ export function transferDiffEntries(plan: TransferPlanItem): {
 }
 
 export function taskSubjectName(task: HandoverTaskDetail | undefined): string {
-  return task ? task.subject.name || task.subject.user_id : "";
+  return task ? userOptionName(task.subject) : "";
 }
 
 export function taskDetailTitle(t: Translator, task: HandoverTaskDetail | undefined, subjectName: string): string {

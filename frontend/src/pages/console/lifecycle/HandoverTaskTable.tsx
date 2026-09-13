@@ -13,12 +13,12 @@ import {
   RowActionLink,
   actionsColumn,
   dateTimeColumn,
+  personColumn,
   serverColumn,
   serverSortColumn,
   statusColumn,
-  textColumn,
-  userColumn,
 } from "../../../components/antd/columns";
+import { userOptionName } from "../../../components/UserCombobox";
 import { Badge } from "../../../components/Badge";
 import { daysLeftTone } from "../../../features/handover/surface";
 import { useI18n } from "../../../i18n/I18nProvider";
@@ -90,11 +90,14 @@ function taskColumns(
 ): ColumnsType<HandoverTaskRow> {
   return [
     serverSortColumn(
-      userColumn<HandoverTaskRow>({
+      personColumn<HandoverTaskRow>({
         key: "subject",
         title: t("handover.list.column.subject"),
-        getName: (task) => task.subject.name || task.subject.user_id,
-        getUserId: (task) => task.subject.email ?? "",
+        t,
+        getName: (task) => task.subject.name,
+        getUserId: (task) => task.subject.user_id,
+        getDepartment: (task) => task.subject.department,
+        getAccountKind: (task) => task.subject.account_kind,
       }),
       sort,
     ),
@@ -140,11 +143,15 @@ function taskColumns(
     serverSortColumn(
       serverColumn(
         {
-          ...textColumn<HandoverTaskRow>({
+          ...personColumn<HandoverTaskRow>({
             key: "assignee_state",
             title: t("handover.console.column.assignee"),
-            getValue: (task) =>
-              task.assignee?.name || task.assignee?.user_id || handoverAssigneeStateLabel(t, task.assignee_state),
+            t,
+            getName: (task) =>
+              task.assignee ? userOptionName(task.assignee) : handoverAssigneeStateLabel(t, task.assignee_state),
+            getUserId: (task) => task.assignee?.user_id ?? "",
+            getDepartment: (task) => task.assignee?.department,
+            getAccountKind: (task) => task.assignee?.account_kind,
             width: 160,
           }),
           ...enumFilter<HandoverTaskRow>(

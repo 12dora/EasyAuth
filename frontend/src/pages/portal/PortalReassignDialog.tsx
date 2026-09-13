@@ -6,6 +6,8 @@ import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
 import { Field, TextArea, TextInput } from "../../components/Field";
 import { StatusBanner } from "../../components/StatusBanner";
+import { TruncatedText } from "../../components/TruncatedText";
+import { userOptionName, userSecondaryLabel } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
@@ -223,21 +225,24 @@ function ReassignSubjectPicker({
           {(query.data?.items ?? []).length === 0 ? (
             <p className="px-2 py-1.5 text-body text-ink-faint">{t("handover.userPicker.empty")}</p>
           ) : (
-            (query.data?.items ?? []).map((item) => (
+            (query.data?.items ?? []).map((item) => {
+              const secondary = userSecondaryLabel(item, t);
+              return (
               <button
                 key={item.user_id}
                 type="button"
                 className="block w-full px-2 py-1.5 text-left text-body hover:bg-paper-deep"
                 onClick={() => {
                   onChange({ user_id: item.user_id, name: item.name, department: item.department });
-                  setInput(item.name);
+                  setInput(userOptionName(item));
                   setOpen(false);
                 }}
               >
-                {item.name}
-                {item.department ? <span className="ml-2 text-caption text-ink-faint">{item.department}</span> : null}
+                {userOptionName(item)}
+                {secondary ? <TruncatedText className="ml-2 text-caption text-ink-faint" text={secondary} /> : null}
               </button>
-            ))
+              );
+            })
           )}
         </div>
       ) : null}

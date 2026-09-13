@@ -6,6 +6,7 @@ import { PageHeader } from "../../../components/PageHeader";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { ConfirmDialog } from "../../../components/ui/ConfirmDialog";
 import { PageState } from "../../../components/ui/PageState";
+import { userOptionName } from "../../../components/UserCombobox";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { HandoverTaskTable } from "./HandoverTaskTable";
 import { useHandoverTaskList } from "./useHandoverTaskList";
@@ -59,7 +60,7 @@ export function HandoverTaskList() {
         <ConfirmDialog
           title={t("handover.list.deleteTitle")}
           message={t("handover.list.deleteMessage", {
-            name: deleteTarget.subject.name || deleteTarget.subject.user_id,
+            name: userOptionName(deleteTarget.subject),
           })}
           confirmLabel={t("common.delete")}
           confirming={deleteMutation.isPending}

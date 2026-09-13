@@ -6,6 +6,7 @@ import {
   RowActionButton,
   actionsColumn,
   dateTimeColumn,
+  personColumn,
   serverSortColumn,
   textColumn,
 } from "../../../components/antd/columns";
@@ -20,7 +21,6 @@ import {
 import type { Translator } from "../../../lib/status";
 
 import { approvalContentDetails } from "./PortalApprovalDetails";
-import { applicantLabel } from "./portalApprovalFacts";
 import type { ApprovalTab, PortalApprovalRow } from "./portalApprovalTypes";
 
 /**
@@ -65,19 +65,16 @@ function approvalStatusColumn(t: Translator, sort: ServerSortState): ColumnType<
 function requestColumns(t: Translator, sort: ServerSortState): ColumnsType<PortalApprovalRow> {
   return [
     serverSortColumn(
-      {
+      personColumn<PortalApprovalRow>({
         key: "applicant",
         title: t("portal.approvals.column.applicant"),
+        t,
+        getName: (approval) => approval.applicant.name,
+        getUserId: (approval) => approval.applicant.user_id,
+        getDepartment: (approval) => approval.applicant.department,
+        getAccountKind: (approval) => approval.applicant.account_kind,
         width: 160,
-        render: (_value: unknown, approval: PortalApprovalRow) => (
-          <div className="flex min-w-0 flex-col gap-1">
-            <strong className="truncate">{applicantLabel(approval)}</strong>
-            {approval.applicant?.department ? (
-              <span className="text-xs leading-4 text-ink-faint">{approval.applicant.department}</span>
-            ) : null}
-          </div>
-        ),
-      },
+      }),
       sort,
     ),
     serverSortColumn(

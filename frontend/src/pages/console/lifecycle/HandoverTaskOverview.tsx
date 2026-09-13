@@ -4,6 +4,7 @@ import { Badge } from "../../../components/Badge";
 import { Button } from "../../../components/Button";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { daysLeftTone } from "../../../features/handover/surface";
+import { userOptionName } from "../../../components/UserCombobox";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { HandoverTaskDetail } from "../../../lib/domain";
 import { formatDateTime } from "../../../lib/status";
@@ -79,7 +80,7 @@ export function AssigneePanel({ task, isLocalAdmin, claimPending, onDefer, onCla
       <dl className="grid gap-2 text-body sm:grid-cols-2">
         <OverviewItem
           label={t("handover.console.assigneeCard")}
-          value={task.assignee?.name || task.assignee?.user_id || "-"}
+          value={userOptionName(task.assignee) || "-"}
         />
         <OverviewItem
           label={t("handover.console.filter.assigneeState")}

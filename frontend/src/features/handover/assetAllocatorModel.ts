@@ -1,3 +1,4 @@
+import { userOptionName } from "../../components/UserCombobox";
 import type {
   HandoverAction,
   HandoverAssetAction,
@@ -150,7 +151,7 @@ export function buildExecuteConfirmParts(action: HandoverAction): {
   for (const assetType of action.asset_types) {
     overrideCount += assetType.override_count;
     if (assetType.default_action === "transfer" && assetType.count > 0) {
-      const name = assetType.default_to_user?.name || assetType.default_to_user?.user_id || "";
+      const name = userOptionName(assetType.default_to_user);
       transferLines.push(`${assetType.count} ${assetType.label}${name ? ` → ${name}` : ""}`);
       const id = assetType.default_to_user?.user_id;
       if (id && !receiverIds.has(id)) {

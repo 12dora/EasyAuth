@@ -7,6 +7,7 @@ import type {
   PermissionItem,
   PermissionQueryGroupItem,
 } from "./app";
+import type { AccountKind } from "./person";
 
 export interface PortalGrant {
   grant_id?: number;
@@ -80,6 +81,7 @@ export interface PortalApprovalApplicant {
   name?: string;
   email?: string;
   department?: string;
+  account_kind?: AccountKind;
 }
 
 /** 门户「待我审批」条目: 对齐后端 /portal/api/v1/me/approvals 序列化字段。 */

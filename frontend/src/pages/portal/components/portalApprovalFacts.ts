@@ -1,3 +1,4 @@
+import { userOptionName } from "../../../components/UserCombobox";
 import type { Translator } from "../../../lib/status";
 
 import type { ApprovalGrantFact, ApprovalNoticeKey, PortalApprovalRow } from "./portalApprovalTypes";
@@ -11,7 +12,7 @@ const ALERT_NOTICE_KEYS: readonly ApprovalNoticeKey[] = [
 ];
 
 export function applicantLabel(approval: PortalApprovalRow): string {
-  return approval.applicant?.name || approval.applicant?.email || approval.applicant?.user_id || "-";
+  return userOptionName(approval.applicant) || "-";
 }
 
 export function grantLabel(grant: ApprovalGrantFact): string {

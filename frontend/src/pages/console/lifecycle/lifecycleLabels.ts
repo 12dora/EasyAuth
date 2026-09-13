@@ -1,3 +1,4 @@
+import { userOptionName } from "../../../components/UserCombobox";
 import type { MessageKey } from "../../../i18n/messages";
 import type { HandoverAction } from "../../../lib/domain";
 import type { BadgeTone, Translator } from "../../../lib/status";
@@ -90,7 +91,7 @@ const CARD_SUMMARY_KEYS: Record<string, MessageKey> = {
 /** 应用交接卡的一句人话描述。 */
 export function handoverActionSummary(t: Translator, action: HandoverAction): string {
   if (action.status === "done") {
-    const grantName = action.grant_receiver?.name || action.grant_receiver?.user_id || "";
+    const grantName = userOptionName(action.grant_receiver);
     return grantName ? t("handover.card.doneTo", { name: grantName }) : t("handover.card.done");
   }
   const key = CARD_SUMMARY_KEYS[action.status];

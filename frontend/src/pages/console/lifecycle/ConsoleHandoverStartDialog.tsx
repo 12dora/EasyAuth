@@ -4,6 +4,7 @@ import { Button } from "../../../components/Button";
 import { Dialog } from "../../../components/Dialog";
 import { Field, TextArea } from "../../../components/Field";
 import { StatusBanner } from "../../../components/StatusBanner";
+import { userOptionName } from "../../../components/UserCombobox";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { HandoverStartTarget } from "./consolePeopleModel";
 
@@ -23,7 +24,7 @@ export function ConsoleHandoverStartDialog({
   const { t } = useI18n();
   const [reason, setReason] = useState("");
   const isOffboard = target.kind === "offboard";
-  const personName = target.person.name || target.person.user_id;
+  const personName = userOptionName(target.person);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

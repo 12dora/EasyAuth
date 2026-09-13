@@ -1,6 +1,6 @@
 import { ApiError } from "../../../lib/api";
 import type { Pagination } from "../../../lib/api";
-import type { PortalApprovalApplicant, PortalRequestApprover } from "../../../lib/domain";
+import type { AccountKind, PortalApprovalApplicant, PortalRequestApprover } from "../../../lib/domain";
 
 import type {
   ApprovalAuthorizationGroup,
@@ -298,12 +298,17 @@ function isApprovalGrantFact(value: unknown): value is ApprovalGrantFact {
 function isApprovalApplicant(value: unknown): value is Required<PortalApprovalApplicant> {
   return (
     isRecord(value) &&
-    hasExactKeys(value, ["user_id", "name", "email", "department"]) &&
+    hasExactKeys(value, ["user_id", "name", "email", "department", "account_kind"]) &&
     isNonEmptyString(value.user_id) &&
     typeof value.name === "string" &&
     typeof value.email === "string" &&
-    typeof value.department === "string"
+    typeof value.department === "string" &&
+    isAccountKind(value.account_kind)
   );
+}
+
+function isAccountKind(value: unknown): value is AccountKind {
+  return value === "directory" || value === "local";
 }
 
 function isPagination(value: unknown): value is Pagination {

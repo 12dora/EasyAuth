@@ -1,4 +1,5 @@
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
+import { userOptionName } from "../../../components/UserCombobox";
 import type { OperationRow as DomainOperationRow } from "../../../lib/domain";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
 
@@ -42,7 +43,7 @@ export function operationApproverNames(row: OperationRow): string {
   if (approvers.length === 0) {
     return "-";
   }
-  return approvers.map((approver) => approver.name || approver.user_id).join("、");
+  return approvers.map((approver) => userOptionName(approver)).join("、");
 }
 
 export function auditPair(type: string | undefined, id: string | undefined): string {
