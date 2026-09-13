@@ -22,7 +22,8 @@ _SMALL_SNAPSHOT_USERS = 3
 _LARGE_SNAPSHOT_USERS = 6
 _DIRECTORY_AVATAR = "https://static-legacy.dingtalk.com/media/directory.jpg"
 _EXISTING_AVATAR = "https://oidc.example.test/media/original.jpg"
-_UNSAFE_AVATAR = "data:image/svg+xml;base64,PHN2Zy4uLg=="
+_GENERATED_AVATAR = "data:image/svg+xml;base64,PHN2Zy4uLg=="
+_UNSAFE_AVATAR = "javascript:alert(1)"
 
 
 def test_sync_user_mirror_avatars_updates_only_changed_bound_rows() -> None:
@@ -112,6 +113,47 @@ def test_sync_user_mirror_avatars_skips_queries_when_directory_has_no_safe_avata
 
     user.refresh_from_db()
     assert user.avatar_url == _EXISTING_AVATAR
+
+
+def test_sync_user_mirror_avatars_photo_overwrites_generated() -> None:
+    user = _bound_user(
+        ak_id="ak-generated-to-photo",
+        user_id="user-generated-to-photo",
+        avatar_url=_GENERATED_AVATAR,
+    )
+
+    _sync_user_mirror_avatars(
+        [_payload(user_id="user-generated-to-photo", avatar=_DIRECTORY_AVATAR)],
+    )
+
+    user.refresh_from_db()
+    assert user.avatar_url == _DIRECTORY_AVATAR
+
+
+def test_sync_user_mirror_avatars_generated_does_not_overwrite_photo() -> None:
+    user = _bound_user(
+        ak_id="ak-keep-photo",
+        user_id="user-keep-photo",
+        avatar_url=_EXISTING_AVATAR,
+    )
+
+    _sync_user_mirror_avatars(
+        [_payload(user_id="user-keep-photo", avatar=_GENERATED_AVATAR)],
+    )
+
+    user.refresh_from_db()
+    assert user.avatar_url == _EXISTING_AVATAR
+
+
+def test_sync_user_mirror_avatars_writes_generated_when_empty() -> None:
+    user = _bound_user(ak_id="ak-empty-generated", user_id="user-empty-generated")
+
+    _sync_user_mirror_avatars(
+        [_payload(user_id="user-empty-generated", avatar=_GENERATED_AVATAR)],
+    )
+
+    user.refresh_from_db()
+    assert user.avatar_url == _GENERATED_AVATAR
 
 
 def test_sync_user_mirror_avatars_query_count_is_constant_for_snapshot(

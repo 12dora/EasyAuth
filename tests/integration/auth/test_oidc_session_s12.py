@@ -36,6 +36,8 @@ OIDC_STATE: Final = "s12-state"
 OIDC_NONCE: Final = "s12-nonce"
 OIDC_CODE: Final = "s12-code"
 OIDC_SUBJECT: Final = "s12-authentik-user"
+GENERATED_AVATAR: Final = "data:image/svg+xml;base64,PHN2Zy4uLg=="
+PHOTO_AVATAR: Final = "https://static-legacy.dingtalk.com/media/oidc.jpg"
 
 
 type OidcClaimValue = str | tuple[str, ...] | dict[str, str]
@@ -388,10 +390,10 @@ def test_s12_callback_keeps_existing_picture_when_authentik_picture_is_empty(
 @pytest.mark.parametrize(
     "unsafe_picture",
     [
-        "data:image/svg+xml;base64,PHN2Zy4uLg==",
         "http://authentik.example.test/avatar.png",
         "javascript:alert(1)",
         "//evil.example.test/avatar.png",
+        "data:text/html;base64,PHNjcmlwdD4=",
     ],
 )
 def test_s12_callback_keeps_existing_picture_when_authentik_picture_is_unsafe(
@@ -422,10 +424,10 @@ def test_s12_callback_keeps_existing_picture_when_authentik_picture_is_unsafe(
 @pytest.mark.parametrize(
     "unsafe_picture",
     [
-        "data:image/svg+xml;base64,PHN2Zy4uLg==",
         "http://authentik.example.test/avatar.png",
         "javascript:alert(1)",
         "//evil.example.test/avatar.png",
+        "data:text/html;base64,PHNjcmlwdD4=",
     ],
 )
 def test_s12_callback_ignores_unsafe_authentik_picture_claim(
@@ -441,6 +443,74 @@ def test_s12_callback_ignores_unsafe_authentik_picture_claim(
     assert response.status_code == HTTPStatus.FOUND
     user = UserMirror.objects.get(authentik_user_id=OIDC_SUBJECT)
     assert user.avatar_url == ""
+
+
+@override_settings(
+    EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
+)
+def test_s12_callback_persists_generated_picture_when_mirror_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = Client()
+    _seed_oidc_attempt(client)
+    _patch_claim_exchange(monkeypatch, {**_valid_claims(), "picture": GENERATED_AVATAR})
+
+    response = client.get(f"/auth/callback/?code={OIDC_CODE}&state={OIDC_STATE}")
+
+    assert response.status_code == HTTPStatus.FOUND
+    user = UserMirror.objects.get(authentik_user_id=OIDC_SUBJECT)
+    assert user.avatar_url == GENERATED_AVATAR
+
+
+@override_settings(
+    EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
+)
+def test_s12_callback_keeps_photo_when_authentik_picture_is_generated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = Client()
+    _ = UserMirror.objects.create(
+        authentik_user_id=OIDC_SUBJECT,
+        avatar_url=PHOTO_AVATAR,
+    )
+    _seed_oidc_attempt(client)
+    _patch_claim_exchange(monkeypatch, {**_valid_claims(), "picture": GENERATED_AVATAR})
+
+    response = client.get(f"/auth/callback/?code={OIDC_CODE}&state={OIDC_STATE}")
+
+    assert response.status_code == HTTPStatus.FOUND
+    user = UserMirror.objects.get(authentik_user_id=OIDC_SUBJECT)
+    assert user.avatar_url == PHOTO_AVATAR
+
+
+@override_settings(
+    EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
+)
+def test_s12_callback_overwrites_generated_picture_when_authentik_picture_is_photo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = Client()
+    _ = UserMirror.objects.create(
+        authentik_user_id=OIDC_SUBJECT,
+        avatar_url=GENERATED_AVATAR,
+    )
+    _seed_oidc_attempt(client)
+    _patch_claim_exchange(monkeypatch, {**_valid_claims(), "picture": PHOTO_AVATAR})
+
+    response = client.get(f"/auth/callback/?code={OIDC_CODE}&state={OIDC_STATE}")
+
+    assert response.status_code == HTTPStatus.FOUND
+    user = UserMirror.objects.get(authentik_user_id=OIDC_SUBJECT)
+    assert user.avatar_url == PHOTO_AVATAR
 
 
 @override_settings(

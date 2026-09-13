@@ -49,7 +49,8 @@
 - `unresolved`：只存用户 ID、尚无 UserMirror（例如从未登录）；不得推断为 `local`。
 
 `avatar_url` 为 `UserMirror.avatar_url`；无照片时为空字符串。有钉钉照片时为 https 地址；
-Authentik 生成的首字母图为 `data:image/svg+xml;base64,...` 内联图。前端 `safeAvatarUrl`
+Authentik 生成的首字母图为 `data:image/svg+xml;base64,...` 内联图。写入时真实照片始终优先，
+生成图不得覆盖已有照片。前端 `safeAvatarUrl`
 只接受 https、同源路径和白名单内联图。
 
 ---

@@ -375,7 +375,7 @@ def test_directory_sync_keeps_user_mirror_avatar_url_when_directory_avatar_is_un
                 "corp_id": "corp-1",
                 "user_id": "user-avatar-unsafe-dir",
                 "name": "目录不安全头像用户",
-                "avatar": "data:image/svg+xml;base64,PHN2Zy4uLg==",
+                "avatar": "javascript:alert(1)",
                 "department_ids": [],
                 "manager_userid": "",
                 "status": "active",
@@ -387,6 +387,93 @@ def test_directory_sync_keeps_user_mirror_avatar_url_when_directory_avatar_is_un
 
     user = UserMirror.objects.get(authentik_user_id="ak-avatar-unsafe-dir")
     assert user.avatar_url == existing
+
+
+def test_directory_sync_overwrites_generated_avatar_with_directory_photo() -> None:
+    generated = "data:image/svg+xml;base64,PHN2Zy4uLg=="
+    photo = "https://static-legacy.dingtalk.com/media/directory.jpg"
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-avatar-generated-overwrite",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-avatar-generated-overwrite",
+        avatar_url=generated,
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-avatar-generated-overwrite",
+                "name": "生成头像用户",
+                "avatar": photo,
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+        ],
+    )
+
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    user = UserMirror.objects.get(authentik_user_id="ak-avatar-generated-overwrite")
+    assert user.avatar_url == photo
+
+
+def test_directory_sync_keeps_photo_when_directory_avatar_is_generated() -> None:
+    existing = "https://oidc.example.test/media/original.jpg"
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-avatar-keep-photo",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-avatar-keep-photo",
+        avatar_url=existing,
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-avatar-keep-photo",
+                "name": "已有照片用户",
+                "avatar": "data:image/svg+xml;base64,PHN2Zy4uLg==",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+        ],
+    )
+
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    user = UserMirror.objects.get(authentik_user_id="ak-avatar-keep-photo")
+    assert user.avatar_url == existing
+
+
+def test_directory_sync_writes_generated_avatar_when_mirror_is_empty() -> None:
+    generated = "data:image/svg+xml;base64,PHN2Zy4uLg=="
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-avatar-generated-empty",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-avatar-generated-empty",
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-avatar-generated-empty",
+                "name": "空头像用户",
+                "avatar": generated,
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+        ],
+    )
+
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    user = UserMirror.objects.get(authentik_user_id="ak-avatar-generated-empty")
+    assert user.avatar_url == generated
 
 
 def test_directory_job_number_reaches_mirror_and_public_api_without_user_mirror() -> None:
