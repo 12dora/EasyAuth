@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from django.db import models
+from django.db.models.expressions import F, OrderBy
 from django.db.models.functions import NullIf
 from django.http import JsonResponse
 
@@ -12,9 +13,14 @@ from easyauth.api.responses import error_response
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
+    from typing import Protocol
 
-    from django.db.models.expressions import Combinable
+    from django.db.models.expressions import Combinable, Expression
     from django.http import HttpRequest
+
+    class _ResolvedOrderField(Protocol):
+        @property
+        def output_field(self) -> object: ...
 
 ORDERING_PARAM = "ordering"
 TIEBREAKER = "pk"
@@ -72,14 +78,14 @@ def _invalid_ordering_response(
     )
 
 
-def apply_ordering[T: models.Model](
+def apply_ordering[QS: models.QuerySet[models.Model]](
     request: HttpRequest,
-    queryset: models.QuerySet[T],
+    queryset: QS,
     allowed: Mapping[str, str | tuple[str, ...]],
     default: tuple[str, ...],
     *,
     annotations: Mapping[str, Callable[[], Combinable]] | None = None,
-) -> models.QuerySet[T] | JsonResponse:
+) -> QS | JsonResponse:
     """统一校验并在分页前排序; 仅构建当前排序所需注解, 升序空值置后。"""
     ordering = parse_ordering(request, allowed, default)
     if isinstance(ordering, JsonResponse):
@@ -88,16 +94,21 @@ def apply_ordering[T: models.Model](
         name = field.lstrip("-")
         if annotations is not None and name in annotations:
             queryset = queryset.annotate(**{name: annotations[name]()})
-    expressions = []
-    for field in ordering:
-        name = field.lstrip("-")
-        expression = models.F(name)
-        resolved = queryset.query.resolve_ref(name)
-        if isinstance(resolved.output_field, (models.CharField, models.TextField)):
-            expression = NullIf(expression, models.Value(""))
-        expressions.append(
-            expression.desc(nulls_last=True)
-            if field.startswith("-")
-            else expression.asc(nulls_last=True)
-        )
+    expressions: list[OrderBy] = [_nulls_last_order(queryset, field) for field in ordering]
     return queryset.order_by(*expressions)
+
+
+def _nulls_last_order(queryset: models.QuerySet[models.Model], field: str) -> OrderBy:
+    name = field.lstrip("-")
+    expression: F | NullIf = F(name)
+    if _has_text_output(queryset.query.resolve_ref(name)):
+        expression = NullIf(expression, models.Value(""))
+    if field.startswith("-"):
+        return expression.desc(nulls_last=True)
+    return expression.asc(nulls_last=True)
+
+
+def _has_text_output(resolved: Expression) -> bool:
+    # django-stubs 将 Expression.output_field 标为未参数化 Field; 经 Protocol 收成 object。
+    typed = cast("_ResolvedOrderField", resolved)
+    return isinstance(typed.output_field, (models.CharField, models.TextField))
