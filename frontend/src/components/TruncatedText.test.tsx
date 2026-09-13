@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 
@@ -53,6 +53,82 @@ describe("TruncatedText", () => {
     const shortNode = screen.getByText("捷发-安环部", { selector: "span.truncate" });
     mockLayout(shortNode, 40, 80);
     await user.hover(shortNode);
+    expect(visibleTooltip()).toBeNull();
+  });
+
+  test("指针在 data-tooltip-child 内时不打开溢出 Tooltip", async () => {
+    const user = userEvent.setup();
+    renderWithAntd(
+      <TruncatedText text="张三, 李四" title={"张三 · 安环部\n李四 · 财务部"}>
+        <span data-tooltip-child="">张三</span>
+        {", "}
+        <span data-tooltip-child="">李四</span>
+      </TruncatedText>,
+    );
+
+    const wrapper = screen.getByText("张三").closest(".truncate");
+    expect(wrapper).toBeInstanceOf(HTMLElement);
+    mockLayout(wrapper as HTMLElement, 200, 80);
+
+    await user.hover(screen.getByText("张三"));
+    expect(visibleTooltip()).toBeNull();
+  });
+
+  test("指针在子节点外且已截断时打开溢出 Tooltip", async () => {
+    renderWithAntd(
+      <TruncatedText text="张三, 李四" title="张三 · 安环部">
+        <span data-tooltip-child="">张三</span>
+        {", "}
+        <span data-tooltip-child="">李四</span>
+      </TruncatedText>,
+    );
+
+    const wrapper = screen.getByText("张三").closest(".truncate");
+    expect(wrapper).toBeInstanceOf(HTMLElement);
+    mockLayout(wrapper as HTMLElement, 200, 80);
+
+    fireEvent.mouseOver(wrapper as HTMLElement);
+    await waitFor(() => expect(visibleTooltip()).not.toBeNull());
+    expect(visibleTooltip()).toHaveTextContent("张三 · 安环部");
+  });
+
+  test("从空白处移入 data-tooltip-child 时关掉溢出 Tooltip", async () => {
+    renderWithAntd(
+      <TruncatedText text="张三, 李四">
+        <span data-tooltip-child="">张三</span>
+        {", "}
+        <span data-tooltip-child="">李四</span>
+      </TruncatedText>,
+    );
+
+    const child = screen.getByText("张三");
+    const wrapper = child.closest(".truncate");
+    expect(wrapper).toBeInstanceOf(HTMLElement);
+    mockLayout(wrapper as HTMLElement, 200, 80);
+
+    fireEvent.mouseOver(wrapper as HTMLElement);
+    await waitFor(() => expect(visibleTooltip()).not.toBeNull());
+
+    fireEvent.mouseOver(child);
+    await waitFor(() => expect(visibleTooltip()).toBeNull());
+  });
+
+  test("isChildTarget 为真时忽略 mouseenter, 不打开溢出 Tooltip", () => {
+    renderWithAntd(
+      <TruncatedText
+        text="abcdefghijklmnop"
+        isChildTarget={(event) => event.target instanceof HTMLElement && event.target.dataset.role === "inner"}
+      >
+        <span data-role="inner">abcdefghijklmnop</span>
+      </TruncatedText>,
+    );
+
+    const inner = screen.getByText("abcdefghijklmnop");
+    const wrapper = inner.closest(".truncate");
+    expect(wrapper).toBeInstanceOf(HTMLElement);
+    mockLayout(wrapper as HTMLElement, 200, 80);
+
+    fireEvent.mouseOver(inner);
     expect(visibleTooltip()).toBeNull();
   });
 });

@@ -11,7 +11,7 @@ import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { ButtonLink } from "../ButtonLink";
 import { TruncatedText } from "../TruncatedText";
-import { userOptionName, userSecondaryLabel } from "../UserCombobox";
+import { personNameWithDepartment, userOptionName, userSecondaryLabel } from "../UserCombobox";
 import { enumFilter, readField, textFilter, type ColumnType, type ServerSortState } from "./AppTable";
 
 /**
@@ -542,7 +542,8 @@ export function personColumn<T>({
 
 /**
  * 多人列: 姓名以 `, ` 写在同一行, 超长由 TruncatedText 截断; 悬停单个姓名才出部门
- * (或「本地用户」)。次行绝不出 UUID。应用列表负责人走这里, 不要再用 textColumn + safeJoin。
+ * (或「本地用户」)。溢出 Tooltip 只在指针落在姓名 span 以外时打开, 内容是每人一行
+ * 「姓名 · 部门」, 避免与单人部门 Tooltip 叠开。次行绝不出 UUID。
  */
 export function peopleColumn<T>({
   filter = false,
@@ -610,7 +611,7 @@ function PeopleLine({ people, t }: { people: readonly PersonRef[]; t: Translator
     { separator: PEOPLE_NAME_SEPARATOR },
   );
   return (
-    <TruncatedText className="block w-full min-w-0" text={joined}>
+    <TruncatedText className="block w-full min-w-0" text={joined} title={<PeopleOverflowTitle people={people} t={t} />}>
       {people.map((person, index) => (
         <Fragment key={person.user_id}>
           {index > 0 ? PEOPLE_NAME_SEPARATOR : null}
@@ -621,15 +622,19 @@ function PeopleLine({ people, t }: { people: readonly PersonRef[]; t: Translator
   );
 }
 
+function PeopleOverflowTitle({ people, t }: { people: readonly PersonRef[]; t: Translator }) {
+  return people.map((person) => <div key={person.user_id}>{personNameWithDepartment(person, t)}</div>);
+}
+
 function PersonName({ person, t }: { person: PersonRef; t: Translator }) {
   const name = userOptionName(person);
   const secondary = userSecondaryLabel(person, t);
   if (!secondary) {
-    return <span>{name}</span>;
+    return <span data-tooltip-child="">{name}</span>;
   }
   return (
     <Tooltip title={secondary}>
-      <span>{name}</span>
+      <span data-tooltip-child="">{name}</span>
     </Tooltip>
   );
 }

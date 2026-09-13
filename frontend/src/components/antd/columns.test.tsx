@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
@@ -122,6 +122,62 @@ describe("peopleColumn", () => {
     await user.hover(name);
     expect(visibleTooltip()).toBeNull();
   });
+
+  test("截断时悬停姓名只出部门 Tooltip, 悬停空白处只出全员列表", async () => {
+    interface App {
+      key: string;
+      owners: PersonRef[];
+    }
+    const columns: ColumnsType<App> = [
+      peopleColumn<App>({
+        t,
+        getPeople: (app) => app.owners,
+      }),
+    ];
+    const user = userEvent.setup();
+
+    renderWithAntd(
+      <AppTable<App>
+        columns={columns}
+        dataSource={[
+          {
+            key: "crm",
+            owners: [
+              { user_id: "u-1", name: "张三", department: "捷发-安环部", account_kind: "directory" },
+              { user_id: UUID, name: "系统管理员", department: "", account_kind: "local" },
+            ],
+          },
+        ]}
+        pagination={false}
+        rowKey="key"
+      />,
+    );
+
+    const zhang = screen.getByText("张三");
+    const wrapper = zhang.closest(".truncate");
+    expect(wrapper).toBeInstanceOf(HTMLElement);
+    mockLayout(wrapper as HTMLElement, 200, 80);
+
+    await user.hover(zhang);
+    await waitFor(() => {
+      const tips = visibleTooltips();
+      expect(tips).toHaveLength(1);
+      expect(tips[0]).toHaveTextContent("捷发-安环部");
+    });
+    expect(visibleTooltips()[0]).not.toHaveTextContent("张三 · 捷发-安环部");
+    expect(visibleTooltips()[0]).not.toHaveTextContent("系统管理员");
+
+    await user.unhover(zhang);
+    await waitFor(() => expect(visibleTooltip()).toBeNull());
+
+    fireEvent.mouseOver(wrapper as HTMLElement);
+    await waitFor(() => {
+      const tips = visibleTooltips();
+      expect(tips).toHaveLength(1);
+      expect(tips[0]).toHaveTextContent("张三 · 捷发-安环部");
+      expect(tips[0]).toHaveTextContent("系统管理员 · 本地用户");
+    });
+  });
 });
 
 function secondaryLineTexts(): string[] {
@@ -130,6 +186,15 @@ function secondaryLineTexts(): string[] {
   );
 }
 
+function mockLayout(element: HTMLElement, scrollWidth: number, clientWidth: number) {
+  Object.defineProperty(element, "scrollWidth", { configurable: true, get: () => scrollWidth });
+  Object.defineProperty(element, "clientWidth", { configurable: true, get: () => clientWidth });
+}
+
+function visibleTooltips(): HTMLElement[] {
+  return [...document.querySelectorAll(".ant-tooltip:not(.ant-tooltip-hidden)")];
+}
+
 function visibleTooltip(): HTMLElement | null {
-  return document.querySelector(".ant-tooltip:not(.ant-tooltip-hidden)");
+  return visibleTooltips()[0] ?? null;
 }
