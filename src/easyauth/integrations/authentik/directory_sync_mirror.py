@@ -23,10 +23,13 @@ from easyauth.integrations.authentik.directory_sync_snapshot import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from easyauth.accounts.org_context import DingTalkOrgSummary
     from easyauth.integrations.authentik.directory_payloads import DirectoryJson
 
 __all__ = [
+    "_sync_user_mirror_avatars",
     "_update_user_mirror_summary",
     "_upsert_department",
     "_upsert_org_context",
@@ -83,27 +86,49 @@ def _upsert_user(payload: DirectoryJson, *, generation: int) -> None:
             "departed_at": departed_at,
         },
     )
-    _sync_user_mirror_avatar(payload)
+    # UserMirror.avatar_url 由 _sync_user_mirror_avatars 在整份快照 upsert 后批量回写。
 
 
-def _sync_user_mirror_avatar(payload: DirectoryJson) -> None:
-    avatar = safe_avatar_url(_string(payload.get("avatar")))
-    source_slug = _directory_source_slug(payload)
-    corp_id = _string(payload.get("corp_id"))
-    user_id = _string(payload.get("user_id"))
-    if avatar == "" or source_slug == "" or corp_id == "" or user_id == "":
-        return
+def _sync_user_mirror_avatars(payloads: Iterable[DirectoryJson]) -> None:
     # 钉钉目录是照片的权威来源: 已绑定 UserMirror 上与目录不同的头像一律覆盖。
-    # 目录头像为空或不安全时不调用本函数, 保留镜像现有值。
-    queryset = UserMirror.objects.filter(
-        dingtalk_source_slug=source_slug,
-        dingtalk_corp_id=corp_id,
-        dingtalk_userid=user_id,
-    ).exclude(avatar_url=avatar)
-    for user in queryset.select_for_update():
+    # 目录头像为空或不安全时不进入 desired, 保留镜像现有值; 未绑定行不会被查出。
+    desired = _directory_avatar_by_binding(payloads)
+    if not desired:
+        return
+    source_slugs, corp_ids, user_ids = zip(*desired, strict=True)
+    now = timezone.now()
+    changed: list[UserMirror] = []
+    for user in UserMirror.objects.select_for_update().filter(
+        dingtalk_source_slug__in=source_slugs,
+        dingtalk_corp_id__in=corp_ids,
+        dingtalk_userid__in=user_ids,
+    ):
+        avatar = desired.get(
+            (user.dingtalk_source_slug, user.dingtalk_corp_id, user.dingtalk_userid),
+        )
+        if avatar is None or user.avatar_url == avatar:
+            continue
         user.avatar_url = avatar
-        user.full_clean()
-        user.save(update_fields=["avatar_url", "updated_at"])
+        user.updated_at = now
+        changed.append(user)
+    if not changed:
+        return
+    _ = UserMirror.objects.bulk_update(changed, ["avatar_url", "updated_at"])
+
+
+def _directory_avatar_by_binding(
+    payloads: Iterable[DirectoryJson],
+) -> dict[tuple[str, str, str], str]:
+    desired: dict[tuple[str, str, str], str] = {}
+    for payload in payloads:
+        avatar = safe_avatar_url(_string(payload.get("avatar")))
+        source_slug = _directory_source_slug(payload)
+        corp_id = _string(payload.get("corp_id"))
+        user_id = _string(payload.get("user_id"))
+        if avatar == "" or source_slug == "" or corp_id == "" or user_id == "":
+            continue
+        desired[(source_slug, corp_id, user_id)] = avatar
+    return desired
 
 
 def _upsert_org_context(payload: DirectoryJson) -> None:

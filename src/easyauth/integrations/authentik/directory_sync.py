@@ -10,6 +10,7 @@ from easyauth.grants.department_reconcile import schedule_department_grant_recon
 from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
 from easyauth.integrations.authentik.directory_contract import directory_user_key
 from easyauth.integrations.authentik.directory_sync_mirror import (
+    _sync_user_mirror_avatars,
     _update_user_mirror_summary,
     _upsert_department,
     _upsert_org_context,
@@ -81,6 +82,7 @@ def sync_authentik_dingtalk_directory(
                     _upsert_org_context(org_context)
                     _update_user_mirror_summary(org_context)
                     org_context_count += 1
+            _sync_user_mirror_avatars(writable_snapshot.users)
 
             pruned_department_count, tombstoned_user_count = _reconcile_missing_rows(
                 writable_snapshot,
