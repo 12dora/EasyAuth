@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
-from easyauth.accounts.avatar_url import safe_avatar_url
+from easyauth.accounts.avatar_url import resolve_avatar_url, safe_avatar_url
 from easyauth.accounts.models import (
     USER_STATUS_DEPARTED,
     DingTalkDepartmentMirror,
@@ -90,8 +90,8 @@ def _upsert_user(payload: DirectoryJson, *, generation: int) -> None:
 
 
 def _sync_user_mirror_avatars(payloads: Iterable[DirectoryJson]) -> None:
-    # 钉钉目录是照片的权威来源: 已绑定 UserMirror 上与目录不同的头像一律覆盖。
-    # 目录头像为空或不安全时不进入 desired, 保留镜像现有值; 未绑定行不会被查出。
+    # 目录头像经 resolve_avatar_url 写入: 照片始终覆盖; 生成图仅在当前不是照片时写入。
+    # 空或不安全不进入 desired, 保留镜像现有值; 未绑定行不会被查出。
     desired = _directory_avatar_by_binding(payloads)
     if not desired:
         return
@@ -106,9 +106,12 @@ def _sync_user_mirror_avatars(payloads: Iterable[DirectoryJson]) -> None:
         avatar = desired.get(
             (user.dingtalk_source_slug, user.dingtalk_corp_id, user.dingtalk_userid),
         )
-        if avatar is None or user.avatar_url == avatar:
+        if avatar is None:
             continue
-        user.avatar_url = avatar
+        resolved = resolve_avatar_url(user.avatar_url, avatar)
+        if resolved == user.avatar_url:
+            continue
+        user.avatar_url = resolved
         user.updated_at = now
         changed.append(user)
     if not changed:

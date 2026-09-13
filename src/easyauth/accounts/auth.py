@@ -8,7 +8,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from django.contrib.sessions.models import Session
 from django.db import transaction
 
-from easyauth.accounts.avatar_url import safe_avatar_url
+from easyauth.accounts.avatar_url import resolve_avatar_url, safe_avatar_url
 from easyauth.accounts.models import USER_STATUS_ACTIVE, OidcSessionBinding, UserMirror
 from easyauth.accounts.org_context import apply_dingtalk_org_context
 
@@ -174,7 +174,7 @@ def bind_oidc_session(
         user, created = UserMirror.objects.select_for_update().get_or_create(
             authentik_user_id=claims.subject,
             defaults={
-                "avatar_url": claims.avatar_url,
+                "avatar_url": resolve_avatar_url("", claims.avatar_url),
                 "email": claims.email,
                 "name": claims.name,
                 "status": USER_STATUS_ACTIVE,
@@ -314,9 +314,9 @@ def _update_existing_user_profile(user: UserMirror, claims: VerifiedOidcClaims) 
     if claims.email and user.email != claims.email:
         user.email = claims.email
         changed_fields.append("email")
-    # 空或不安全的 picture 视为缺失, 不得覆盖目录同步已经写入的头像。
-    if claims.avatar_url and user.avatar_url != claims.avatar_url:
-        user.avatar_url = claims.avatar_url
+    resolved_avatar = resolve_avatar_url(user.avatar_url, claims.avatar_url)
+    if resolved_avatar != user.avatar_url:
+        user.avatar_url = resolved_avatar
         changed_fields.append("avatar_url")
     if changed_fields:
         changed_fields.append("updated_at")

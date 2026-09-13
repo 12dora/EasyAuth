@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, Literal, TypedDict, cast, override
 
-from easyauth.accounts.avatar_url import safe_avatar_url
+from easyauth.accounts.avatar_url import preferred_avatar_url
 from easyauth.accounts.models import (
     USER_STATUS_ACTIVE,
     USER_STATUS_DEPARTED,
@@ -382,13 +382,9 @@ def _avatar_url_from_attributes(
 ) -> str:
     user_dingtalk = user_attributes.get("dingtalk", {})
     context_dingtalk = context_attributes.get("dingtalk", {})
-    for candidate in (
+    return preferred_avatar_url(
         user_attributes.get("avatar", ""),
         user_dingtalk.get("avatar", ""),
         context_attributes.get("avatar", ""),
         context_dingtalk.get("avatar", ""),
-    ):
-        sanitized = safe_avatar_url(candidate)
-        if sanitized:
-            return sanitized
-    return ""
+    )

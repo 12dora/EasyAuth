@@ -94,7 +94,7 @@ class UserMirror(models.Model):
         db_index=True,
     )
     email: models.EmailField[str, str] = models.EmailField(blank=True)
-    avatar_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
+    avatar_url: models.TextField[str, str] = models.TextField(blank=True, default="")
     department: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     status: models.CharField[str, str] = models.CharField(
         max_length=16,

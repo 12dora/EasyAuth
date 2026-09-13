@@ -5,6 +5,7 @@ from typing import Final, cast, final
 
 from django.db import transaction
 
+from easyauth.accounts.avatar_url import resolve_avatar_url
 from easyauth.accounts.directory_identity import has_directory_identity
 from easyauth.accounts.models import UserMirror
 from easyauth.accounts.status import UserStatus, is_non_active_status
@@ -89,7 +90,7 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
             "dingtalk_union_id": profile.dingtalk_union_id,
             "employee_number": profile.employee_number,
             "manager_userid": profile.manager_userid,
-            "avatar_url": profile.avatar_url,
+            "avatar_url": resolve_avatar_url("", profile.avatar_url),
         },
     )
     if created:
@@ -118,9 +119,9 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
         "employee_number",
         "manager_userid",
     ]
-    # 安全 https/同源头像才写入; 空或不安全视为缺失, 不得清空已有值。
-    if profile.avatar_url and user.avatar_url != profile.avatar_url:
-        user.avatar_url = profile.avatar_url
+    resolved_avatar = resolve_avatar_url(user.avatar_url, profile.avatar_url)
+    if resolved_avatar != user.avatar_url:
+        user.avatar_url = resolved_avatar
         update_fields.append("avatar_url")
     update_fields.append("updated_at")
     user.full_clean()
