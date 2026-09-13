@@ -72,6 +72,97 @@ def test_s10_parse_payload_maps_dingtalk_summary_fields() -> None:
     assert profile.employee_number == "E001"
     assert profile.department == "销售部"
     assert profile.manager_userid == "manager-1"
+    assert profile.avatar_url == ""
+
+
+def test_s10_parse_payload_copies_safe_attributes_avatar() -> None:
+    payload: AuthentikPayloadInput = {
+        "user": {
+            "uid": "s10-payload-avatar",
+            "attributes": {
+                "avatar": "https://static-legacy.dingtalk.com/media/attr.jpg",
+            },
+        },
+        "is_active": True,
+    }
+
+    profile = parse_authentik_payload(payload)
+
+    assert profile.avatar_url == "https://static-legacy.dingtalk.com/media/attr.jpg"
+
+
+def test_s10_parse_payload_copies_safe_dingtalk_avatar() -> None:
+    payload: AuthentikPayloadInput = {
+        "user": {
+            "uid": "s10-payload-dingtalk-avatar",
+            "attributes": {
+                "dingtalk": {
+                    "user_id": "user-1",
+                    "avatar": "https://static-legacy.dingtalk.com/media/dt.jpg",
+                },
+            },
+        },
+        "is_active": True,
+    }
+
+    profile = parse_authentik_payload(payload)
+
+    assert profile.avatar_url == "https://static-legacy.dingtalk.com/media/dt.jpg"
+
+
+def test_s10_parse_payload_prefers_attributes_avatar_over_dingtalk() -> None:
+    payload: AuthentikPayloadInput = {
+        "user": {
+            "uid": "s10-payload-avatar-pref",
+            "attributes": {
+                "avatar": "https://static-legacy.dingtalk.com/media/attr.jpg",
+                "dingtalk": {
+                    "avatar": "https://static-legacy.dingtalk.com/media/dt.jpg",
+                },
+            },
+        },
+        "is_active": True,
+    }
+
+    profile = parse_authentik_payload(payload)
+
+    assert profile.avatar_url == "https://static-legacy.dingtalk.com/media/attr.jpg"
+
+
+def test_s10_parse_payload_skips_unsafe_attributes_avatar_for_dingtalk() -> None:
+    payload: AuthentikPayloadInput = {
+        "user": {
+            "uid": "s10-payload-avatar-fallback",
+            "attributes": {
+                "avatar": "data:image/svg+xml;base64,PHN2Zy4uLg==",
+                "dingtalk": {
+                    "avatar": "https://static-legacy.dingtalk.com/media/dt.jpg",
+                },
+            },
+        },
+        "is_active": True,
+    }
+
+    profile = parse_authentik_payload(payload)
+
+    assert profile.avatar_url == "https://static-legacy.dingtalk.com/media/dt.jpg"
+
+
+def test_s10_parse_payload_treats_null_and_unsafe_avatar_as_absent() -> None:
+    payload: AuthentikPayloadInput = {
+        "user": {
+            "uid": "s10-payload-avatar-absent",
+            "attributes": {
+                "avatar": None,
+                "dingtalk": {"avatar": None},
+            },
+        },
+        "is_active": True,
+    }
+
+    profile = parse_authentik_payload(payload)
+
+    assert profile.avatar_url == ""
 
 
 def test_s10_parse_context_sub_maps_oidc_subject_to_authentik_user_id() -> None:
@@ -188,6 +279,10 @@ def test_s10_parse_payload_rejects_unsupported_status() -> None:
         ({"context": "not-object"}, "context"),
         ({"user": {"uid": ""}}, "user.uid"),
         ({"user": {"uid": "s10-bad-name", "name": 123}}, "user.name"),
+        (
+            {"user": {"uid": "s10-bad-avatar", "attributes": {"avatar": 123}}},
+            "user.attributes.avatar",
+        ),
         ({"user": {"uid": "s10-bad-attributes", "attributes": "not-object"}}, "attributes"),
         (
             {

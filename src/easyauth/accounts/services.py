@@ -89,6 +89,7 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
             "dingtalk_union_id": profile.dingtalk_union_id,
             "employee_number": profile.employee_number,
             "manager_userid": profile.manager_userid,
+            "avatar_url": profile.avatar_url,
         },
     )
     if created:
@@ -105,22 +106,25 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
     user.dingtalk_union_id = profile.dingtalk_union_id
     user.employee_number = profile.employee_number
     user.manager_userid = profile.manager_userid
+    update_fields = [
+        "name",
+        "email",
+        "department",
+        "status",
+        "dingtalk_source_slug",
+        "dingtalk_corp_id",
+        "dingtalk_userid",
+        "dingtalk_union_id",
+        "employee_number",
+        "manager_userid",
+    ]
+    # 安全 https/同源头像才写入; 空或不安全视为缺失, 不得清空已有值。
+    if profile.avatar_url and user.avatar_url != profile.avatar_url:
+        user.avatar_url = profile.avatar_url
+        update_fields.append("avatar_url")
+    update_fields.append("updated_at")
     user.full_clean()
-    user.save(
-        update_fields=[
-            "name",
-            "email",
-            "department",
-            "status",
-            "dingtalk_source_slug",
-            "dingtalk_corp_id",
-            "dingtalk_userid",
-            "dingtalk_union_id",
-            "employee_number",
-            "manager_userid",
-            "updated_at",
-        ],
-    )
+    user.save(update_fields=update_fields)
     return _UserUpsertResult(user=user, created=False, was_non_active=was_non_active)
 
 

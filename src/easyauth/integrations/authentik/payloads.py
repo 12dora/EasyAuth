@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, Literal, TypedDict, cast, override
 
+from easyauth.accounts.avatar_url import safe_avatar_url
 from easyauth.accounts.models import (
     USER_STATUS_ACTIVE,
     USER_STATUS_DEPARTED,
@@ -37,6 +38,7 @@ class AuthentikAttributes(TypedDict, total=False):
     uid: str
     department: str
     status: str
+    avatar: str
     dingtalk: AuthentikDingTalkAttributes
     dingtalk_org: AuthentikDingTalkOrgAttributes
 
@@ -49,6 +51,7 @@ class AuthentikDingTalkAttributes(TypedDict, total=False):
     job_number: str
     name: str
     nick: str
+    avatar: str
 
 
 class AuthentikDingTalkOrgAttributes(TypedDict, total=False):
@@ -89,6 +92,7 @@ class AuthentikUserProfile:
     dingtalk_union_id: str = ""
     employee_number: str = ""
     manager_userid: str = ""
+    avatar_url: str = ""
 
 
 def parse_authentik_payload(payload: AuthentikPayloadInput) -> AuthentikUserProfile:
@@ -115,6 +119,7 @@ def parse_authentik_payload(payload: AuthentikPayloadInput) -> AuthentikUserProf
         dingtalk_union_id=dingtalk.get("union_id", ""),
         employee_number=dingtalk.get("job_number", ""),
         manager_userid=dingtalk_org.get("manager_userid", ""),
+        avatar_url=_avatar_url_from_attributes(user_attributes, context_attributes),
     )
 
 
@@ -159,6 +164,11 @@ def _parse_attributes(
             for field in ("uid", "department", "status"):
                 if field in attributes:
                     parsed[field] = _required_string(attributes[field], f"{field_name}.{field}")
+            if "avatar" in attributes:
+                parsed["avatar"] = _optional_nullable_string(
+                    attributes["avatar"],
+                    f"{field_name}.avatar",
+                )
             if "dingtalk" in attributes:
                 parsed["dingtalk"] = _parse_dingtalk(
                     attributes["dingtalk"],
@@ -281,6 +291,11 @@ def _parse_dingtalk(
             ):
                 if field in attributes:
                     parsed[field] = _required_string(attributes[field], f"{field_name}.{field}")
+            if "avatar" in attributes:
+                parsed["avatar"] = _optional_nullable_string(
+                    attributes["avatar"],
+                    f"{field_name}.avatar",
+                )
             return parsed
         case _:
             raise AuthentikPayloadError(field_name, "must be an object")
@@ -348,3 +363,32 @@ def _dingtalk_display_name(
 def _optional_mapping_string(mapping: dict[str, AuthentikPayloadValue], key: str) -> str:
     value = mapping.get(key)
     return value if isinstance(value, str) else ""
+
+
+def _optional_nullable_string(value: AuthentikPayloadValue, field_name: str) -> str:
+    # Authentik 常把缺失的 dingtalk.avatar 写成 JSON null, 视为空串而不是类型错误。
+    match value:
+        case None:
+            return ""
+        case str() as string_value:
+            return string_value
+        case _:
+            raise AuthentikPayloadError(field_name, "must be a string")
+
+
+def _avatar_url_from_attributes(
+    user_attributes: AuthentikAttributes,
+    context_attributes: AuthentikAttributes,
+) -> str:
+    user_dingtalk = user_attributes.get("dingtalk", {})
+    context_dingtalk = context_attributes.get("dingtalk", {})
+    for candidate in (
+        user_attributes.get("avatar", ""),
+        user_dingtalk.get("avatar", ""),
+        context_attributes.get("avatar", ""),
+        context_dingtalk.get("avatar", ""),
+    ):
+        sanitized = safe_avatar_url(candidate)
+        if sanitized:
+            return sanitized
+    return ""

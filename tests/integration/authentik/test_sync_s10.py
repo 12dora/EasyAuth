@@ -69,6 +69,76 @@ def test_s10_webhook_sync_upserts_new_and_existing_user() -> None:
     assert user.email == "new@example.test"
     assert user.department == "新部门"
     assert user.status == USER_STATUS_ACTIVE
+    assert user.avatar_url == ""
+
+
+def test_sync_payload_copies_safe_authentik_avatar() -> None:
+    created = AuthentikSyncService.sync_payload(
+        {
+            "user": {
+                "uid": "s10-sync-avatar-create",
+                "name": "头像用户",
+                "attributes": {
+                    "avatar": "https://static-legacy.dingtalk.com/media/created.jpg",
+                },
+            },
+            "is_active": True,
+        },
+    )
+
+    assert created.created is True
+    assert created.user.avatar_url == "https://static-legacy.dingtalk.com/media/created.jpg"
+
+
+def test_sync_payload_overwrites_avatar_when_authentik_sends_safe_url() -> None:
+    _ = UserMirror.objects.create(
+        authentik_user_id="s10-sync-avatar-overwrite",
+        avatar_url="https://oidc.example.test/media/old.jpg",
+    )
+
+    updated = AuthentikSyncService.sync_payload(
+        {
+            "user": {
+                "uid": "s10-sync-avatar-overwrite",
+                "name": "头像用户",
+                "attributes": {
+                    "dingtalk": {
+                        "avatar": "https://static-legacy.dingtalk.com/media/webhook.jpg",
+                    },
+                },
+            },
+            "is_active": True,
+        },
+    )
+
+    assert updated.created is False
+    user = UserMirror.objects.get(authentik_user_id="s10-sync-avatar-overwrite")
+    assert user.avatar_url == "https://static-legacy.dingtalk.com/media/webhook.jpg"
+
+
+def test_sync_payload_keeps_existing_avatar_when_authentik_avatar_is_absent() -> None:
+    existing = "https://oidc.example.test/media/old.jpg"
+    _ = UserMirror.objects.create(
+        authentik_user_id="s10-sync-avatar-keep",
+        avatar_url=existing,
+    )
+
+    _ = AuthentikSyncService.sync_payload(
+        {
+            "user": {
+                "uid": "s10-sync-avatar-keep",
+                "name": "头像用户",
+                "attributes": {
+                    "avatar": "data:image/svg+xml;base64,PHN2Zy4uLg==",
+                    "dingtalk": {"avatar": None},
+                },
+            },
+            "is_active": True,
+        },
+    )
+
+    user = UserMirror.objects.get(authentik_user_id="s10-sync-avatar-keep")
+    assert user.avatar_url == existing
 
 
 def test_sync_payload_updates_dingtalk_fields() -> None:
