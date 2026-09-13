@@ -321,6 +321,36 @@ describe("PortalRequestsSection 表格", () => {
     }
   });
 
+  test("点击审批人表头发送 ordering=approver", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (!url.startsWith("/portal/api/v1/me/access-requests?")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      return jsonResponse({
+        data: [requestRow({ app_name: "CRM" })],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    try {
+      renderRequests();
+      expect(await screen.findByText("CRM")).toBeVisible();
+
+      await sortByColumn(user, "审批人");
+      await waitFor(() =>
+        expect(lastFetchUrl(fetchMock)).toBe(
+          "/portal/api/v1/me/access-requests?page=1&page_size=20&ordering=approver",
+        ),
+      );
+      expect(columnSortOrder("审批人")).toBe("ascend");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("使用服务端分页", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
