@@ -35,9 +35,18 @@ describe("PersonAvatar", () => {
     expect(screen.getByRole("img")).toHaveAttribute("width", "32");
   });
 
-  test("data:/http:/javascript: 与空值回落为首字母, 中文取首字", () => {
+  test("白名单 SVG data URL 渲染照片", () => {
+    const src = "data:image/svg+xml;base64,PHN2Zy8+";
+    render(<PersonAvatar name="张三" avatarUrl={src} size={20} alt="张三 的头像" />);
+
+    const photo = screen.getByRole("img", { name: "张三 的头像" });
+    expect(photo).toHaveAttribute("data-person-avatar", "photo");
+    expect(photo).toHaveAttribute("src", src);
+  });
+
+  test("不安全的 data:/http:/javascript: 与空值回落为首字母, 中文取首字", () => {
     const { rerender } = render(
-      <PersonAvatar name="张三" avatarUrl="data:image/svg+xml;base64,PHN2Zy8+" size={20} />,
+      <PersonAvatar name="张三" avatarUrl="data:text/html,alert(1)" size={20} />,
     );
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.getByText("张")).toBeVisible();

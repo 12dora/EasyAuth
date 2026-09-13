@@ -31,8 +31,9 @@
 - `local`：已有 UserMirror 但无钉钉绑定（本地管理员、Authentik 内建用户）。
 - `unresolved`：只存用户 ID、尚无 UserMirror（例如从未登录）；不得推断为 `local`。
 
-`avatar_url` 为 `UserMirror.avatar_url`；无照片时为空字符串，**不会**是 `data:` URI
-（Authentik 首字母 SVG 视为缺失）。行字段形态为 `{prefix}avatar_url`（如 `user_avatar_url`）。
+`avatar_url` 为 `UserMirror.avatar_url`；无照片时为空字符串。有钉钉照片时为 https 地址；
+Authentik 生成的首字母图为 `data:image/svg+xml;base64,...` 内联图。前端 `safeAvatarUrl`
+只接受 https、同源路径和白名单内联图。行字段形态为 `{prefix}avatar_url`（如 `user_avatar_url`）。
 
 ---
 
