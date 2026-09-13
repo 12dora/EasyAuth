@@ -566,7 +566,7 @@ export function peopleColumn<T>({
         return "-";
       }
       return (
-        <div className="flex min-w-0 flex-col gap-2">
+        <div className="flex w-full min-w-0 flex-col gap-2">
           {people.map((person) => (
             <PersonStack key={person.user_id} person={person} t={t} />
           ))}
@@ -609,9 +609,11 @@ function PersonStack({ person, t }: { person: PersonRef; t: Translator }) {
   const displayName = userOptionName(person);
   const secondary = userSecondaryLabel(person, t);
   return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <strong className="truncate">{displayName}</strong>
-      {secondary ? <TruncatedText className="text-body leading-5 text-ink-soft" text={secondary} /> : null}
+    <div className="flex w-full min-w-0 flex-col gap-1">
+      <strong className="block w-full min-w-0 truncate">{displayName}</strong>
+      {secondary ? (
+        <TruncatedText className="block w-full min-w-0 text-body leading-5 text-ink-soft" text={secondary} />
+      ) : null}
     </div>
   );
 }
