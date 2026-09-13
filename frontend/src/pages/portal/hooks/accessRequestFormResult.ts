@@ -25,6 +25,8 @@ export interface AccessRequestFormResultInput {
   expiresAtError: boolean;
   actions: AccessRequestActions;
   prefillErrorMessageKey: MessageKey | "";
+  lockedAuthorizationGroupKeys: string[];
+  lockedSelectionKeys: string[];
 }
 
 export function buildAccessRequestFormResult(input: AccessRequestFormResultInput): AccessRequestFormResult {
@@ -39,6 +41,8 @@ export function buildAccessRequestFormResult(input: AccessRequestFormResultInput
     ...submissionStatus(input),
     prefillErrorMessageKey: input.prefillErrorMessageKey,
     ...formHandlers(input.fields, input.actions),
+    lockedAuthorizationGroupKeys: input.lockedAuthorizationGroupKeys,
+    lockedSelectionKeys: input.lockedSelectionKeys,
   };
 }
 

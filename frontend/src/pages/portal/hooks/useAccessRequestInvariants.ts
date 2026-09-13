@@ -5,7 +5,7 @@ import type { PortalGrantRow } from "../portalListPayload";
 import { applyBaseGrantToDraft } from "./accessRequestActions";
 import { buildDefaultApproverUserIds } from "./accessRequestApprovers";
 import { groupCoveredSelectionKeySet, nextDefaultPermissionScopes } from "./accessRequestCatalog";
-import { directGrantSelectionKey, listsAreEqual } from "./accessRequestSelection";
+import { listsAreEqual } from "./accessRequestSelection";
 import type { AccessRequestFields, CatalogView } from "./accessRequestTypes";
 
 export function useDefaultSingleScopes(
@@ -97,7 +97,7 @@ export function useCurrentGrantForAppInvariant(
 }
 
 export function useLifecycleGrantInvariant(fields: AccessRequestFields, selectedBaseGrant: PortalGrantRow | undefined): void {
-  const { requestType, setAppKey, setAuthorizationGroupKeys, setBaseGrantRevision, setGrantType, setSelectedPermissionKeys } = fields;
+  const { requestType, setAppKey, setBaseGrantRevision, setGrantType } = fields;
   useEffect(() => {
     if (requestType === "grant" || !selectedBaseGrant) {
       return;
@@ -107,13 +107,10 @@ export function useLifecycleGrantInvariant(fields: AccessRequestFields, selected
     if (requestType !== "renew") {
       return;
     }
-    setAuthorizationGroupKeys(selectedBaseGrant.groups.map((group) => group.key));
-    setSelectedPermissionKeys(
-      selectedBaseGrant.grants
-        .filter((item) => item.source_type === "direct")
-        .map((item) => directGrantSelectionKey(item.permission, item.scope)),
-    );
+    applyBaseGrantToDraft(fields, selectedBaseGrant);
     setGrantType("timed");
+    // fields 每次渲染都是新对象, setter 稳定; applyBaseGrantToDraft 只用 setter。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     requestType,
     selectedBaseGrant?.app_key,
@@ -122,9 +119,7 @@ export function useLifecycleGrantInvariant(fields: AccessRequestFields, selected
     selectedBaseGrant?.groups,
     selectedBaseGrant?.grants,
     setAppKey,
-    setAuthorizationGroupKeys,
     setBaseGrantRevision,
     setGrantType,
-    setSelectedPermissionKeys,
   ]);
 }

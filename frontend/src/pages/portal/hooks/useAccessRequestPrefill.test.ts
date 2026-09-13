@@ -94,6 +94,8 @@ function grantList(overrides: Record<string, unknown> = {}) {
         catalog_version: 2,
         snapshot_version: "v1",
         groups: [{ key: "reader", kind: "role", name: "只读" }],
+        authorization_groups: [],
+        direct_grants: [],
         ...overrides,
         grants: [
           {

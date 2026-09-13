@@ -1,4 +1,7 @@
+import { parsePortalCurrentGrant } from "../../../lib/domain";
 import type { PortalGrantRow } from "../portalListPayload";
+import { keepLockedSelectionKeys } from "../components/permissionSelectorRows";
+import { userSourcedDraftFromCurrentGrant } from "./accessRequestLocked";
 import {
   descendantGroupKeys,
   filterDirectGrantSelections,
@@ -40,6 +43,7 @@ export function buildAccessRequestActions(
   catalogView: CatalogView,
   currentGrants: PortalGrantRow[],
   submit: () => void,
+  locked: { groupKeys: string[]; selectionKeys: string[] } = { groupKeys: [], selectionKeys: [] },
 ): AccessRequestActions {
   const revokeSnapshot = revokeBaseGrantSnapshot(
     fields.requestType,
@@ -47,7 +51,7 @@ export function buildAccessRequestActions(
   );
   return {
     ...buildTargetActions(fields, currentGrants),
-    ...buildPermissionSelectionActions(fields, catalogView, revokeSnapshot),
+    ...buildPermissionSelectionActions(fields, catalogView, revokeSnapshot, locked),
     ...buildGroupExpansionActions(fields, catalogView),
     ...buildApproverActions(fields),
     submit,
@@ -101,15 +105,12 @@ function buildTargetActions(fields: AccessRequestFields, currentGrants: PortalGr
  * 少带一个, 提交出去的变更就会把它当成"要撤掉"。
  */
 export function applyBaseGrantToDraft(fields: AccessRequestFields, grant: PortalGrantRow): void {
+  const draft = userSourcedDraftFromCurrentGrant({ ...grant, ...parsePortalCurrentGrant(grant) });
   fields.setBaseGrantRevision(grant.grant_revision);
   fields.setAppKey(grant.app_key ?? "");
-  fields.setAuthorizationGroupKeys(grant.groups.map((group) => group.key));
+  fields.setAuthorizationGroupKeys(draft.groupKeys);
   fields.setGroupMaterializationNoticeKey("");
-  fields.setSelectedPermissionKeys(
-    grant.grants
-      .filter((item) => item.source_type === "direct")
-      .map((item) => directGrantSelectionKey(item.permission, item.scope)),
-  );
+  fields.setSelectedPermissionKeys(draft.selectionKeys);
 }
 
 /** 换申请类型或换应用都会作废整张草稿: 基础授权、权限组、直接权限、展开态与审批人一并清空。 */
@@ -135,38 +136,68 @@ function buildPermissionSelectionActions(
   fields: AccessRequestFields,
   catalogView: CatalogView,
   revokeSnapshot: RevokeBaseGrantSnapshot | null,
+  locked: { groupKeys: string[]; selectionKeys: string[] },
 ): PermissionSelectionActions {
+  const lockedGroupKeySet = new Set(locked.groupKeys);
+  const lockedSelectionKeySet = new Set(locked.selectionKeys);
   return {
     changeAuthorizationGroupKeys: (groupKeys: string[]) => {
       assertTargetIsEditable(fields.requestType);
-      const nextGroupKeys = uniqueStrings(groupKeys);
+      const nextGroupKeys = uniqueStrings(groupKeys).filter((key) => !lockedGroupKeySet.has(key));
       assertRevokeKeepsGroupsWithinBaseGrant(nextGroupKeys, revokeSnapshot);
       fields.setAuthorizationGroupKeys(nextGroupKeys);
       fields.setGroupMaterializationNoticeKey("");
       const coveredKeySet = groupCoveredSelectionKeySet(nextGroupKeys, catalogView);
-      fields.setSelectedPermissionKeys((current) => current.filter((key) => !coveredKeySet.has(key)));
+      fields.setSelectedPermissionKeys((current) =>
+        current.filter((key) => !coveredKeySet.has(key) && !lockedSelectionKeySet.has(key)),
+      );
     },
     selectPermissionKeys: (keys: string[]) => {
-      applySelectionChange(fields, catalogView, revokeSnapshot, (current) => uniqueStrings([...current, ...keys]));
+      applySelectionChange(
+        fields,
+        catalogView,
+        revokeSnapshot,
+        (current) => uniqueStrings([...current, ...keys]),
+        lockedSelectionKeySet,
+      );
     },
     clearPermissionKeys: (keys: string[]) => {
       const keySet = new Set(keys);
-      applySelectionChange(fields, catalogView, revokeSnapshot, (current) => current.filter((key) => !keySet.has(key)));
+      applySelectionChange(
+        fields,
+        catalogView,
+        revokeSnapshot,
+        (current) => current.filter((key) => !keySet.has(key)),
+        lockedSelectionKeySet,
+      );
     },
     changePermissionScope: (permission: ScopedPermissionItem, scopeKey: string) => {
       // 勾选态看的是展示态: 权限组覆盖的权限也画成勾选, 再点一次就是"取消"。方向只按展示态定一次,
       // 后面对直接权限集合重放同一次变更时不能再算一遍, 否则被权限组覆盖的项会反向变成"选中"。
       const shouldSelect = permissionScopeClickSelects(permission, scopeKey, displaySelectionKeys(fields, catalogView));
-      applySelectionChange(fields, catalogView, revokeSnapshot, (current) =>
-        nextPermissionScopeSelection(permission, scopeKey, shouldSelect, current),
+      applySelectionChange(
+        fields,
+        catalogView,
+        revokeSnapshot,
+        (current) => nextPermissionScopeSelection(permission, scopeKey, shouldSelect, current),
+        lockedSelectionKeySet,
       );
     },
     changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => {
       if (!scopeKey) {
         return;
       }
-      applySelectionChange(fields, catalogView, revokeSnapshot, (current) =>
-        nextSelectionForGroupScopeClick(group, scopeKey, shouldSelect, current),
+      applySelectionChange(
+        fields,
+        catalogView,
+        revokeSnapshot,
+        (current) =>
+          keepLockedSelectionKeys(
+            current,
+            nextSelectionForGroupScopeClick(group, scopeKey, shouldSelect, current),
+            lockedSelectionKeySet,
+          ),
+        lockedSelectionKeySet,
       );
     },
   };
@@ -197,6 +228,7 @@ function applySelectionChange(
   catalogView: CatalogView,
   revokeSnapshot: RevokeBaseGrantSnapshot | null,
   changeSelection: (selectionKeys: string[]) => string[],
+  lockedSelectionKeySet: Set<string> = new Set(),
 ): void {
   assertTargetIsEditable(fields.requestType);
   const groupKeys = fields.authorizationGroupKeys;
@@ -208,7 +240,10 @@ function applySelectionChange(
   if (removedCoveredKeys.size === 0) {
     fields.setGroupMaterializationNoticeKey("");
     fields.setSelectedPermissionKeys((current) =>
-      filterDirectGrantSelections(changeSelection(current), groupKeys, catalogView),
+      excludeLockedKeys(
+        filterDirectGrantSelections(changeSelection(current), groupKeys, catalogView),
+        lockedSelectionKeySet,
+      ),
     );
     return;
   }
@@ -224,7 +259,10 @@ function applySelectionChange(
     // 取消权限组覆盖的任一权限 = 该权限组整体不再保留。
     fields.setAuthorizationGroupKeys(keptGroupKeys);
     fields.setSelectedPermissionKeys((current) =>
-      filterDirectGrantSelections(changeSelection(current), keptGroupKeys, catalogView),
+      excludeLockedKeys(
+        filterDirectGrantSelections(changeSelection(current), keptGroupKeys, catalogView),
+        lockedSelectionKeySet,
+      ),
     );
     fields.setGroupMaterializationNoticeKey("portal.request.groupRevokedWhole");
     return;
@@ -236,10 +274,13 @@ function applySelectionChange(
   );
   fields.setAuthorizationGroupKeys(keptGroupKeys);
   fields.setSelectedPermissionKeys((current) =>
-    filterDirectGrantSelections(
-      changeSelection(uniqueStrings([...current, ...requestableCoveredKeys])),
-      keptGroupKeys,
-      catalogView,
+    excludeLockedKeys(
+      filterDirectGrantSelections(
+        changeSelection(uniqueStrings([...current, ...requestableCoveredKeys])),
+        keptGroupKeys,
+        catalogView,
+      ),
+      lockedSelectionKeySet,
     ),
   );
   fields.setGroupMaterializationNoticeKey(
@@ -296,6 +337,13 @@ function assertRevokeKeepsSelectionWithinBaseGrant(
   if (outsideKeys.length > 0) {
     throw new Error(`撤销申请不能添加基础授权之外的权限：${outsideKeys.join(", ")}`);
   }
+}
+
+function excludeLockedKeys(keys: string[], lockedSelectionKeySet: Set<string>): string[] {
+  if (lockedSelectionKeySet.size === 0) {
+    return keys;
+  }
+  return keys.filter((key) => !lockedSelectionKeySet.has(key));
 }
 
 /** 权限组可以覆盖当前用户在目录里看不到的权限范围, 那部分无法转成直接申请。 */

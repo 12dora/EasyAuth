@@ -2518,6 +2518,8 @@ function portalGrantRow(overrides: Record<string, unknown> = {}) {
     grant_id: 1,
     groups: [],
     grants: [],
+    authorization_groups: [],
+    direct_grants: [],
     grant_revision: 1,
     grant_version: 1,
     catalog_version: 1,

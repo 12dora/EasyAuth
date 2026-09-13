@@ -19,6 +19,7 @@ import {
   type ScopedPermissionGroupItem,
   type ScopedPermissionItem,
 } from "./accessRequestTypes";
+import { parsePortalCurrentGrant } from "../../../lib/domain";
 import { useAccessRequestForm } from "./useAccessRequestForm";
 import type { UseAccessRequestFormOptions } from "./useAccessRequestForm";
 
@@ -95,6 +96,24 @@ async function renderReadyForm(currentUserId = "", options: UseAccessRequestForm
   await waitFor(() => expect(view.result.current.apps).toHaveLength(1));
   return view;
 }
+
+describe("parsePortalCurrentGrant", () => {
+  test("两数组必填, 缺一即失败", () => {
+    expect(() => parsePortalCurrentGrant({ authorization_groups: [], direct_grants: [] })).not.toThrow();
+    expect(() => parsePortalCurrentGrant({ authorization_groups: [] })).toThrow(/direct_grants/);
+    expect(() => parsePortalCurrentGrant({ direct_grants: [] })).toThrow(/authorization_groups/);
+    expect(() => parsePortalCurrentGrant(null)).toThrow(/row/);
+  });
+
+  test("source 只能是 user 或 department", () => {
+    expect(() =>
+      parsePortalCurrentGrant({
+        authorization_groups: [{ key: "reader", kind: "role", name: "只读", expires_at: null, source: "org" }],
+        direct_grants: [],
+      }),
+    ).toThrow(/source/);
+  });
+});
 
 describe("useAccessRequestForm", () => {
   afterEach(() => {
@@ -806,6 +825,8 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
           catalog_version: 2,
           snapshot_version: "v1",
           groups: [{ key: "reader", kind: "role", name: "只读" }],
+          authorization_groups: [],
+          direct_grants: [],
           grants: [
             expandedGrant("orders.read", "group", "reader"),
             expandedGrant("orders.export", "group", "reader"),
@@ -864,6 +885,69 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     expect(view.result.current.authorizationGroupKeys).toEqual([]);
     expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY, EXPORT_KEY]);
     expect(view.result.current.noticeMessageKey).toBe("portal.request.groupMaterialized");
+  });
+
+  test("组织授权下发的组与直接权限锁定, 不进申请载荷", async () => {
+    const submittedPayloads: unknown[] = [];
+    const grantList = {
+      data: [
+        {
+          ...lifecycleGrantList().data[0],
+          authorization_groups: [
+            { key: "reader", kind: "role", name: "只读", expires_at: null, source: "department" },
+          ],
+          direct_grants: [
+            {
+              permission: "orders.audit",
+              permission_name: "审计订单",
+              scope: "SELF",
+              scope_name: "本人",
+              expires_at: null,
+              source: "department",
+            },
+          ],
+        },
+      ],
+      pagination: { page: 1, page_size: 100, total_items: 1, total_pages: 1 },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url === "/portal/api/v1/request-catalog") {
+          return jsonResponse(lifecycleCatalog());
+        }
+        if (url === CURRENT_GRANTS_URL) {
+          return jsonResponse(grantList);
+        }
+        if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+          submittedPayloads.push(JSON.parse(String(init.body)));
+          return jsonResponse({ access_request: { id: 1 } }, 201);
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+    const view = await renderReadyForm();
+    await waitFor(() => expect(view.result.current.currentGrants).toHaveLength(1));
+
+    act(() => view.result.current.changeAppKey("crm"));
+
+    expect(view.result.current.requestType).toBe("change");
+    expect(view.result.current.authorizationGroupKeys).toEqual([]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([]);
+    expect(view.result.current.lockedAuthorizationGroupKeys).toEqual(["reader"]);
+    expect(view.result.current.lockedSelectionKeys).toEqual(expect.arrayContaining([READ_KEY, EXPORT_KEY, AUDIT_KEY]));
+
+    act(() => view.result.current.changeAuthorizationGroupKeys(["deleter"]));
+    act(() => view.result.current.changeReason("补权限"));
+    await waitFor(() => expect(view.result.current.canSubmit).toBe(true));
+    act(() => view.result.current.submit());
+    await waitFor(() => expect(submittedPayloads).toHaveLength(1));
+    expect(submittedPayloads[0]).toMatchObject({
+      request_type: "change",
+      authorization_group_keys: ["deleter"],
+      direct_grants: [],
+    });
   });
 
   test("授权列表晚到: 到齐后把已经选中的应用重新判成变更申请", async () => {
@@ -1190,6 +1274,8 @@ describe("useAccessRequestForm 撤销申请下分级权限范围的禁用口径"
           catalog_version: 2,
           snapshot_version: "v1",
           groups: [],
+          authorization_groups: [],
+          direct_grants: [],
           grants: [
             {
               permission: "orders.read",

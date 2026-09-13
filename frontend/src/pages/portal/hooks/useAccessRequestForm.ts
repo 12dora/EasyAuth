@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
+import { parsePortalCurrentGrant } from "../../../lib/domain";
 import { apiRequest } from "../../../lib/api";
 import { parsePortalGrantList } from "../portalListPayload";
-import type { PortalGrantRow } from "../portalListPayload";
+import { departmentSourcedLockedKeys, type PortalCurrentGrantRow } from "./accessRequestLocked";
 import { parsePortalRequestCatalog } from "../requestCatalogContract";
 import { buildAccessRequestActions } from "./accessRequestActions";
 import { buildCatalogView } from "./accessRequestCatalog";
@@ -30,17 +31,17 @@ import {
 import { useAccessRequestSubmitMutation } from "./useAccessRequestSubmitMutation";
 
 const CURRENT_GRANTS_PAGE_SIZE = 100;
-const EMPTY_CURRENT_GRANTS: PortalGrantRow[] = [];
+const EMPTY_CURRENT_GRANTS: PortalCurrentGrantRow[] = [];
 
 /** 读全"我的授权": 按 pagination.total_pages 逐页取, 不在第一页截断。 */
-async function fetchAllCurrentGrants(): Promise<PortalGrantRow[]> {
-  const rows: PortalGrantRow[] = [];
+async function fetchAllCurrentGrants(): Promise<PortalCurrentGrantRow[]> {
+  const rows: PortalCurrentGrantRow[] = [];
   let page = 1;
   for (;;) {
     const payload = parsePortalGrantList(
       await apiRequest<unknown>(`/portal/api/v1/me/grants?page=${page}&page_size=${CURRENT_GRANTS_PAGE_SIZE}`),
     );
-    rows.push(...payload.data);
+    rows.push(...payload.data.map((row) => ({ ...row, ...parsePortalCurrentGrant(row) })));
     if (page >= payload.pagination.total_pages) {
       return rows;
     }
@@ -80,12 +81,17 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
   const submitMutation = useAccessRequestSubmitMutation(fields, catalogView, options.onSubmitted);
   const currentGrants = currentGrantsQuery.data ?? EMPTY_CURRENT_GRANTS;
   const selectedBaseGrant = currentGrants.find((grant) => String(grant.grant_id) === fields.baseGrantId);
+  const currentGrantForApp = currentGrants.find((grant) => grant.app_key === fields.appKey);
+  const locked = useMemo(
+    () => departmentSourcedLockedKeys(currentGrantForApp, catalogView),
+    [catalogView, currentGrantForApp],
+  );
   useLifecycleGrantInvariant(fields, selectedBaseGrant);
   useCurrentGrantForAppInvariant(fields, currentGrants, currentGrantsQuery.isSuccess);
   const actions = buildAccessRequestActions(fields, catalogView, currentGrants, () => {
     fields.setGroupMaterializationNoticeKey("");
     submitMutation.mutate();
-  });
+  }, locked);
   const prefillErrorMessageKey = useAccessRequestPrefillApplication({
     prefill,
     currentGrants,
@@ -118,6 +124,8 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
     expiresAtError: accessRequestExpiresAtError(fields, grantTermIsFuture),
     actions,
     prefillErrorMessageKey,
+    lockedAuthorizationGroupKeys: locked.groupKeys,
+    lockedSelectionKeys: locked.selectionKeys,
   });
 
   // 权限组落地是对用户上一次点击的即时反馈, 占用同一条提示位时优先于"当前应用没有直接权限"这类派生提示。

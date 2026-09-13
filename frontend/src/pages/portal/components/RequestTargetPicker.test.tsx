@@ -194,6 +194,29 @@ describe("RequestTargetPicker", () => {
     expect(await selectedGroupNames(user)).toEqual(["销售只读"]);
   });
 
+  test("组织授权锁定的权限组选中且禁用, 回调不会把它带进草稿", async () => {
+    const onChange = vi.fn();
+    renderWithAntd(
+      <StatefulGroupPicker
+        initialGroupKeys={[]}
+        lockedAuthorizationGroupKeys={["sales-reader"]}
+        lockedHint="由组织授权自动获得，无需申请"
+        onChange={onChange}
+      />,
+    );
+    const user = userEvent.setup();
+
+    const locked = await authorizationGroupOption(user, "销售只读");
+    expect(locked).toHaveAttribute("aria-selected", "true");
+    expect(locked).toHaveClass("ant-select-item-option-disabled");
+    await user.hover(within(locked).getByText("销售只读"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("由组织授权自动获得，无需申请");
+
+    await user.click(await authorizationGroupOption(user, "订单运营包"));
+    expect(onChange).toHaveBeenLastCalledWith(["order-ops"]);
+    expect(onChange.mock.calls.every((call) => !(call[0] as string[]).includes("sales-reader"))).toBe(true);
+  });
+
   test("续期的只读态把权限组下拉整个禁用", async () => {
     renderWithAntd(
       <RequestTargetPicker

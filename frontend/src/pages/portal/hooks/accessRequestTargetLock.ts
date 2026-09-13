@@ -7,8 +7,9 @@
  * 因此撤销草稿里只可能出现基础授权已有的东西, 界面上越界的添加入口必须禁用, 动作层再兜一道。
  */
 
+import { parsePortalCurrentGrant } from "../../../lib/domain";
 import type { PortalGrantRow } from "../portalListPayload";
-import { directGrantSelectionKey } from "./accessRequestSelection";
+import { userSourcedDraftFromCurrentGrant } from "./accessRequestLocked";
 import type { AccessRequestPayloadValues, AccessRequestType } from "./accessRequestTypes";
 
 /** 撤销申请的基础授权快照: 与后端 EffectiveGrantSnapshot 的 group_ids / direct_grants 一一对应。 */
@@ -25,11 +26,13 @@ export function revokeBaseGrantSnapshot(
   if (requestType !== "revoke" || !selectedBaseGrant) {
     return null;
   }
+  const draft = userSourcedDraftFromCurrentGrant({
+    ...selectedBaseGrant,
+    ...parsePortalCurrentGrant(selectedBaseGrant),
+  });
   return {
-    groupKeys: selectedBaseGrant.groups.map((group) => group.key),
-    directSelectionKeys: selectedBaseGrant.grants
-      .filter((item) => item.source_type === "direct")
-      .map((item) => directGrantSelectionKey(item.permission, item.scope)),
+    groupKeys: draft.groupKeys,
+    directSelectionKeys: draft.selectionKeys,
   };
 }
 

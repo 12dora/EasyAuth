@@ -317,7 +317,7 @@ function requireGrantLockedHint(
     return "";
   }
   if (!lockedHint) {
-    throw new Error("GrantForm: 有组织授权锁定项时必须提供 lockedHint");
+    throw new Error("GrantForm: lockedHint is required when locked keys are present");
   }
   return lockedHint;
 }

@@ -1,5 +1,6 @@
-import { Select } from "antd";
+import { Select, Tooltip } from "antd";
 import { useMemo } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 import { Field, SelectInput } from "../../../components/Field";
 import { useI18n, localizedField } from "../../../i18n/I18nProvider";
@@ -7,6 +8,7 @@ import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { PortalCatalogApp } from "../../../lib/domain";
 import type { RevokeBaseGrantSnapshot } from "../hooks/accessRequestTargetLock";
 import type { AuthorizationGroupItem, ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
+import { uniqueStrings } from "../hooks/accessRequestSelection";
 import { PermissionSelector } from "./PermissionSelector";
 
 interface RequestTargetPickerProps {
@@ -18,6 +20,9 @@ interface RequestTargetPickerProps {
   ungroupedPermissions: ScopedPermissionItem[];
   selectedPermissionKeys: string[];
   coveredSelectionKeys?: string[];
+  lockedAuthorizationGroupKeys?: string[];
+  lockedKeys?: string[];
+  lockedHint?: string;
   /**
    * 撤销申请的基础授权快照: 撤销目标是"撤销后保留下来的授权", 后端要求它是基础授权的真子集
    * (submission_validation._validate_revoke_subset), 所以基础授权之外的权限组与权限都不能勾。
@@ -48,6 +53,9 @@ export function RequestTargetPicker({
   ungroupedPermissions,
   selectedPermissionKeys,
   coveredSelectionKeys = [],
+  lockedAuthorizationGroupKeys = [],
+  lockedKeys = [],
+  lockedHint,
   revokeBaseGrant = null,
   expandedGroupKeys,
   catalogIsLoading,
@@ -64,17 +72,29 @@ export function RequestTargetPicker({
   onToggleGroup,
 }: RequestTargetPickerProps) {
   const { t, locale } = useI18n();
-  const authorizationGroupOptions = useMemo(
-    () =>
-      authorizationGroups.map((group) => ({
-        label: localizedField(locale, group.name, group.name_en),
-        value: group.key,
-        // 撤销时基础授权已有的组必须保持可选: 取消是撤销它, 再选回来是撤回这次撤销;
-        // 基础授权之外的组加进来必被后端拒(submission_validation._validate_revoke_subset)。
-        disabled: revokeBaseGrant !== null && !revokeBaseGrant.groupKeys.includes(group.key),
-      })),
-    [authorizationGroups, locale, revokeBaseGrant],
+  const lockedGroupKeySet = useMemo(() => new Set(lockedAuthorizationGroupKeys), [lockedAuthorizationGroupKeys]);
+  const resolvedLockedHint = requirePickerLockedHint(lockedAuthorizationGroupKeys, lockedKeys, lockedHint);
+  const displayedAuthorizationGroupKeys = useMemo(
+    () => uniqueStrings([...lockedAuthorizationGroupKeys, ...authorizationGroupKeys]),
+    [authorizationGroupKeys, lockedAuthorizationGroupKeys],
   );
+  const authorizationGroupOptions = useMemo(() => {
+    const fromCatalog = authorizationGroups.map((group) => ({
+      label: localizedField(locale, group.name, group.name_en),
+      value: group.key,
+      // 撤销时基础授权已有的组必须保持可选: 取消是撤销它, 再选回来是撤回这次撤销;
+      // 基础授权之外的组加进来必被后端拒(submission_validation._validate_revoke_subset)。
+      // 组织授权锁定的组展示为禁用选中, 不能从申请里拿掉。
+      disabled:
+        lockedGroupKeySet.has(group.key) ||
+        (revokeBaseGrant !== null && !revokeBaseGrant.groupKeys.includes(group.key)),
+    }));
+    const knownKeys = new Set(fromCatalog.map((option) => option.value));
+    const extras = lockedAuthorizationGroupKeys
+      .filter((key) => !knownKeys.has(key))
+      .map((key) => ({ label: key, value: key, disabled: true }));
+    return [...fromCatalog, ...extras];
+  }, [authorizationGroups, locale, lockedAuthorizationGroupKeys, lockedGroupKeySet, revokeBaseGrant]);
   return (
     <>
       <div className="grid gap-4 md:grid-cols-2">
@@ -101,7 +121,7 @@ export function RequestTargetPicker({
           <Select
             className="w-full"
             mode="multiple"
-            value={authorizationGroupKeys}
+            value={displayedAuthorizationGroupKeys}
             options={authorizationGroupOptions}
             placeholder={t("portal.request.authorizationGroupNone")}
             notFoundContent={t("portal.request.authorizationGroupEmpty")}
@@ -112,7 +132,22 @@ export function RequestTargetPicker({
             optionFilterProp="label"
             // 应用未选定时目录里没有任何可申请权限组, 控件直接置灰; 选定应用后 authorizationGroups 变化, 选项随之出现。
             disabled={disabled || !appKey}
-            onChange={onAuthorizationGroupKeysChange}
+            optionRender={(option) =>
+              wrapLockedSelectContent(String(option.value), option.label, lockedGroupKeySet, resolvedLockedHint)
+            }
+            tagRender={(props) => (
+              <LockedSelectTag
+                label={props.label}
+                value={String(props.value)}
+                closable={props.closable}
+                onClose={props.onClose}
+                lockedGroupKeySet={lockedGroupKeySet}
+                lockedHint={resolvedLockedHint}
+              />
+            )}
+            onChange={(groupKeys: string[]) =>
+              onAuthorizationGroupKeysChange(groupKeys.filter((key) => !lockedGroupKeySet.has(key)))
+            }
           />
         </Field>
       </div>
@@ -123,6 +158,8 @@ export function RequestTargetPicker({
           ungroupedPermissions={ungroupedPermissions}
           selectedKeys={selectedPermissionKeys}
           coveredKeys={coveredSelectionKeys}
+          lockedKeys={lockedKeys}
+          lockedHint={resolvedLockedHint || undefined}
           revokeBaseGrant={revokeBaseGrant}
           expandedGroupKeys={expandedGroupKeys}
           loading={catalogIsLoading}
@@ -138,5 +175,75 @@ export function RequestTargetPicker({
         />
       </Field>
     </>
+  );
+}
+
+function requirePickerLockedHint(
+  lockedGroupKeys: string[],
+  lockedKeys: string[],
+  lockedHint: string | undefined,
+): string {
+  if (lockedGroupKeys.length === 0 && lockedKeys.length === 0) {
+    return "";
+  }
+  if (!lockedHint) {
+    throw new Error("RequestTargetPicker: lockedHint is required when locked keys are present");
+  }
+  return lockedHint;
+}
+
+function wrapLockedSelectContent(
+  value: string,
+  label: ReactNode,
+  lockedGroupKeySet: Set<string>,
+  lockedHint: string,
+): ReactNode {
+  if (!lockedGroupKeySet.has(value) || !lockedHint) {
+    return label;
+  }
+  return (
+    <Tooltip title={lockedHint}>
+      <span className="inline-flex w-full cursor-not-allowed pointer-events-auto">{label}</span>
+    </Tooltip>
+  );
+}
+
+function LockedSelectTag({
+  label,
+  value,
+  closable,
+  onClose,
+  lockedGroupKeySet,
+  lockedHint,
+}: {
+  label: ReactNode;
+  value: string;
+  closable: boolean;
+  onClose: (event: MouseEvent<HTMLElement>) => void;
+  lockedGroupKeySet: Set<string>;
+  lockedHint: string;
+}) {
+  const locked = lockedGroupKeySet.has(value);
+  const onPreventMouseDown = (event: MouseEvent<HTMLSpanElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const tag = (
+    <span className="ant-select-selection-item" onMouseDown={onPreventMouseDown}>
+      <span className="ant-select-selection-item-content">{label}</span>
+      {closable ? (
+        <span className="ant-select-selection-item-remove" onClick={onClose} role="img" aria-label="close">
+          ×
+        </span>
+      ) : null}
+    </span>
+  );
+  if (!locked || !lockedHint) {
+    return tag;
+  }
+  return (
+    <Tooltip title={lockedHint}>
+      <span className="inline-flex cursor-not-allowed">{tag}</span>
+    </Tooltip>
   );
 }

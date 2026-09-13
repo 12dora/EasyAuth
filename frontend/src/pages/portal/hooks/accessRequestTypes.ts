@@ -177,6 +177,10 @@ export interface AccessRequestFormResult {
   groupCoveredSelectionKeys: string[];
   /** 撤销申请的基础授权快照: 目标只能在它之内往下减, 越界的添加入口由界面禁用。非撤销申请为 null。 */
   revokeBaseGrant: RevokeBaseGrantSnapshot | null;
+  /** 组织授权下发的权限组: 展示为锁定选中, 不进申请载荷。 */
+  lockedAuthorizationGroupKeys: string[];
+  /** 组织授权下发的权限范围选择键(含锁定组覆盖): 交给 PermissionSelector.lockedKeys。 */
+  lockedSelectionKeys: string[];
   /**
    * 基础授权是否被所选应用锁定。
    *
