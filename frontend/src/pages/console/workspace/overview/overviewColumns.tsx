@@ -28,7 +28,6 @@ export function membershipTableColumns({
       getUserId: (membership) => membership.user_id,
       getDepartment: (membership) => membership.user_department,
       getAccountKind: (membership) => membership.user_account_kind,
-      getAvatarUrl: (membership) => membership.user_avatar_url,
       filter: true,
       sorter: true,
     }),

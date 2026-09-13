@@ -56,7 +56,6 @@ function teamMemberTableColumns(t: Translator, actions: TeamMemberTableActions):
       getUserId: (member) => member.user_id,
       getDepartment: (member) => member.department,
       getAccountKind: (member) => member.account_kind,
-      getAvatarUrl: (member) => member.avatar_url,
       filter: true,
       sorter: true,
     }),

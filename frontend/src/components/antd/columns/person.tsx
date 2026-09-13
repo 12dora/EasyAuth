@@ -6,7 +6,6 @@ import { useI18n } from "../../../i18n/I18nProvider";
 import type { AccountKind, PersonRef } from "../../../lib/domain/person";
 import { joinLabels } from "../../../lib/joinLabels";
 import type { Translator } from "../../../lib/status";
-import { PersonAvatar } from "../../PersonAvatar";
 import { TruncatedText } from "../../TruncatedText";
 import { personNameWithDepartment, userOptionName, userSecondaryLabel } from "../../UserCombobox";
 import { textFilter, type ColumnType } from "../AppTable";
@@ -66,13 +65,6 @@ export interface PersonColumnConfig<T> {
   getDepartment?: (record: T) => string | null | undefined;
   /** 账号类型; `local` 时次行固定为「本地用户」, 即使 user_id 是 UUID。 */
   getAccountKind?: (record: T) => AccountKind | undefined;
-  /** 头像 URL; 缺省或空串时 PersonAvatar 走姓名首字母。 */
-  getAvatarUrl?: (record: T) => string | null | undefined;
-  /**
-   * 这一行是否是人。返回 false 时不画头像(例如审计操作者是应用或系统, 只有 `actor_type:actor_id`),
-   * 否则会给「app:easytrade」这种标识拼出一个假的首字母头像。默认 true。
-   */
-  isPerson?: (record: T) => boolean;
   /** 本地账号次行文案需要 t("user.localAccount")。 */
   t: Translator;
   filter?: boolean;
@@ -94,8 +86,8 @@ export interface PeopleColumnConfig<T> {
 
 /**
  * 用户列: 显示名 + 次行两行。
- * 沿用 ConsoleTeamMemberTable / MembershipsPanel 既有的成员单元格排版,
- * 仓库里没有表格内头像的先例, 因此不渲染头像。
+ * 沿用 ConsoleTeamMemberTable / MembershipsPanel 既有的成员单元格排版。
+ * 表格内不渲染头像; 头像只出现在顶栏用户摘要。
  *
  * 次行默认等宽, 给应用 key / 邮箱这类标识符用; 人员部门请走 `personColumn`。
  */
@@ -173,25 +165,23 @@ export function userColumn<T>({
 }
 
 /**
- * 人员列: 24px 头像 + 姓名 + 部门路径(或「本地用户」), 次行绝不出 UUID。
+ * 人员列: 姓名 + 部门路径(或「本地用户」)两行, 次行绝不出 UUID。
  * 姓名缺失时主行仍回退到 user_id, 与 `userOptionName` 同一条规则。
- * 无照片或 URL 不安全时 PersonAvatar 走姓名首字母, 门户申请人和其它走本预设的列自动带上头像。
+ * 表格内不渲染头像; 头像只出现在顶栏用户摘要。
  */
 export function personColumn<T>({
   filter = false,
   getAccountKind,
-  getAvatarUrl,
   getDepartment,
   getName,
   getUserId,
-  isPerson,
   key = "user",
   sorter = false,
   t,
   title,
   width,
 }: PersonColumnConfig<T>): ColumnType<T> {
-  const column = userColumn<T>({
+  return userColumn<T>({
     filter,
     getName,
     getUserId,
@@ -210,35 +200,13 @@ export function personColumn<T>({
     title,
     width,
   });
-  const innerRender = column.render;
-  return {
-    ...column,
-    render: (value, record, index) => {
-      const inner = innerRender?.(value, record, index);
-      if (inner === "-" || inner == null) {
-        return inner ?? "-";
-      }
-      const displayName = userOptionName({
-        user_id: String(getUserId(record) ?? ""),
-        name: getName(record) ?? "",
-      });
-      if (isPerson && !isPerson(record)) {
-        return inner as ReactNode;
-      }
-      return (
-        <div className="flex min-w-0 items-center gap-2">
-          <PersonAvatar name={displayName} avatarUrl={getAvatarUrl?.(record) ?? ""} size={24} />
-          <div className="min-w-0 flex-1">{inner as ReactNode}</div>
-        </div>
-      );
-    },
-  };
 }
 
 /**
- * 多人列: 每人 24px 头像 + 姓名以 `, ` 写在同一行, 超长由 TruncatedText 截断;
+ * 多人列: 姓名以 `, ` 写在同一行, 超长由 TruncatedText 截断;
  * 悬停单个姓名才出部门(或「本地用户」)。溢出 Tooltip 只在指针落在姓名 span 以外时打开,
  * 内容是每人一行「姓名 · 部门」, 避免与单人部门 Tooltip 叠开。次行绝不出 UUID。
+ * 表格内不渲染头像; 头像只出现在顶栏用户摘要。
  */
 export function peopleColumn<T>({
   filter = false,
@@ -324,12 +292,7 @@ function PeopleOverflowTitle({ people, t }: { people: readonly PersonRef[]; t: T
 function PersonName({ person, t }: { person: PersonRef; t: Translator }) {
   const name = userOptionName(person);
   const secondary = userSecondaryLabel(person, t);
-  const body = (
-    <span data-tooltip-child="" className="inline-flex items-center gap-1.5">
-      <PersonAvatar name={name} avatarUrl={person.avatar_url} size={24} />
-      <span>{name}</span>
-    </span>
-  );
+  const body = <span data-tooltip-child="">{name}</span>;
   if (!secondary) {
     return body;
   }

@@ -128,6 +128,7 @@ describe("OperationsPage", () => {
     expect(screen.getByText("捷发-信息部")).toBeInTheDocument();
     expect(screen.queryByText("user:admin-1")).not.toBeInTheDocument();
     expect(screen.queryByText("admin-1")).not.toBeInTheDocument();
+    expect(document.querySelector("tbody [data-person-avatar]")).toBeNull();
   });
 
   test("审计操作者是应用(actor_person 为 null)时只显示标识, 不画头像", async () => {

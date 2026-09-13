@@ -37,7 +37,7 @@ describe("UserSelect", () => {
     expect(onChange).toHaveBeenCalledWith("u-2");
   });
 
-  test("候选行展示姓名与部门, 有头像才渲染头像图片", async () => {
+  test("候选行展示姓名与部门, 不渲染头像", async () => {
     const user = userEvent.setup();
     stubUserOptions();
 
@@ -48,14 +48,12 @@ describe("UserSelect", () => {
     expect(within(option).getByText("张三")).toBeVisible();
     expect(within(option).getByText("销售部")).toBeVisible();
     expect(within(option).queryByText("u-1")).toBeNull();
-    const avatar = option.querySelector("img");
-    expect(avatar).toHaveAttribute("src", "https://cdn.example.com/u-1.png");
-    expect(avatar).toHaveAttribute("width", "20");
+    expect(option.querySelector("[data-person-avatar]")).toBeNull();
+    expect(option.querySelector("img")).toBeNull();
 
-    // 没有照片的候选走姓名首字母, 不渲染 img, 也没有空次行。
     const plainOption = screen.getByRole("option", { name: /李四/ });
     expect(within(plainOption).getByText("李四")).toBeVisible();
-    expect(within(plainOption).getByText("李")).toBeVisible();
+    expect(plainOption.querySelector("[data-person-avatar]")).toBeNull();
     expect(plainOption.querySelector("img")).toBeNull();
     expect(plainOption.querySelector("code")).toBeNull();
   });

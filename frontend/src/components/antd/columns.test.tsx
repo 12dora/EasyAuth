@@ -52,7 +52,7 @@ describe("personColumn", () => {
     expect(secondaryLineTexts().every((text) => !UUID_RE.test(text.trim()))).toBe(true);
   });
 
-  test("姓名前展示 24px 头像: 有 https 照片则渲染 img, 否则走首字母", () => {
+  test("人员列不渲染头像, 只保留姓名与部门两行", () => {
     interface Person {
       id: string;
       name: string;
@@ -65,7 +65,6 @@ describe("personColumn", () => {
         getName: (row) => row.name,
         getUserId: (row) => row.id,
         getDepartment: (row) => row.department,
-        getAvatarUrl: (row) => row.avatar_url,
       }),
     ];
 
@@ -81,10 +80,11 @@ describe("personColumn", () => {
       />,
     );
 
-    const photo = document.querySelector("tbody img");
-    expect(photo).toHaveAttribute("src", "https://cdn.example.com/zhang.png");
-    expect(photo).toHaveAttribute("width", "24");
-    expect(screen.getByText("李")).toBeVisible();
+    expect(screen.getByText("张三")).toBeVisible();
+    expect(screen.getByText("捷发-安环部")).toBeVisible();
+    expect(screen.getByText("李四")).toBeVisible();
+    expect(document.querySelector("tbody [data-person-avatar]")).toBeNull();
+    expect(document.querySelector("tbody img")).toBeNull();
   });
 });
 
@@ -124,9 +124,8 @@ describe("peopleColumn", () => {
     expect(cell).not.toBeNull();
     expect(within(cell as HTMLElement).getByText("张三")).toBeVisible();
     expect(within(cell as HTMLElement).getByText("系统管理员")).toBeVisible();
-    const photo = (cell as HTMLElement).querySelector("img");
-    expect(photo).toHaveAttribute("src", "https://cdn.example.com/zhang.png");
-    expect(photo).toHaveAttribute("width", "24");
+    expect((cell as HTMLElement).querySelector("[data-person-avatar]")).toBeNull();
+    expect((cell as HTMLElement).querySelector("img")).toBeNull();
     expect(zhang.closest(".truncate")).not.toBeNull();
     expect(within(cell as HTMLElement).queryByText("捷发-安环部")).not.toBeInTheDocument();
     expect(within(cell as HTMLElement).queryByText("本地用户")).not.toBeInTheDocument();

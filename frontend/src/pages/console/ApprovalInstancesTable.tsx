@@ -111,7 +111,6 @@ function instanceColumns(
         getUserId: (row) => row.originator_user_id,
         getDepartment: (row) => row.originator_department,
         getAccountKind: (row) => row.originator_account_kind,
-        getAvatarUrl: (row) => row.originator_avatar_url,
         width: 190,
       }),
       sort,

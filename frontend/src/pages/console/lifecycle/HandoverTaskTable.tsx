@@ -98,7 +98,6 @@ function taskColumns(
         getUserId: (task) => task.subject.user_id,
         getDepartment: (task) => task.subject.department,
         getAccountKind: (task) => task.subject.account_kind,
-        getAvatarUrl: (task) => task.subject.avatar_url,
       }),
       sort,
     ),
@@ -153,7 +152,6 @@ function taskColumns(
             getUserId: (task) => task.assignee?.user_id ?? "",
             getDepartment: (task) => task.assignee?.department,
             getAccountKind: (task) => task.assignee?.account_kind,
-            getAvatarUrl: (task) => task.assignee?.avatar_url,
             width: 160,
           }),
           ...enumFilter<HandoverTaskRow>(
