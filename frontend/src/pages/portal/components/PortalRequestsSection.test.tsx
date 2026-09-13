@@ -212,7 +212,7 @@ describe("PortalRequestsSection 表格", () => {
     }
   });
 
-  test("应用列按「别名 + 技术名」展示", async () => {
+  test("应用列按「别名 + 技术名」展示, 次行是 app_key", async () => {
     stubRequests([requestRow({ app_key: "easycustoms", app_name: "EasyCustoms", app_alias: "海关数据" })]);
 
     try {
@@ -221,6 +221,8 @@ describe("PortalRequestsSection 表格", () => {
       expect(
         await screen.findByText(formatAppDisplayName({ name: "EasyCustoms", alias: "海关数据" })),
       ).toBeVisible();
+      // 与其它表的 appColumn 同一套两行: 展示名在上, 等宽 app_key 在下。
+      expect(screen.getByText("easycustoms")).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }

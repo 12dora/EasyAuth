@@ -10,7 +10,7 @@ import {
   useServerTable,
   type ColumnsType,
 } from "../../../components/antd/AppTable";
-import { RowActionButton, actionsColumn, dateTimeColumn, serverSortColumn, textColumn } from "../../../components/antd/columns";
+import { RowActionButton, actionsColumn, appColumn, dateTimeColumn, serverSortColumn, textColumn } from "../../../components/antd/columns";
 import { GrantExpiryCell } from "../../../components/grants/GrantExpiryCell";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { PageState } from "../../../components/ui/PageState";
@@ -96,11 +96,12 @@ export function PortalRequestsSection() {
       ),
       // 排序在后端(ordering=app_key): 预设的 localeCompare 只会重排当前页。
       serverSortColumn(
-        textColumn<PortalRequestRow>({
+        appColumn<PortalRequestRow>({
           key: "app",
           title: t("common.app"),
-          getValue: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
           width: 150,
+          getDisplayName: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
+          getAppKey: (row) => row.app_key,
         }),
         sort,
       ),
