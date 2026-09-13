@@ -137,6 +137,10 @@ function MappingsTable({
       {
         key: "external_ref",
         title: t("console.connector.mappingsColumn.externalRef"),
+        sorter: (left: AuthorizationGroupItem, right: AuthorizationGroupItem) =>
+          mappingDraft(controller, left.key).external_ref.localeCompare(
+            mappingDraft(controller, right.key).external_ref,
+          ),
         render: (_value: unknown, group: AuthorizationGroupItem) => (
           <MappingRefInput controller={controller} group={group} canManage={canManage} />
         ),
@@ -145,6 +149,9 @@ function MappingsTable({
         key: "auto_create",
         title: t("console.connector.mappingsColumn.autoCreate"),
         width: 200,
+        sorter: (left: AuthorizationGroupItem, right: AuthorizationGroupItem) =>
+          Number(mappingDraft(controller, left.key).auto_create) -
+          Number(mappingDraft(controller, right.key).auto_create),
         render: (_value: unknown, group: AuthorizationGroupItem) => (
           <MappingAutoCreateToggle controller={controller} group={group} canManage={canManage} />
         ),

@@ -57,11 +57,13 @@ function teamMemberTableColumns(t: Translator, actions: TeamMemberTableActions):
       getDepartment: (member) => member.department,
       getAccountKind: (member) => member.account_kind,
       filter: true,
+      sorter: true,
     }),
     textColumn<TeamMemberItem>({
       key: "department",
       title: t("console.teams.column.department"),
       filter: true,
+      sorter: true,
       width: 180,
     }),
     statusColumn<TeamMemberItem>({
@@ -71,6 +73,7 @@ function teamMemberTableColumns(t: Translator, actions: TeamMemberTableActions):
         { value: "leader", label: teamMemberRoleLabel(t, "leader"), tone: "bond" },
         { value: "member", label: teamMemberRoleLabel(t, "member"), tone: "neutral" },
       ],
+      sorter: true,
       width: 140,
     }),
     dateTimeColumn<TeamMemberItem>({ key: "added_at", title: t("console.teams.column.addedAt") }),

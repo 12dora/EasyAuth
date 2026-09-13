@@ -29,5 +29,6 @@ export function activeStatusColumn<T>({
       { value: "inactive", label: t("common.disabled"), tone: "neutral" },
     ],
     getValue: (record) => (getActive(record) ? "active" : "inactive"),
+    sorter: true,
   });
 }

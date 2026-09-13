@@ -72,6 +72,7 @@ function templateColumns(t: Translator, actions: ApprovalTemplateRowActions): Co
         { value: "active", label: t("common.enabled"), tone: "evergreen" },
         { value: "inactive", label: t("common.disabled"), tone: "neutral" },
       ],
+      sorter: true,
       width: 120,
     }),
     dateTimeColumn<ApprovalTemplateItem>({ key: "updated_at", title: t("common.updatedAt") }),

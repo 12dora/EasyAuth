@@ -24,12 +24,15 @@ export function membershipTableColumns({
       getDepartment: (membership) => membership.user_department,
       getAccountKind: (membership) => membership.user_account_kind,
       filter: true,
+      sorter: true,
     }),
     {
       key: "role",
       dataIndex: "role",
       title: t("common.role"),
       width: 140,
+      sorter: (a: MembershipItem, b: MembershipItem) =>
+        roleLabel(t, a.role).localeCompare(roleLabel(t, b.role)),
       render: (_value: unknown, membership: MembershipItem) => roleLabel(t, membership.role),
       ...enumFilter<MembershipItem>("role", [
         { label: t("console.overview.role.owner"), value: "owner" },
@@ -64,14 +67,16 @@ export function configurationIssueColumns(t: Translator): ColumnsType<Configurat
       title: t("console.overview.issue.subject"),
       getValue: (issue) => issue.subject ?? issue.target_id,
       filter: true,
+      sorter: true,
       width: 220,
     }),
-    textColumn<ConfigurationIssue>({ key: "message", title: t("console.overview.issue.message") }),
+    textColumn<ConfigurationIssue>({ key: "message", title: t("console.overview.issue.message"), sorter: true }),
     textColumn<ConfigurationIssue>({
       key: "code",
       title: t("console.overview.issue.code"),
       mono: true,
       filter: true,
+      sorter: true,
       width: 200,
     }),
   ];

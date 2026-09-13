@@ -80,6 +80,7 @@ function blockedAppColumns(t: Translator): ColumnsType<BlockedApp> {
       getName: (app) => formatAppDisplayName({ name: app.app_name, alias: app.app_alias }),
       getUserId: (app) => app.app_key,
       filter: true,
+      sorter: true,
     }),
     {
       // 计数徽章没有对应的列预设, 保留旧渲染并补上客户端排序。

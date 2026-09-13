@@ -38,6 +38,8 @@ export function DepartmentGrantPolicyTable({
         title: t("departmentGrants.column.app"),
         width: 200,
         ellipsis: true,
+        sorter: (a: DepartmentGrantPolicy, b: DepartmentGrantPolicy) =>
+          formatAppDisplayName(a.app).localeCompare(formatAppDisplayName(b.app), "zh-Hans-CN"),
         render: (_value: unknown, policy: DepartmentGrantPolicy) => formatAppDisplayName(policy.app),
       },
       {
@@ -45,12 +47,15 @@ export function DepartmentGrantPolicyTable({
         title: t("departmentGrants.column.content"),
         width: 320,
         ellipsis: false,
+        sorter: (a: DepartmentGrantPolicy, b: DepartmentGrantPolicy) =>
+          policyContentSortKey(a).localeCompare(policyContentSortKey(b), "zh-Hans-CN"),
         render: (_value: unknown, policy: DepartmentGrantPolicy) => <GrantContentCell policy={policy} />,
       },
       {
         key: "term",
         title: t("departmentGrants.column.term"),
         width: 170,
+        sorter: (a: DepartmentGrantPolicy, b: DepartmentGrantPolicy) => policyTermTimestamp(a) - policyTermTimestamp(b),
         render: (_value: unknown, policy: DepartmentGrantPolicy) => (
           <span className="whitespace-nowrap tabular">
             {policy.grant_type === "permanent" ? t("departmentGrants.term.permanent") : formatDateTime(policy.expires_at)}
@@ -61,6 +66,15 @@ export function DepartmentGrantPolicyTable({
         key: "source",
         title: t("departmentGrants.column.source"),
         width: 180,
+        sorter: (a: DepartmentGrantPolicy, b: DepartmentGrantPolicy) => {
+          if (a.inherited !== b.inherited) {
+            return Number(a.inherited) - Number(b.inherited);
+          }
+          return departmentDisplayName(a.defined_on, t).localeCompare(
+            departmentDisplayName(b.defined_on, t),
+            "zh-Hans-CN",
+          );
+        },
         render: (_value: unknown, policy: DepartmentGrantPolicy) => (
           <Badge tone="faint">
             {policy.inherited
@@ -75,6 +89,7 @@ export function DepartmentGrantPolicyTable({
         title: t("departmentGrants.column.affected"),
         width: 110,
         align: "right",
+        sorter: (a: DepartmentGrantPolicy, b: DepartmentGrantPolicy) => a.affected_user_count - b.affected_user_count,
         render: (_value: unknown, policy: DepartmentGrantPolicy) => (
           <span className="tabular">{policy.affected_user_count}</span>
         ),
@@ -82,6 +97,7 @@ export function DepartmentGrantPolicyTable({
       textColumn<DepartmentGrantPolicy>({
         key: "reason",
         title: t("departmentGrants.column.reason"),
+        sorter: true,
         width: 200,
       }),
       actionsColumn<DepartmentGrantPolicy>({
@@ -118,6 +134,22 @@ export function DepartmentGrantPolicyTable({
       emptyDescription={t("departmentGrants.empty.description")}
     />
   );
+}
+
+function policyContentSortKey(policy: DepartmentGrantPolicy): string {
+  return [
+    ...policy.authorization_groups.map((group) => group.name),
+    ...policy.permissions.map((permission) => `${permission.name} · ${permission.scope_name}`),
+  ].join("\0");
+}
+
+/** 永久授权视为无穷大, 升序时排在有明确到期时间的行之后。 */
+function policyTermTimestamp(policy: DepartmentGrantPolicy): number {
+  if (policy.grant_type === "permanent" || !policy.expires_at) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const parsed = new Date(policy.expires_at).getTime();
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
 }
 
 interface ContentChip {

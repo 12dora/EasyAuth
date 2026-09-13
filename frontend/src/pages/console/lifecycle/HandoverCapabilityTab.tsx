@@ -144,19 +144,26 @@ function HandoverAssetTypeTable({ rows }: { rows: HandoverAssetTypeRow[] }) {
       title: t("handover.console.capability.col.type"),
       mono: true,
       filter: true,
+      sorter: true,
       width: 220,
     }),
-    textColumn<HandoverAssetTypeRow>({ key: "label", title: t("handover.console.capability.col.label") }),
+    textColumn<HandoverAssetTypeRow>({
+      key: "label",
+      title: t("handover.console.capability.col.label"),
+      sorter: true,
+    }),
     textColumn<HandoverAssetTypeRow>({
       key: "detail_supported",
       title: t("handover.console.capability.col.detail"),
       getValue: (row) => supportMark(row.detail_supported),
+      sorter: true,
       width: 140,
     }),
     textColumn<HandoverAssetTypeRow>({
       key: "releasable",
       title: t("handover.console.capability.col.releasable"),
       getValue: (row) => supportMark(row.releasable),
+      sorter: true,
       width: 140,
     }),
   ];

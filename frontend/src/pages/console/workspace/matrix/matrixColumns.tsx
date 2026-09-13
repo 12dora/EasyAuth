@@ -30,6 +30,7 @@ export function authorizationGroupColumns({
       title: t("console.matrix.column.key"),
       mono: true,
       filter: true,
+      sorter: true,
       width: 220,
     }),
     textColumn<AuthorizationGroupItem>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
@@ -38,6 +39,8 @@ export function authorizationGroupColumns({
       dataIndex: "kind",
       title: t("common.type"),
       width: 120,
+      sorter: (a: AuthorizationGroupItem, b: AuthorizationGroupItem) =>
+        authorizationGroupKindLabel(t, a.kind).localeCompare(authorizationGroupKindLabel(t, b.kind)),
       render: (_value: unknown, group: AuthorizationGroupItem) => authorizationGroupKindLabel(t, group.kind),
       ...enumFilter<AuthorizationGroupItem>("kind", [
         { label: t("common.role"), value: "role" },
@@ -48,6 +51,13 @@ export function authorizationGroupColumns({
       key: "status",
       title: t("common.status"),
       width: 200,
+      sorter: (a: AuthorizationGroupItem, b: AuthorizationGroupItem) => {
+        const active = Number(Boolean(b.is_active)) - Number(Boolean(a.is_active));
+        if (active !== 0) {
+          return active;
+        }
+        return Number(Boolean(b.requestable)) - Number(Boolean(a.requestable));
+      },
       render: (_value: unknown, group: AuthorizationGroupItem) => (
         <div className="flex flex-wrap gap-2">
           <Badge tone={group.requestable ? "evergreen" : "neutral"}>
@@ -110,12 +120,17 @@ export function authorizationGroupGrantColumns({
       key: "item",
       title: t("console.matrix.grant.column.item"),
       getValue: (grant) => `${grant.permission} / ${grant.scope}`,
+      sorter: true,
       width: 200,
     }),
     {
       key: "managedScope",
       title: t("console.matrix.grant.column.managedScope"),
       width: 180,
+      sorter: (a: AuthorizationGroupGrantItem, b: AuthorizationGroupGrantItem) =>
+        managedScopePolicyResolver(a.managed_scope_policy).localeCompare(
+          managedScopePolicyResolver(b.managed_scope_policy),
+        ),
       render: (_value: unknown, grant: AuthorizationGroupGrantItem) => {
         if (!isManagedUsersGrant(grant)) {
           return "-";
@@ -139,18 +154,24 @@ export function authorizationGroupGrantColumns({
       key: "effective",
       title: t("console.matrix.grant.column.effective"),
       width: 140,
+      sorter: (a: AuthorizationGroupGrantItem, b: AuthorizationGroupGrantItem) =>
+        managedScopeEffectivePolicyLabel(t, a).localeCompare(managedScopeEffectivePolicyLabel(t, b)),
       render: (_value: unknown, grant: AuthorizationGroupGrantItem) => managedScopeEffectivePolicyLabel(t, grant),
     },
     {
       key: "inheritedFrom",
       title: t("console.matrix.grant.column.inheritedFrom"),
       width: 120,
+      sorter: (a: AuthorizationGroupGrantItem, b: AuthorizationGroupGrantItem) =>
+        managedScopeInheritedFromLabel(t, a).localeCompare(managedScopeInheritedFromLabel(t, b)),
       render: (_value: unknown, grant: AuthorizationGroupGrantItem) => managedScopeInheritedFromLabel(t, grant),
     },
     {
       key: "health",
       title: t("console.matrix.grant.column.health"),
       width: 110,
+      sorter: (a: AuthorizationGroupGrantItem, b: AuthorizationGroupGrantItem) =>
+        managedScopeHealthLabel(t, a).localeCompare(managedScopeHealthLabel(t, b)),
       render: (_value: unknown, grant: AuthorizationGroupGrantItem) => managedScopeHealthLabel(t, grant),
     },
     {
@@ -158,6 +179,8 @@ export function authorizationGroupGrantColumns({
       dataIndex: "is_active",
       title: t("common.status"),
       width: 100,
+      sorter: (a: AuthorizationGroupGrantItem, b: AuthorizationGroupGrantItem) =>
+        Number(Boolean(b.is_active)) - Number(Boolean(a.is_active)),
       render: (_value: unknown, grant: AuthorizationGroupGrantItem) => (
         <Badge tone={grant.is_active ? "evergreen" : "neutral"}>
           {grant.is_active ? t("common.enabled") : t("common.disabled")}

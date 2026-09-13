@@ -95,11 +95,19 @@ export function RulesTab({ appKey }: { appKey: string }) {
       title: t("console.rules.column.approvers"),
       getValue: (rule) => safeJoin(rule.approver_userids),
       filter: true,
+      sorter: true,
     }),
     {
       key: "status",
       title: t("common.status"),
       width: 180,
+      sorter: (a: EditableApprovalRule, b: EditableApprovalRule) => {
+        const active = Number(Boolean(b.is_active)) - Number(Boolean(a.is_active));
+        if (active !== 0) {
+          return active;
+        }
+        return Number(isBlocking(b)) - Number(isBlocking(a));
+      },
       render: (_value: unknown, rule: EditableApprovalRule) => (
         <div className="flex flex-wrap gap-2">
           <Badge tone={rule.is_active ? "evergreen" : "neutral"}>{rule.is_active ? t("common.enabled") : t("common.disabled")}</Badge>

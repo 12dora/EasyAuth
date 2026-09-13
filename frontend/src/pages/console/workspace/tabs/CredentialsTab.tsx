@@ -65,17 +65,28 @@ export function CredentialsTab({ appKey, canManage }: { appKey: string; canManag
       dataIndex: "kind",
       title: t("common.type"),
       width: 140,
+      sorter: (a: CredentialItem, b: CredentialItem) =>
+        credentialKindLabel(a.kind).localeCompare(credentialKindLabel(b.kind)),
       render: (_value: unknown, credential: CredentialItem) => credentialKindLabel(credential.kind),
       ...enumFilter<CredentialItem>("kind", [
         { label: credentialKindLabel("static_token"), value: "static_token" },
         { label: credentialKindLabel("oauth_client"), value: "oauth_client" },
       ]),
     },
-    textColumn<CredentialItem>({ key: "client_id", title: "client_id", mono: true, filter: true, width: 220 }),
+    textColumn<CredentialItem>({
+      key: "client_id",
+      title: "client_id",
+      mono: true,
+      filter: true,
+      sorter: true,
+      width: 220,
+    }),
     {
       key: "capabilities",
       title: t("console.credentials.capabilities"),
       width: 200,
+      sorter: (a: CredentialItem, b: CredentialItem) =>
+        (a.capabilities ?? []).join(",").localeCompare((b.capabilities ?? []).join(",")),
       render: (_value: unknown, credential: CredentialItem) => (
         <div className="flex min-w-36 flex-wrap gap-1">
           {(credential.capabilities ?? []).length > 0 ? (

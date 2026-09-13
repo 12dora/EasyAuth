@@ -26,6 +26,7 @@ export function CatalogGroupsPanel({ rows, isLoading, onCreate, onEdit }: {
       title: t("console.catalog.group.column.key"),
       mono: true,
       filter: true,
+      sorter: true,
       width: 180,
     }),
     textColumn<PermissionGroupItem>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
@@ -84,6 +85,7 @@ export function CatalogScopesPanel({ scopes, isLoading, togglePending, onCreate,
       title: t("console.catalog.scope.column.key"),
       mono: true,
       filter: true,
+      sorter: true,
       width: 180,
     }),
     textColumn<AppScopeItem>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
@@ -141,6 +143,7 @@ export function CatalogPermissionsPanel({ permissions, isLoading, onCreate, onEd
       title: t("console.catalog.permission.column.key"),
       mono: true,
       filter: true,
+      sorter: true,
       width: 220,
     }),
     textColumn<PermissionItem>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
@@ -148,6 +151,7 @@ export function CatalogPermissionsPanel({ permissions, isLoading, onCreate, onEd
       key: "group_key",
       title: t("console.catalog.permission.column.group"),
       filter: true,
+      sorter: true,
       width: 160,
     }),
     textColumn<PermissionItem>({
@@ -155,6 +159,7 @@ export function CatalogPermissionsPanel({ permissions, isLoading, onCreate, onEd
       title: t("console.catalog.permission.column.scopes"),
       getValue: (permission) => (permission.supported_scopes ?? []).join("、"),
       filter: true,
+      sorter: true,
       width: 200,
     }),
     statusColumn<PermissionItem>({
@@ -167,6 +172,7 @@ export function CatalogPermissionsPanel({ permissions, isLoading, onCreate, onEd
       ],
       // 旧表把缺省风险级别视为「标准」, 迁移后保持同一口径。
       getValue: (permission) => permission.risk_level || "standard",
+      sorter: true,
     }),
     actionsColumn<PermissionItem>({
       title: t("common.actions"),

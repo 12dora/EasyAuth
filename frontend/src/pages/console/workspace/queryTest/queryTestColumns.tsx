@@ -16,12 +16,13 @@ export function queryTestGroupColumns(
       sorter: true,
     }),
     textColumn<QueryTestGroup>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
-    textColumn<QueryTestGroup>({ key: "source", title: t("common.source"), width: 160 }),
+    textColumn<QueryTestGroup>({ key: "source", title: t("common.source"), sorter: true, width: 160 }),
     textColumn<QueryTestGroup>({
       key: "snapshot_version",
       title: t("wizard.verify.snapshotVersion"),
       getValue: (group) => group.snapshot_version ?? resultSnapshotVersion,
       mono: true,
+      sorter: true,
       width: 200,
     }),
   ];
@@ -39,33 +40,40 @@ export function queryTestGrantColumns(
       filter: true,
       sorter: true,
     }),
-    textColumn<QueryTestGrant>({ key: "scope", title: t("console.queryTest.column.scope"), width: 140 }),
-    textColumn<QueryTestGrant>({ key: "name", title: t("common.name"), filter: true }),
-    textColumn<QueryTestGrant>({ key: "grant_type", title: t("common.type"), width: 120 }),
+    textColumn<QueryTestGrant>({ key: "scope", title: t("console.queryTest.column.scope"), sorter: true, width: 140 }),
+    textColumn<QueryTestGrant>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
+    textColumn<QueryTestGrant>({ key: "grant_type", title: t("common.type"), sorter: true, width: 120 }),
     textColumn<QueryTestGrant>({
       key: "source",
       title: t("common.source"),
       getValue: (grant) =>
         grant.source_key ? `${grant.source_type ?? "-"}:${grant.source_key}` : grant.source_type,
       mono: true,
+      sorter: true,
       width: 200,
     }),
-    textColumn<QueryTestGrant>({
-      key: "resolved_users",
-      title: t("console.queryTest.column.resolvedUsers"),
-      getValue: (grant) => (grant.resolved ? String(grant.resolved.user_ids.length) : undefined),
-      width: 140,
-    }),
+    {
+      ...textColumn<QueryTestGrant>({
+        key: "resolved_users",
+        title: t("console.queryTest.column.resolvedUsers"),
+        getValue: (grant) => (grant.resolved ? String(grant.resolved.user_ids.length) : undefined),
+        width: 140,
+      }),
+      sorter: (a: QueryTestGrant, b: QueryTestGrant) =>
+        (a.resolved?.user_ids.length ?? -1) - (b.resolved?.user_ids.length ?? -1),
+    },
     textColumn<QueryTestGrant>({
       key: "resolver",
       title: "Resolver",
       getValue: (grant) => grant.resolved?.resolver,
+      sorter: true,
       width: 140,
     }),
     textColumn<QueryTestGrant>({
       key: "resolved_at",
       title: "Resolved at",
       getValue: (grant) => grant.resolved?.resolved_at,
+      sorter: true,
       width: 200,
     }),
     textColumn<QueryTestGrant>({
@@ -73,6 +81,7 @@ export function queryTestGrantColumns(
       title: t("wizard.verify.snapshotVersion"),
       getValue: (grant) => grant.snapshot_version ?? resultSnapshotVersion,
       mono: true,
+      sorter: true,
       width: 200,
     }),
   ];

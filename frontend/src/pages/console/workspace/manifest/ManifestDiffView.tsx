@@ -48,6 +48,10 @@ function ManifestDiffTable({ items }: { items: ManifestDiffItem[] }) {
       {
         key: "detail",
         title: "详情",
+        sorter: (a: ManifestDiffItem, b: ManifestDiffItem) =>
+          JSON.stringify({ before: a.before, after: a.after }).localeCompare(
+            JSON.stringify({ before: b.before, after: b.after }),
+          ),
         render: (_value: unknown, item: ManifestDiffItem) => (
           <CodeBlock language="json" code={JSON.stringify({ before: item.before, after: item.after }, null, 2)} />
         ),

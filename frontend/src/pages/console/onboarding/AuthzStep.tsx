@@ -63,6 +63,7 @@ function ConfigurationIssueTable({ issues }: { issues: ConfigurationIssue[] }) {
         { value: "blocking", label: t("wizard.authz.severity.blocking"), tone: "signal" },
         { value: "warning", label: t("wizard.authz.severity.warning"), tone: "amber" },
       ],
+      sorter: true,
       width: 140,
     }),
     textColumn<ConfigurationIssue>({
@@ -72,11 +73,13 @@ function ConfigurationIssueTable({ issues }: { issues: ConfigurationIssue[] }) {
       // 问题说明是整表最长的一列: 不省略, 让长文案换行展示完整。
       ellipsis: false,
       filter: true,
+      sorter: true,
     }),
     textColumn<ConfigurationIssue>({
       key: "subject",
       title: t("wizard.authz.issue.column.subject"),
       mono: true,
+      sorter: true,
       width: 260,
     }),
   ];
