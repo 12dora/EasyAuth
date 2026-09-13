@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, override
 
 from django.db.models import Prefetch
+from django.http import HttpRequest, JsonResponse
 
 from easyauth.access_requests.models import (
     DECISION_ACTOR_USER,
@@ -16,13 +17,14 @@ from easyauth.access_requests.models import (
 from easyauth.accounts.models import UserMirror
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import JsonValue
+from easyauth.api.ordering import apply_ordering
+from easyauth.api.ordering_expressions import REQUEST_ORDERING_ANNOTATIONS
 from easyauth.portal.pagination import PortalPage, build_page, page_request
 from easyauth.portal.request_catalog_approvers import approver_option
 from easyauth.portal.status_text import status_label
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
-    from django.http import QueryDict
 
 type PortalJsonObject = dict[str, JsonValue]
 
@@ -41,6 +43,18 @@ class AccessRequestDecisionActorMissingError(RuntimeError):
     def __str__(self) -> str:
         missing = list(self.missing_user_ids)
         return f"user-actor access request decisions are missing UserMirror rows: {missing}"
+
+
+PORTAL_ACCESS_REQUEST_ORDERING: Final[dict[str, str]] = {
+    "created_at": "submitted_at",
+    "status": "status",
+    "approver": "ordering_approver",
+    "groups": "ordering_group",
+    "reason": "reason",
+    "app_key": "app__app_key",
+    "expires_at": "grant_expires_at",
+}
+PORTAL_ACCESS_REQUEST_DEFAULT_ORDER: Final[tuple[str, ...]] = ("-submitted_at", "id")
 
 
 def _access_requests_queryset(user: UserMirror) -> QuerySet[AccessRequest]:
@@ -77,18 +91,24 @@ def access_request_items_for_user(user: UserMirror) -> tuple[PortalJsonObject, .
 
 def access_request_page_for_user(
     user: UserMirror,
-    query: QueryDict,
-    *,
-    ordering: tuple[str, ...],
-) -> PortalPage:
+    request: HttpRequest,
+) -> PortalPage | JsonResponse:
     # 分页下推到 queryset: 先 count + 切片, 再只对当前页 hydrate, 不再全量载入内存(BF-6)。
-    queryset = _access_requests_queryset(user).order_by(*ordering)
-    request = page_request(query)
+    queryset = apply_ordering(
+        request,
+        _access_requests_queryset(user),
+        PORTAL_ACCESS_REQUEST_ORDERING,
+        PORTAL_ACCESS_REQUEST_DEFAULT_ORDER,
+        annotations=REQUEST_ORDERING_ANNOTATIONS,
+    )
+    if isinstance(queryset, JsonResponse):
+        return queryset
+    page = page_request(request.GET)
     total_items = queryset.count()
-    access_requests = tuple(queryset[request.start : request.stop])
+    access_requests = tuple(queryset[page.start : page.stop])
     return build_page(
         access_request_items(access_requests),
-        request=request,
+        request=page,
         total_items=total_items,
     )
 

@@ -4,7 +4,7 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count
+from django.db.models import Count, OuterRef, Subquery
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -24,7 +24,7 @@ from easyauth.admin_console.operation_filters import (
 )
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.api.ordering import parse_ordering
+from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.teams.models import (
@@ -46,6 +46,7 @@ type MemberLookupResult = TeamMember | JsonResponse
 INVALID_ROLE_MESSAGE: Final = "角色必须为 leader 或 member。"
 TEAMS_FORBIDDEN_MESSAGE: Final = "只有控制台超级管理员可以管理团队。"
 TEAM_LIST_ORDERING: Final[dict[str, str]] = {
+    "leaders": "ordering_leader",
     "name": "name",
     "status": "is_active",
     "created_at": "created_at",
@@ -121,14 +122,24 @@ def console_teams(request: HttpRequest) -> JsonResponse:
         case actor:
             pass
     if request.method == "GET":
-        match parse_ordering(request, TEAM_LIST_ORDERING, TEAM_LIST_DEFAULT_ORDER):
-            case JsonResponse() as response:
-                return response
-            case tuple() as ordering:
-                pass
+        queryset = apply_ordering(
+            request,
+            Team.objects.annotate(member_count=Count("members")),
+            TEAM_LIST_ORDERING,
+            TEAM_LIST_DEFAULT_ORDER,
+            annotations={
+                "ordering_leader": lambda: Subquery(
+                    TeamMember.objects.filter(team_id=OuterRef("pk"), role=TEAM_MEMBER_ROLE_LEADER)
+                    .order_by("user__name", "pk")
+                    .values("user__name")[:1]
+                )
+            },
+        )
+        if isinstance(queryset, JsonResponse):
+            return queryset
         try:
             page = paginate_queryset(
-                Team.objects.annotate(member_count=Count("members")).order_by(*ordering),
+                queryset,
                 request.GET,
             )
         except OperationFilterValidationError as exc:

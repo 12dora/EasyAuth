@@ -603,3 +603,7 @@ owner 选择有效作用域并保存新版本后恢复；此时依赖健康为 u
 ---
 
 授权对象模型为 **`authorization_groups`**，不是 `roles`。
+
+### 列表排序字段
+
+控制台列表接口通过 `ordering` 接收一个字段名，前缀 `-` 表示降序；未知字段返回 400。应用支持 `app_key`、`name`、`status`、`updated_at`、`owners`、`configuration_status`；团队支持 `name`、`status`、`created_at`、`member_count`、`leaders`；用户支持 `name`、`department`、`status`、`is_console_admin`；交接任务支持 `created_at`、`status`、`kind`、`subject`、`assignee_state`、`blocked`；审批实例支持 `created_at`、`status`、`app_key`、`template`、`biz_key`、`originator`、`dingtalk_process_instance_id`、`delivery`；连接器同步运行支持 `started_at`、`finished_at`、`status`、`error`、`stats`（`stats` 使用连接器写入的 `api_calls` 计数）；权限模板版本支持 `version`、`status`、`imported_at`、`imported_by`；运营访问申请支持 `id`、`user`、`app_key`、`status`、`request_type`、`approvers`、`failure_reason`、`submitted_at`；运营授权支持 `user`、`app_key`、`status`、`groups`、`permission_details`、`grant_expires_at`；审计日志支持 `event_type`、`actor`、`target`、`app`、`created_at`。

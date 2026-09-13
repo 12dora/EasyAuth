@@ -22,7 +22,7 @@ from easyauth.admin_console.operation_filters import (
     paginate_queryset,
 )
 from easyauth.api.errors import ErrorCode
-from easyauth.api.ordering import parse_ordering
+from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.lifecycle.models import TASK_OPEN_STATUSES, HandoverTask
@@ -43,6 +43,7 @@ USER_SEARCH_PURPOSES: Final = frozenset(
     {USER_SEARCH_PURPOSE_EMPLOYEE, USER_SEARCH_PURPOSE_APPROVER},
 )
 PEOPLE_LIST_ORDERING: Final[dict[str, str]] = {
+    "is_console_admin": "is_console_admin",
     "name": "name",
     "department": "department",
     "email": "email",
@@ -117,11 +118,6 @@ def console_user_console_admin(request: HttpRequest, user_id: str) -> JsonRespon
 
 def _people_page(request: HttpRequest) -> JsonResponse:
     # 人员列表是员工目录: 内置本地管理员不展示(也就没有员工语义的离职/转岗入口)。
-    match parse_ordering(request, PEOPLE_LIST_ORDERING, PEOPLE_LIST_DEFAULT_ORDER):
-        case JsonResponse() as response:
-            return response
-        case tuple() as ordering:
-            pass
     users = UserMirror.objects.exclude(
         authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX,
     )
@@ -131,8 +127,11 @@ def _people_page(request: HttpRequest) -> JsonResponse:
     query = request.GET.get("q", "").strip()
     if query:
         users = _apply_query_filter(users, query)
+    queryset = apply_ordering(request, users, PEOPLE_LIST_ORDERING, PEOPLE_LIST_DEFAULT_ORDER)
+    if isinstance(queryset, JsonResponse):
+        return queryset
     try:
-        page = paginate_queryset(users.order_by(*ordering), request.GET)
+        page = paginate_queryset(queryset, request.GET)
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
     department_labels = department_path_labels(page.items)

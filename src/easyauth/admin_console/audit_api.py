@@ -20,12 +20,22 @@ from easyauth.admin_console.operation_filters import (
 )
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.models import AuditLog
 
 type AuditQuerysetResult = QuerySet[AuditLog] | JsonResponse
+
+
+AUDIT_LOG_ORDERING = {
+    "event_type": "event_type",
+    "actor": ("actor_type", "actor_id"),
+    "target": ("target_type", "target_id"),
+    "app": "metadata__app_key",
+    "created_at": "created_at",
+}
 
 
 def console_audit_logs(request: HttpRequest) -> JsonResponse:
@@ -42,7 +52,14 @@ def console_audit_logs(request: HttpRequest) -> JsonResponse:
             pass
 
     try:
-        queryset = filter_audit_logs(queryset, request.GET)
+        queryset = apply_ordering(
+            request,
+            filter_audit_logs(queryset, request.GET),
+            AUDIT_LOG_ORDERING,
+            ("-created_at", "-id"),
+        )
+        if isinstance(queryset, JsonResponse):
+            return queryset
         return _page_response(paginate_queryset(queryset, request.GET))
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)

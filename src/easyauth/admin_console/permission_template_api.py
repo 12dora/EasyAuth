@@ -27,7 +27,7 @@ from easyauth.admin_console.permission_template_handlers import (
 )
 from easyauth.admin_console.request_guards import require_console_actor, require_post
 from easyauth.api.errors import ErrorCode
-from easyauth.api.ordering import parse_ordering
+from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App, PermissionTemplateVersion
 from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
@@ -36,6 +36,7 @@ from easyauth.applications.permission_templates import export_manifest
 type AppActorApiResult = tuple[App, ConsoleActor] | JsonResponse
 
 TEMPLATE_VERSION_ORDERING: Final[dict[str, str]] = {
+    "imported_by": "imported_by",
     "version": "version",
     "imported_at": "imported_at",
 }
@@ -91,14 +92,17 @@ def permission_template_versions_api(request: HttpRequest, app_key: str) -> Json
             "请求方法无效。",
             status=HTTPStatus.METHOD_NOT_ALLOWED,
         )
-    match parse_ordering(request, TEMPLATE_VERSION_ORDERING, TEMPLATE_VERSION_DEFAULT_ORDER):
-        case JsonResponse() as response:
-            return response
-        case tuple() as ordering:
-            pass
+    queryset = apply_ordering(
+        request,
+        PermissionTemplateVersion.objects.filter(app=app),
+        TEMPLATE_VERSION_ORDERING,
+        TEMPLATE_VERSION_DEFAULT_ORDER,
+    )
+    if isinstance(queryset, JsonResponse):
+        return queryset
     try:
         page = paginate_queryset(
-            PermissionTemplateVersion.objects.filter(app=app).order_by(*ordering),
+            queryset,
             request.GET,
         )
     except OperationFilterValidationError as exc:

@@ -85,6 +85,7 @@ def template_version_item(template_version: PermissionTemplateVersion) -> dict[s
         "version": template_version.version,
         "status": template_version.status,
         "imported_by": template_version.imported_by,
+        "imported_at": template_version.imported_at.isoformat(),
         "action_count": _template_action_count(template_version),
     }
 

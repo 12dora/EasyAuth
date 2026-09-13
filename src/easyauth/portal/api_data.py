@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final
 
-from django.db.models import DateTimeField, Min, OuterRef, Prefetch, Q, QuerySet, Subquery
-from django.db.models.functions import Coalesce, Least
+from django.db.models import Prefetch, Q, QuerySet
+from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
 
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import JsonValue
+from easyauth.api.ordering import apply_ordering
+from easyauth.api.ordering_expressions import GRANT_ORDERING_ANNOTATIONS
 from easyauth.grants.grant_row_items import authorization_group_items, direct_grant_items
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
@@ -29,11 +31,18 @@ from easyauth.portal.permission_aggregation import (
 )
 
 if TYPE_CHECKING:
-    from django.http import QueryDict
-
     from easyauth.accounts.models import UserMirror
     from easyauth.grants.managed_users import ManagedUsersDirectoryCache
     from easyauth.grants.query import GrantExpansionCatalog
+
+PORTAL_GRANT_ORDERING: Final[dict[str, str]] = {
+    "app_key": "app__app_key",
+    "expires_at": "ordering_expires_at",
+    "created_at": "created_at",
+    "groups": "ordering_group",
+    "permission_details": "ordering_permission_count",
+}
+PORTAL_GRANT_DEFAULT_ORDER: Final[tuple[str, ...]] = ("app__app_key", "id")
 
 DEFAULT_EXPIRING_DAYS: Final = 14
 __all__: Final = (
@@ -55,80 +64,46 @@ def current_grant_items_for_user(user: UserMirror) -> tuple[PortalJsonObject, ..
 
 def current_grant_page_for_user(
     user: UserMirror,
-    query: QueryDict,
-    *,
-    ordering: tuple[str, ...],
-) -> PortalPage:
+    request: HttpRequest,
+) -> PortalPage | JsonResponse:
     # 先按页切 queryset 再解析权限, page_size 上限才能真正约束单次请求的工作量。
     current_time = timezone.now()
     return _grant_page(
         _current_visible_grants(user=user, current_time=current_time),
-        query,
-        ordering=ordering,
+        request,
     )
 
 
 def expiring_grant_page_for_user(
     user: UserMirror,
-    query: QueryDict,
+    request: HttpRequest,
     *,
     days: int = DEFAULT_EXPIRING_DAYS,
-    ordering: tuple[str, ...],
-) -> PortalPage:
+) -> PortalPage | JsonResponse:
     current_time = timezone.now()
     return _grant_page(
         _expiring_visible_grants(user=user, current_time=current_time, days=days),
-        query,
-        ordering=ordering,
+        request,
     )
 
 
 def _grant_page(
     queryset: QuerySet[AccessGrant],
-    query: QueryDict,
-    *,
-    ordering: tuple[str, ...],
-) -> PortalPage:
-    request = page_request(query)
-    queryset = _ordered_grants(queryset, ordering)
+    request: HttpRequest,
+) -> PortalPage | JsonResponse:
+    queryset = apply_ordering(
+        request,
+        queryset,
+        PORTAL_GRANT_ORDERING,
+        PORTAL_GRANT_DEFAULT_ORDER,
+        annotations=GRANT_ORDERING_ANNOTATIONS,
+    )
+    if isinstance(queryset, JsonResponse):
+        return queryset
+    page = page_request(request.GET)
     total_items = queryset.count()
-    grants = tuple(queryset[request.start : request.stop])
-    return build_page(_grant_items(grants), request=request, total_items=total_items)
-
-
-def _ordered_grants(
-    queryset: QuerySet[AccessGrant],
-    ordering: tuple[str, ...],
-) -> QuerySet[AccessGrant]:
-    if any(item.lstrip("-") == "expires_at" for item in ordering):
-        queryset = _annotate_grant_expires_at(queryset)
-    return queryset.order_by(*ordering)
-
-
-def _annotate_grant_expires_at(queryset: QuerySet[AccessGrant]) -> QuerySet[AccessGrant]:
-    # 用 Subquery 取两组过期时间的最小值, 避免 annotate(Min)+distinct 打架。
-    group_expires = _min_related_expires(AccessGrantGroup)
-    permission_expires = _min_related_expires(AccessGrantPermission)
-    return queryset.annotate(
-        expires_at=Coalesce(
-            Least(group_expires, permission_expires),
-            group_expires,
-            permission_expires,
-        ),
-    )
-
-
-def _min_related_expires(
-    model: type[AccessGrantGroup | AccessGrantPermission],
-) -> Subquery:
-    return Subquery(
-        model.objects.filter(grant_id=OuterRef("pk"))
-        .order_by()
-        .values("grant_id")
-        .annotate(minimum=Min("expires_at"))
-        .values("minimum")[:1],
-        output_field=DateTimeField(),
-    )
+    grants = tuple(queryset[page.start : page.stop])
+    return build_page(_grant_items(grants), request=page, total_items=total_items)
 
 
 def _expiring_visible_grants(

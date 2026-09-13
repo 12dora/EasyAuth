@@ -350,3 +350,7 @@
 
 - 公共权限查询契约不变：`GET /api/v1/apps/{app_key}/users/{user_id}/permissions`
 - 历史文档中的 `roles` 字段已废弃，统一为 `authorization_groups`
+
+### 列表排序字段
+
+门户授权列表支持 `app_key`、`expires_at`、`created_at`、`groups`、`permission_details`；访问申请支持 `created_at`、`status`、`app_key`、`expires_at`、`approver`、`groups`、`reason`；审批列表支持 `created_at`、`decided_at`、`app_key`、`applicant`、`status`、`content`、`term`、`reason`、`decision_comment`。字段前缀 `-` 表示降序，未知字段返回 400。

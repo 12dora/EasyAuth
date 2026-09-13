@@ -28,7 +28,8 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.accounts.person_payload import person_payload
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.api.ordering import parse_ordering
+from easyauth.api.ordering import apply_ordering
+from easyauth.api.ordering_expressions import REQUEST_ORDERING_ANNOTATIONS
 from easyauth.api.pagination import pagination_item, total_pages
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
@@ -52,6 +53,11 @@ PORTAL_APPROVAL_ORDERING: Final[dict[str, str]] = {
     "decided_at": "decided_at",
     "app_key": "app__app_key",
     "applicant": "user__name",
+    "status": "status",
+    "content": "ordering_group",
+    "term": "grant_expires_at",
+    "reason": "reason",
+    "decision_comment": "decision_comment",
 }
 PORTAL_APPROVAL_PENDING_DEFAULT_ORDER: Final[tuple[str, ...]] = ("submitted_at", "id")
 PORTAL_APPROVAL_PROCESSED_DEFAULT_ORDER: Final[tuple[str, ...]] = ("-decided_at", "id")
@@ -83,17 +89,7 @@ def portal_approvals(request: HttpRequest) -> JsonResponse:
             {"status": status},
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    default_order = (
-        PORTAL_APPROVAL_PENDING_DEFAULT_ORDER
-        if status == APPROVAL_STATUS_PENDING
-        else PORTAL_APPROVAL_PROCESSED_DEFAULT_ORDER
-    )
-    match parse_ordering(request, PORTAL_APPROVAL_ORDERING, default_order):
-        case JsonResponse() as response:
-            return response
-        case tuple() as ordering:
-            pass
-    return _page_response(_approval_page(user, request, status=status, ordering=ordering))
+    return _page_response(_approval_page(user, request, status=status))
 
 
 def portal_approval_detail(request: HttpRequest, request_id: int) -> JsonResponse:
@@ -212,8 +208,7 @@ def _approval_page(
     request: HttpRequest,
     *,
     status: str,
-    ordering: tuple[str, ...],
-) -> PortalPage:
+) -> PortalPage | JsonResponse:
     page = page_request(request.GET)
     if status == APPROVAL_STATUS_PENDING:
         visible = (
@@ -231,7 +226,20 @@ def _approval_page(
             .prefetch_related(APPROVER_PREFETCH)
             .filter(decided_by=user.authentik_user_id)
         )
-    visible = visible.order_by(*ordering)
+    default_order = (
+        PORTAL_APPROVAL_PENDING_DEFAULT_ORDER
+        if status == APPROVAL_STATUS_PENDING
+        else PORTAL_APPROVAL_PROCESSED_DEFAULT_ORDER
+    )
+    visible = apply_ordering(
+        request,
+        visible,
+        PORTAL_APPROVAL_ORDERING,
+        default_order,
+        annotations=REQUEST_ORDERING_ANNOTATIONS,
+    )
+    if isinstance(visible, JsonResponse):
+        return visible
     total_items = visible.count()
     last_page = max(total_pages(total_items=total_items, page_size=page.page_size), 1)
     if page.page > last_page:
@@ -440,7 +448,9 @@ def _method_not_allowed() -> JsonResponse:
     )
 
 
-def _page_response(page: PortalPage) -> JsonResponse:
+def _page_response(page: PortalPage | JsonResponse) -> JsonResponse:
+    if isinstance(page, JsonResponse):
+        return page
     items: list[JsonValue] = []
     items.extend(page.items)
     return _json_response({"data": items, "pagination": pagination_item(page)})

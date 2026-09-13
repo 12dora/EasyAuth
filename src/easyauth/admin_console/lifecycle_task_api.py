@@ -5,6 +5,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Final, cast
 
+from django.db.models import Count, Q
 from django.http import HttpRequest, JsonResponse
 from pydantic import ValidationError
 
@@ -31,7 +32,7 @@ from easyauth.admin_console.operation_filters import (
     paginate_queryset,
 )
 from easyauth.api.errors import ErrorCode
-from easyauth.api.ordering import parse_ordering
+from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.lifecycle.api_payloads import SURFACE_CONSOLE, console_task_list_item
 from easyauth.lifecycle.api_payloads import task_detail as v2_task_detail
@@ -57,6 +58,8 @@ if TYPE_CHECKING:
     from easyauth.api.pagination import Pagination
 
 HANDOVER_TASK_ORDERING: Final[dict[str, str]] = {
+    "assignee_state": "assignee_state",
+    "blocked": "ordering_blocked",
     "created_at": "created_at",
     "status": "status",
     "kind": "kind",
@@ -79,12 +82,19 @@ def lifecycle_handover_tasks(request: HttpRequest) -> JsonResponse:
 
 
 def _list_handover_tasks(request: HttpRequest) -> JsonResponse:
-    match parse_ordering(request, HANDOVER_TASK_ORDERING, HANDOVER_TASK_DEFAULT_ORDER):
-        case JsonResponse() as response:
-            return response
-        case tuple() as ordering:
-            pass
-    queryset = HandoverTask.objects.select_related("subject_user", "assignee").order_by(*ordering)
+    queryset = apply_ordering(
+        request,
+        HandoverTask.objects.select_related("subject_user", "assignee"),
+        HANDOVER_TASK_ORDERING,
+        HANDOVER_TASK_DEFAULT_ORDER,
+        annotations={
+            "ordering_blocked": lambda: Count(
+                "app_actions", filter=Q(app_actions__status=ACTION_STATUS_BLOCKED), distinct=True
+            )
+        },
+    )
+    if isinstance(queryset, JsonResponse):
+        return queryset
     filtered_queryset = _filter_handover_tasks(queryset, request)
     if isinstance(filtered_queryset, JsonResponse):
         return filtered_queryset

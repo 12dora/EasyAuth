@@ -44,6 +44,11 @@ from easyauth.admin_console.operations_payloads import (
     health_item,
 )
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.ordering import apply_ordering
+from easyauth.api.ordering_expressions import (
+    GRANT_ORDERING_ANNOTATIONS,
+    REQUEST_ORDERING_ANNOTATIONS,
+)
 from easyauth.api.pagination import pagination_item
 from easyauth.applications.dependency_health import (
     DependencyHealthItem,
@@ -98,11 +103,34 @@ class _EmergencyRevokePayload(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+ACCESS_REQUEST_ORDERING = {
+    "id": "id",
+    "user": "user__name",
+    "app_key": "app__app_key",
+    "status": "status",
+    "request_type": "request_type",
+    "approvers": "ordering_approver",
+    "failure_reason": "ordering_failure",
+    "submitted_at": "submitted_at",
+}
+ACCESS_GRANT_ORDERING = {
+    "user": "user__name",
+    "app_key": "app__app_key",
+    "status": "status",
+    "groups": "ordering_group",
+    "permission_details": "ordering_permission_count",
+    "grant_expires_at": "ordering_expires_at",
+}
+
+
 def operations_access_requests(request: HttpRequest) -> JsonResponse:
     match require_superuser(request):
         case str():
             try:
-                return _access_request_page_response(_access_request_page(request))
+                page = _access_request_page(request)
+                if isinstance(page, JsonResponse):
+                    return page
+                return _access_request_page_response(page)
             except OperationFilterValidationError as exc:
                 return operation_filter_error_response(exc)
             except AccessRequestFailureReasonContractError as exc:
@@ -120,7 +148,10 @@ def operations_access_grants(request: HttpRequest) -> JsonResponse:
     match require_superuser(request):
         case str():
             try:
-                return _access_grant_page_response(_access_grant_page(request))
+                page = _access_grant_page(request)
+                if isinstance(page, JsonResponse):
+                    return page
+                return _access_grant_page_response(page)
             except OperationFilterValidationError as exc:
                 return operation_filter_error_response(exc)
         case JsonResponse() as response:
@@ -294,7 +325,7 @@ def _dependency_health_response(
     return _json_response(payload)
 
 
-def _access_request_page(request: HttpRequest) -> Page[AccessRequest]:
+def _access_request_page(request: HttpRequest) -> Page[AccessRequest] | JsonResponse:
     approver_prefetch = Prefetch(
         "approver_assignments",
         queryset=AccessRequestApprover.objects.select_related("approver"),
@@ -305,12 +336,30 @@ def _access_request_page(request: HttpRequest) -> Page[AccessRequest]:
         .prefetch_related(approver_prefetch)
         .all()
     )
-    return paginate_queryset(filter_access_requests(queryset, request.GET), request.GET)
+    queryset = apply_ordering(
+        request,
+        filter_access_requests(queryset, request.GET),
+        ACCESS_REQUEST_ORDERING,
+        ("-submitted_at", "id"),
+        annotations=REQUEST_ORDERING_ANNOTATIONS,
+    )
+    if isinstance(queryset, JsonResponse):
+        return queryset
+    return paginate_queryset(queryset, request.GET)
 
 
-def _access_grant_page(request: HttpRequest) -> Page[AccessGrant]:
+def _access_grant_page(request: HttpRequest) -> Page[AccessGrant] | JsonResponse:
     queryset = _filter_current_only(access_grant_row_queryset(), request.GET)
-    return paginate_queryset(filter_access_grants(queryset, request.GET), request.GET)
+    queryset = apply_ordering(
+        request,
+        filter_access_grants(queryset, request.GET),
+        ACCESS_GRANT_ORDERING,
+        tuple(AccessGrant._meta.ordering),
+        annotations=GRANT_ORDERING_ANNOTATIONS,
+    )
+    if isinstance(queryset, JsonResponse):
+        return queryset
+    return paginate_queryset(queryset, request.GET)
 
 
 def _filter_current_only(

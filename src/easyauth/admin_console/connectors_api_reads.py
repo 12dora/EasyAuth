@@ -35,7 +35,7 @@ from easyauth.admin_console.operation_filters import (
     paginate_queryset,
 )
 from easyauth.api.errors import JsonValue
-from easyauth.api.ordering import parse_ordering
+from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor
@@ -57,6 +57,9 @@ if TYPE_CHECKING:
 type JsonObject = dict[str, JsonValue]
 
 SYNC_RUN_ORDERING: Final[dict[str, str]] = {
+    "error": "error",
+    # NetBird 正常同步固定记录 API 调用次数，无 processed 指标；缺失值排序置后。
+    "stats": "stats__api_calls",
     "started_at": "started_at",
     "trigger": "trigger",
     "status": "status",
@@ -218,14 +221,17 @@ def console_app_connector_sync_runs(
             return response
     if request.method != "GET":
         return method_not_allowed_response()
-    match parse_ordering(request, SYNC_RUN_ORDERING, SYNC_RUN_DEFAULT_ORDER):
-        case JsonResponse() as response:
-            return response
-        case tuple() as ordering:
-            pass
+    queryset = apply_ordering(
+        request,
+        ConnectorSyncRun.objects.filter(instance=instance),
+        SYNC_RUN_ORDERING,
+        SYNC_RUN_DEFAULT_ORDER,
+    )
+    if isinstance(queryset, JsonResponse):
+        return queryset
     try:
         page = paginate_queryset(
-            ConnectorSyncRun.objects.filter(instance=instance).order_by(*ordering),
+            queryset,
             request.GET,
         )
     except OperationFilterValidationError as exc:

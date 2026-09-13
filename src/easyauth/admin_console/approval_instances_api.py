@@ -19,7 +19,7 @@ from easyauth.admin_console.operation_filters import (
     paginate_queryset,
 )
 from easyauth.api.errors import ErrorCode
-from easyauth.api.ordering import parse_ordering
+from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.webhooks.delivery import WebhookRedeliveryConflictError, redeliver
@@ -38,6 +38,11 @@ if TYPE_CHECKING:
 type JsonObject = dict[str, "JsonValue"]
 
 APPROVAL_INSTANCE_ORDERING: Final[dict[str, str]] = {
+    "biz_key": "biz_key",
+    "originator": "originator_user__name",
+    "originator": "originator_user__name",
+    "dingtalk_process_instance_id": "dingtalk_process_instance_id",
+    "delivery": "completion_delivery__status",
     "created_at": "created_at",
     "status": "status",
     "app_key": "app__app_key",
@@ -54,13 +59,16 @@ def operations_approval_instances(request: HttpRequest) -> JsonResponse:
             return response
     if request.method != "GET":
         return method_not_allowed_response()
-    match parse_ordering(request, APPROVAL_INSTANCE_ORDERING, APPROVAL_INSTANCE_DEFAULT_ORDER):
-        case JsonResponse() as response:
-            return response
-        case tuple() as ordering:
-            pass
+    queryset = apply_ordering(
+        request,
+        _filtered_instances(request),
+        APPROVAL_INSTANCE_ORDERING,
+        APPROVAL_INSTANCE_DEFAULT_ORDER,
+    )
+    if isinstance(queryset, JsonResponse):
+        return queryset
     try:
-        page = paginate_queryset(_filtered_instances(request).order_by(*ordering), request.GET)
+        page = paginate_queryset(queryset, request.GET)
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
     items: list[JsonValue] = _instance_items(page.items)
