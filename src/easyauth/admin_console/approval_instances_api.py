@@ -40,7 +40,6 @@ type JsonObject = dict[str, "JsonValue"]
 APPROVAL_INSTANCE_ORDERING: Final[dict[str, str]] = {
     "biz_key": "biz_key",
     "originator": "originator_user__name",
-    "originator": "originator_user__name",
     "dingtalk_process_instance_id": "dingtalk_process_instance_id",
     "delivery": "completion_delivery__status",
     "created_at": "created_at",
