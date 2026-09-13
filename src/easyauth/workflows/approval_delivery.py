@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from django.db import transaction
 
+from easyauth.api.datetime_json import datetime_value
 from easyauth.webhooks.delivery import WebhookNotConfiguredError, enqueue_delivery
 from easyauth.webhooks.models import (
     WEBHOOK_EVENT_APPROVAL_COMPLETED,
@@ -50,7 +51,5 @@ def completion_event_payload(instance: ApprovalInstance) -> dict[str, JsonValue]
         "biz_key": instance.biz_key,
         "status": instance.status,
         "originator_user_id": instance.originator_user.authentik_user_id,
-        "completed_at": (
-            instance.completed_at.isoformat() if instance.completed_at is not None else None
-        ),
+        "completed_at": datetime_value(instance.completed_at),
     }

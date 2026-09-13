@@ -42,6 +42,7 @@ from easyauth.access_requests.submission_validation import (
     validated_request_type,
 )
 from easyauth.accounts.models import UserMirror
+from easyauth.api.datetime_json import datetime_value
 from easyauth.applications.models import AuthorizationGroupGrant
 from easyauth.audit.services import AuditRecord, AuditService
 
@@ -310,7 +311,7 @@ def _submission_payload_digest(
         "grant_expires_at": (
             None
             if expires_at is None
-            else expires_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+            else datetime_value(expires_at.astimezone(UTC)).replace("+00:00", "Z")
         ),
         "grant_type": input_data.grant_type,
         "reason": input_data.reason,

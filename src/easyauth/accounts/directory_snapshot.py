@@ -14,6 +14,7 @@ from easyauth.accounts.models import (
     DingTalkDirectorySyncState,
     DingTalkUserMirror,
 )
+from easyauth.api.datetime_json import datetime_value
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -84,7 +85,7 @@ def upstream_snapshot_metadata(
         return None, "invalid"
     if parsed.tzinfo is None:
         return None, "invalid"
-    normalized = parsed.isoformat()
+    normalized = datetime_value(parsed)
     if parsed > now:
         # 保留带时区的原始事实供排障, 但明确标记为 future 且绝不参与 freshness。
         return normalized, "future"

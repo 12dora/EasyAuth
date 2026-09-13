@@ -73,9 +73,16 @@ def _payload_modules() -> list[Path]:
     for path in SRC_ROOT.rglob("*.py"):
         if "migrations" in path.parts:
             continue
-        name = path.name
-        if name.startswith("api") or "_api" in name or name.endswith(
-            ("_payloads.py", "_presenters.py"),
-        ):
+        if _is_json_payload_module(path):
             files.append(path)
     return files
+
+
+def _is_json_payload_module(path: Path) -> bool:
+    name = path.name
+    if name.startswith("api") or "_api" in name or name.endswith(
+        ("_payloads.py", "_presenters.py"),
+    ):
+        return True
+    text = path.read_text(encoding="utf-8")
+    return "JsonValue" in text or "JsonObject" in text

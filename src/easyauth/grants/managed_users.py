@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 from django.utils import timezone
 
 from easyauth.accounts.directory_identity import has_directory_identity
+from easyauth.api.datetime_json import datetime_value
 from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
 from easyauth.applications.models import (
     MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS,
@@ -182,7 +183,7 @@ def team_resolved_managed_users(
     return ResolvedManagedUsers(
         user_ids=team_managed_user_ids(user),
         resolver=resolver,
-        resolved_at=timezone.now().isoformat(),
+        resolved_at=datetime_value(timezone.now()),
     )
 
 

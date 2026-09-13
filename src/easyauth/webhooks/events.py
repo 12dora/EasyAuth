@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from easyauth.api.datetime_json import datetime_value
 from easyauth.grants.query import resolve_user_permissions
 from easyauth.webhooks.delivery import WebhookNotConfiguredError, enqueue_delivery
 from easyauth.webhooks.models import (
@@ -42,7 +43,7 @@ def emit_grant_changed(grant: AccessGrant) -> None:
         "grant_version": snapshot.grant_version,
         "catalog_version": snapshot.catalog_version,
         "snapshot_version": snapshot.snapshot_version,
-        "changed_at": timezone.now().isoformat(),
+        "changed_at": datetime_value(timezone.now()),
     }
     _enqueue_events_delivery(app=app, event_type=WEBHOOK_EVENT_GRANT_CHANGED, payload=payload)
 
@@ -53,7 +54,7 @@ def emit_catalog_changed(app: App) -> None:
         "event_type": WEBHOOK_EVENT_CATALOG_CHANGED,
         "app_key": app.app_key,
         "catalog_version": app.catalog_version,
-        "changed_at": timezone.now().isoformat(),
+        "changed_at": datetime_value(timezone.now()),
     }
     _enqueue_events_delivery(app=app, event_type=WEBHOOK_EVENT_CATALOG_CHANGED, payload=payload)
 

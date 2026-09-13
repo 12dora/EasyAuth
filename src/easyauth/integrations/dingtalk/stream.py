@@ -11,6 +11,7 @@ from asgiref.sync import sync_to_async
 from dingtalk_stream import AckMessage, Credential, DingTalkStreamClient, EventHandler
 from django.db import transaction
 
+from easyauth.api.datetime_json import datetime_value
 from easyauth.applications.integration_settings import dingtalk_runtime_config
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.runtime_health import STREAM_ACK_HEARTBEAT, mark_heartbeat
@@ -137,8 +138,8 @@ def _stream_event_conflict_metadata(
         "incoming_event_type": event_type,
         "stored_corp_id": event.corp_id,
         "incoming_corp_id": corp_id,
-        "stored_born_at": event.born_at.isoformat() if event.born_at else "",
-        "incoming_born_at": born_at.isoformat() if born_at else "",
+        "stored_born_at": datetime_value(event.born_at) if event.born_at else "",
+        "incoming_born_at": datetime_value(born_at) if born_at else "",
         "stored_data_sha256": stored_hash,
         "incoming_data_sha256": data_sha256,
     }

@@ -19,6 +19,7 @@ from easyauth.access_requests.models import (
 )
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.api.datetime_json import datetime_value
 from easyauth.applications.models import ApprovalRule
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.lifecycle.assignee import AssigneeResolution, resolve_assignee
@@ -405,7 +406,7 @@ def write_in_flight_approval_warnings(
     subject: UserMirror,
 ) -> None:
     """§4.5.3: 存在性提示 only — 不列条数、不按审批人过滤。"""
-    now = timezone.now().isoformat()
+    now = datetime_value(timezone.now())
     actions = HandoverAppAction.objects.select_related("app").filter(task=task)
     for action in actions:
         has_open = (
