@@ -1,5 +1,5 @@
-import { screen, waitFor } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { renderWithAntd } from "../../components/antd/testing";
 import {
@@ -9,6 +9,9 @@ import {
   departmentSourcedNoticeStatus,
   type DepartmentSourcedGrantLike,
 } from "./DepartmentSourcedGrants";
+
+/** 与组件 EXIT_TRANSITION_MS + 50ms 对齐。 */
+const EXIT_UNMOUNT_FALLBACK_MS = 250;
 
 const DEPARTMENT_GRANT: DepartmentSourcedGrantLike = {
   authorization_groups: [
@@ -37,6 +40,11 @@ const OTHER_DEPARTMENT_GRANT: DepartmentSourcedGrantLike = {
 };
 
 describe("DepartmentSourcedGrants", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   test("departmentSourcedNoticeStatus 按就绪与查询态取值", () => {
     expect(departmentSourcedNoticeStatus(false, { isSuccess: true, isError: false })).toBe("idle");
     expect(departmentSourcedNoticeStatus(true, { isSuccess: false, isError: true })).toBe("error");
@@ -113,6 +121,91 @@ describe("DepartmentSourcedGrants", () => {
     expect(document.querySelector(".department-sourced-grants")).toBeNull();
     expect(screen.queryByRole("heading", { name: "来自组织授权" })).toBeNull();
     expect(screen.queryByText("审计")).toBeNull();
+  });
+
+  test("退出过渡结束后卸掉提示框", async () => {
+    const { rerender } = renderNotice({ status: "success", grant: DEPARTMENT_GRANT });
+    await screen.findByRole("heading", { name: "来自组织授权" });
+
+    rerender(noticeTree({ status: "success", grant: EMPTY_GRANT }));
+    await waitFor(() => {
+      expect(document.querySelector(".department-sourced-grants--open")).toBeNull();
+    });
+    const wrapper = document.querySelector(".department-sourced-grants");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.textContent).toContain("审计");
+
+    const panel = document.querySelector(".department-sourced-grants__panel");
+    expect(panel).not.toBeNull();
+    fireEvent.transitionEnd(panel as HTMLElement, { propertyName: "opacity" });
+    expect(document.querySelector(".department-sourced-grants")).not.toBeNull();
+
+    fireEvent.transitionEnd(wrapper as HTMLElement, { propertyName: "transform" });
+    expect(document.querySelector(".department-sourced-grants")).not.toBeNull();
+
+    fireEvent.transitionEnd(wrapper as HTMLElement, { propertyName: "grid-template-rows" });
+    expect(document.querySelector(".department-sourced-grants")).toBeNull();
+    expect(screen.queryByText("审计")).toBeNull();
+
+    fireEvent.transitionEnd(document.body, { propertyName: "opacity" });
+    expect(document.querySelector(".department-sourced-grants")).toBeNull();
+  });
+
+  test("prefers-reduced-motion 下由超时兜底卸挂", async () => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query: string) =>
+        ({
+          matches: query.includes("prefers-reduced-motion"),
+          media: query,
+          onchange: null,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          dispatchEvent: () => false,
+        }) as unknown as MediaQueryList,
+    );
+
+    const { rerender } = renderNotice({ status: "success", grant: DEPARTMENT_GRANT });
+    await screen.findByRole("heading", { name: "来自组织授权" });
+
+    vi.useFakeTimers();
+    rerender(noticeTree({ status: "success", grant: EMPTY_GRANT }));
+    expect(document.querySelector(".department-sourced-grants--open")).toBeNull();
+    expect(document.querySelector(".department-sourced-grants")).not.toBeNull();
+    expect(document.querySelector(".department-sourced-grants")?.textContent).toContain("审计");
+
+    act(() => {
+      vi.advanceTimersByTime(EXIT_UNMOUNT_FALLBACK_MS - 1);
+    });
+    expect(document.querySelector(".department-sourced-grants")).not.toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(document.querySelector(".department-sourced-grants")).toBeNull();
+    expect(screen.queryByText("审计")).toBeNull();
+  });
+
+  test("退出过程中再次展开会取消卸挂并保留内容", async () => {
+    const { rerender } = renderNotice({ status: "success", grant: DEPARTMENT_GRANT });
+    await screen.findByRole("heading", { name: "来自组织授权" });
+
+    vi.useFakeTimers();
+    rerender(noticeTree({ status: "success", grant: EMPTY_GRANT }));
+    expect(document.querySelector(".department-sourced-grants--open")).toBeNull();
+    expect(document.querySelector(".department-sourced-grants")?.textContent).toContain("审计");
+
+    rerender(noticeTree({ status: "success", grant: OTHER_DEPARTMENT_GRANT }));
+    expect(document.querySelector(".department-sourced-grants")).toHaveClass("department-sourced-grants--open");
+    expect(screen.getByText("财务")).toBeVisible();
+    expect(screen.queryByText("审计")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(EXIT_UNMOUNT_FALLBACK_MS);
+    });
+    expect(document.querySelector(".department-sourced-grants")).toHaveClass("department-sourced-grants--open");
+    expect(screen.getByText("财务")).toBeVisible();
   });
 });
 

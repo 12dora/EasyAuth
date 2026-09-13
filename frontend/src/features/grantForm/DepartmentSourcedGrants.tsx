@@ -2,13 +2,21 @@
  * 「来自组织授权」提示框: 直接授权页与员工申请表共用。
  *
  * 进出场走同一套高度 + 透明度 + 轻微位移过渡; 退出期间上一份内容保持挂载,
- * 换应用时现状查询短暂没有 data 也不会把下面的表单顶得跳一下。
- * 换被授权人必须立刻卸掉, 不能把上一个人的组织授权留在这一格。
+ * 过渡结束(wrapper 上 grid-template-rows / opacity 的 transitionend, 只处理一次)
+ * 或时长+50ms 超时兜底后再卸掉, 避免收起后旧标题和列表永远留在 DOM(aria-hidden/inert)。
+ * 退出中途再次展开会取消待执行的卸挂。换被授权人必须立刻卸掉, 不能把上一个人的组织授权留在这一格。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { cn } from "../../lib/cn";
+
+/** 与 department-sourced-grants.css 进出场时长对齐。 */
+const EXIT_TRANSITION_MS = 200;
+/** transitionend 缺席时(reduced-motion、零时长、jsdom)的卸挂兜底。 */
+const EXIT_UNMOUNT_FALLBACK_MS = EXIT_TRANSITION_MS + 50;
+
+const EXIT_TRANSITION_PROPERTIES = new Set(["grid-template-rows", "opacity"]);
 
 export type DepartmentSourcedNoticeStatus = "idle" | "pending" | "success" | "error";
 
@@ -111,6 +119,7 @@ export function DepartmentSourcedGrants({
   const [shownIdentity, setShownIdentity] = useState(identityKey);
   const [shown, setShown] = useState<DepartmentSourcedContent | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   if (identityKey !== shownIdentity) {
     setShownIdentity(identityKey);
@@ -140,6 +149,39 @@ export function DepartmentSourcedGrants({
     }
   }, [expanded, shouldOpen]);
 
+  useEffect(() => {
+    if (expanded || shown === null || shouldOpen) {
+      return;
+    }
+
+    const wrapper = wrapperRef.current;
+    let finished = false;
+    const unmount = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      setShown(null);
+    };
+    const onTransitionEnd = (event: TransitionEvent) => {
+      if (event.target !== wrapper) {
+        return;
+      }
+      if (!EXIT_TRANSITION_PROPERTIES.has(event.propertyName)) {
+        return;
+      }
+      unmount();
+    };
+
+    wrapper?.addEventListener("transitionend", onTransitionEnd);
+    const timeoutId = window.setTimeout(unmount, EXIT_UNMOUNT_FALLBACK_MS);
+    return () => {
+      finished = true;
+      wrapper?.removeEventListener("transitionend", onTransitionEnd);
+      window.clearTimeout(timeoutId);
+    };
+  }, [expanded, shown, shouldOpen]);
+
   const loadingStatus =
     isFetching ? (
       <p className="sr-only" role="status">
@@ -153,6 +195,7 @@ export function DepartmentSourcedGrants({
 
   return (
     <div
+      ref={wrapperRef}
       className={cn(
         "department-sourced-grants",
         expanded && "department-sourced-grants--open",

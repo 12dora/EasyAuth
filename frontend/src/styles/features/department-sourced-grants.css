@@ -2,7 +2,9 @@
  * 「来自组织授权」提示框的进出场。
  *
  * 高度用 grid 行高 0fr ↔ 1fr(内容高度是自动的, 不能直接 transition height:auto),
- * 同步做透明度与轻微上移, 约 200ms ease-out。退出时内容保持挂载, 只收起格子,
+ * 同步做透明度与轻微上移, 约 200ms ease-out。退出时内容保持挂载直到过渡结束,
+ * 再由组件监听 wrapper 的 grid-template-rows / opacity transitionend(只处理一次)
+ * 或 200ms+50ms 超时兜底卸掉; reduced-motion 下 transition:none, 走超时。
  * 换应用时现状查询的 data 短暂变成 undefined 也不会把下面的表单顶得跳一下。
  */
 
