@@ -31,29 +31,28 @@ function renderRequests() {
 describe("PortalRequestsSection 表格", () => {
   test("状态列是按语义上色的纯文字, 既没有徽章也没有审批意见", async () => {
     stubRequests([
-      requestRow({ id: 1, app_name: "已授权应用", status: "grant_applied", status_label: "授权已落库, 权限已生效" }),
+      requestRow({ id: 1, app_name: "已授权应用", status: "grant_applied", status_label: "已生效" }),
       requestRow({ id: 2, app_name: "待审应用", status: "submitted", status_label: "等待审批" }),
       requestRow({
         id: 3,
         app_name: "驳回应用",
         status: "rejected",
-        status_label: "已驳回",
+        status_label: "已拒绝",
         decision_comment: "权限范围过大",
         decided_at: "2026-07-02T10:00:00Z",
       }),
-      requestRow({ id: 4, app_name: "冲突应用", status: "grant_conflict", status_label: "授权冲突" }),
+      requestRow({ id: 4, app_name: "冲突应用", status: "grant_conflict", status_label: "已冲突" }),
       requestRow({ id: 5, app_name: "已撤回应用", status: "withdrawn", status_label: "已撤回" }),
     ]);
 
     try {
       renderRequests();
 
-      // 列里用的是前端短标签, 后端那句长说明("授权已落库, 权限已生效")不进表格。
+      // 列里直接渲染后端 status_label, 不再走前端 status.request.* 映射。
       expect(await screen.findByText("已生效")).toHaveStyle({ color: DESIGN_TOKENS.evergreen });
-      expect(screen.queryByText("授权已落库, 权限已生效")).not.toBeInTheDocument();
-      expect(screen.getByText("待审批")).toHaveStyle({ color: DESIGN_TOKENS.accent });
+      expect(screen.getByText("等待审批")).toHaveStyle({ color: DESIGN_TOKENS.accent });
       expect(screen.getByText("已拒绝")).toHaveStyle({ color: DESIGN_TOKENS.signal });
-      expect(screen.getByText("基础授权已变化")).toHaveStyle({ color: DESIGN_TOKENS.amber });
+      expect(screen.getByText("已冲突")).toHaveStyle({ color: DESIGN_TOKENS.amber });
       expect(screen.getByText("已撤回")).toHaveStyle({ color: DESIGN_TOKENS.inkFaint });
 
       // 徽章会给状态套一层边框底色和等宽小字; 状态列现在只有文字。
@@ -177,7 +176,7 @@ describe("PortalRequestsSection 表格", () => {
         id: 2,
         app_name: "已批准应用",
         status: "approved",
-        status_label: "已批准",
+        status_label: "已通过",
         decided_at: "2026-07-02T10:00:00Z",
         approved_at: "2026-07-02T10:00:00Z",
         decided_by: "manager-001",
@@ -188,7 +187,7 @@ describe("PortalRequestsSection 表格", () => {
         id: 3,
         app_name: "代审应用",
         status: "approved",
-        status_label: "已批准",
+        status_label: "已通过",
         decided_at: "2026-07-02T10:00:00Z",
         approved_at: "2026-07-02T10:00:00Z",
         decided_by: "console-admin-9",
@@ -230,7 +229,7 @@ describe("PortalRequestsSection 表格", () => {
   test("撤回按钮恒在: 只有等待审批可点, 其余行置灰并解释原因", async () => {
     stubRequests([
       requestRow({ id: 1, app_name: "待审应用", status: "submitted", status_label: "等待审批" }),
-      requestRow({ id: 2, app_name: "已授权应用", status: "grant_applied", status_label: "已授权", applied_at: "2026-07-02T10:05:00Z" }),
+      requestRow({ id: 2, app_name: "已授权应用", status: "grant_applied", status_label: "已生效", applied_at: "2026-07-02T10:05:00Z" }),
     ]);
     const user = userEvent.setup();
 
@@ -253,7 +252,7 @@ describe("PortalRequestsSection 表格", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === REQUESTS_URL) {
-        return jsonResponse(listPayload([requestRow({ id: 88, app_name: "CRM", status: "submitted", status_label: "已提交" })]));
+        return jsonResponse(listPayload([requestRow({ id: 88, app_name: "CRM", status: "submitted", status_label: "等待审批" })]));
       }
       if (url === "/portal/api/v1/me/access-requests/88/withdraw" && init?.method === "POST") {
         return jsonResponse({ access_request: requestRow({ id: 88, status: "withdrawn", status_label: "已撤回" }) });
@@ -487,11 +486,11 @@ describe("PortalRequestsSection 详情弹窗", () => {
     }
   });
 
-  test("已批准未生效: 审批节点给决定人、时间和审批意见, 权限生效仍在等待", async () => {
+  test("已通过未生效: 审批节点给决定人、时间和审批意见, 权限生效仍在等待", async () => {
     stubRequests([
       requestRow({
         status: "approved",
-        status_label: "已批准",
+        status_label: "已通过",
         decided_by: "manager-001",
         decision_actor_type: "user",
         decided_by_name: "张主管",
@@ -514,11 +513,11 @@ describe("PortalRequestsSection 详情弹窗", () => {
     }
   });
 
-  test("已驳回: 审批节点是错误态并保留驳回理由", async () => {
+  test("已拒绝: 审批节点是错误态并保留驳回理由", async () => {
     stubRequests([
       requestRow({
         status: "rejected",
-        status_label: "已驳回",
+        status_label: "已拒绝",
         decided_by: "manager-001",
         decision_actor_type: "user",
         decided_by_name: "张主管",
@@ -537,12 +536,12 @@ describe("PortalRequestsSection 详情弹窗", () => {
     }
   });
 
-  test("已授权的限时申请: 生效节点给生效时刻, 并多出一个尚未到达的到期节点", async () => {
+  test("已生效的限时申请: 生效节点给生效时刻, 并多出一个尚未到达的到期节点", async () => {
     vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-07-10T00:00:00Z") });
     stubRequests([
       requestRow({
         status: "grant_applied",
-        status_label: "已授权",
+        status_label: "已生效",
         grant_type: "timed",
         grant_expires_at: "2026-08-01T10:00:00Z",
         decided_by: "manager-001",
@@ -573,7 +572,7 @@ describe("PortalRequestsSection 详情弹窗", () => {
     stubRequests([
       requestRow({
         status: "grant_applied",
-        status_label: "已授权",
+        status_label: "已生效",
         grant_type: "timed",
         grant_expires_at: "2026-08-01T10:00:00Z",
         decided_by: "manager-001",
@@ -596,11 +595,11 @@ describe("PortalRequestsSection 详情弹窗", () => {
     }
   });
 
-  test("授权期限已过未应用: 生效节点是错误态, 不再挂到期节点", async () => {
+  test("已过期未应用: 生效节点是错误态, 不再挂到期节点", async () => {
     stubRequests([
       requestRow({
         status: "grant_expired",
-        status_label: "授权期限已过, 未应用",
+        status_label: "已过期",
         grant_type: "timed",
         grant_expires_at: "2026-08-01T10:00:00Z",
         decided_by: "manager-001",
@@ -616,17 +615,17 @@ describe("PortalRequestsSection 详情弹窗", () => {
 
       expect(stepTitles()).toEqual(["提交申请", "审批", "权限生效"]);
       expect(stepStatus("权限生效")).toBe("error");
-      expect(stepDescription("权限生效")).toBe("授权期限已过, 未应用");
+      expect(stepDescription("权限生效")).toBe("已过期");
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  test("授权失败: 生效节点是错误态并给出后端状态文案", async () => {
+  test("落库失败: 生效节点是错误态并给出后端状态文案", async () => {
     stubRequests([
       requestRow({
         status: "grant_failed",
-        status_label: "授权失败",
+        status_label: "落库失败",
         decided_by: "manager-001",
         decision_actor_type: "user",
         decided_by_name: "张主管",
@@ -640,7 +639,7 @@ describe("PortalRequestsSection 详情弹窗", () => {
 
       expect(stepStatus("审批")).toBe("finish");
       expect(stepStatus("权限生效")).toBe("error");
-      expect(stepDescription("权限生效")).toBe("授权失败");
+      expect(stepDescription("权限生效")).toBe("落库失败");
     } finally {
       vi.unstubAllGlobals();
     }

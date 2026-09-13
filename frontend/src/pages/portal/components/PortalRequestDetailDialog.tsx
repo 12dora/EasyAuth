@@ -130,7 +130,8 @@ function approvalStep(row: PortalRequestRow, t: ReturnType<typeof useI18n>["t"],
 
 function effectiveStep(row: PortalRequestRow, t: ReturnType<typeof useI18n>["t"], formatDateTime: DateTimeFormatter): FlowStep {
   const title = t("portal.requests.flow.applied");
-  // grant_expired 与失败/冲突同类: 后端语义是「授权期限已过, 未应用」, applied_at 恒为空。
+  // grant_expired 与失败/冲突同类: 审批通过后授权窗口已过、从未生效, applied_at 恒为空。
+  // 错误说明用后端 status_label, 前端不再另写一套文案。
   if (row.status === "grant_failed" || row.status === "grant_conflict" || row.status === "grant_expired") {
     return { title, description: row.status_label, status: "error" };
   }

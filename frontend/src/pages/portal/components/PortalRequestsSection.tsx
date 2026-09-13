@@ -18,7 +18,7 @@ import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import { formatGrantGroupNames } from "../../../lib/grantMembership";
-import { accessRequestStatusColor, accessRequestStatusLabel, type AccessRequestStatusColor, type Translator } from "../../../lib/status";
+import { accessRequestStatusColor, type AccessRequestStatusColor, type Translator } from "../../../lib/status";
 import { parsePortalRequestList, type PortalRequestRow } from "../portalListPayload";
 import { PORTAL_DEFAULT_PAGE_SIZE, useClampPage } from "../portalTable";
 import { PortalRequestDetailDialog } from "./PortalRequestDetailDialog";
@@ -195,16 +195,15 @@ const STATUS_COLOR_TOKENS: Record<AccessRequestStatusColor, "colorSuccess" | "co
 /**
  * 状态列: 上色的纯文字, 不用徽章。
  *
- * 一行只有一个状态, 徽章的边框和底色在这里只是噪声。文案用前端 `status.request.*` 的短标签
- * (已通过 / 已生效 / 已拒绝 …): 后端 `status_label` 是一整句说明("授权已落库, 权限已生效"),
- * 既装不进一列也不随界面语言切换, 它留给详情弹窗里的错误态说明。
+ * 一行只有一个状态, 徽章的边框和底色在这里只是噪声。文案直接渲染后端 `status_label`
+ * (等待审批 / 已通过 / 已生效 / 已拒绝 / 落库失败 / 已冲突 / 已过期 / 已撤回);
+ * 解析器缺该字段会失败, 前端不再用 `status.request.*` 另映射一套。
  */
 function RequestStatusText({ row }: { row: PortalRequestRow }) {
-  const { t } = useI18n();
   const { token } = theme.useToken();
   return (
     <span className="whitespace-nowrap" style={{ color: token[STATUS_COLOR_TOKENS[accessRequestStatusColor(row.status)]] }}>
-      {accessRequestStatusLabel(t, row.status)}
+      {row.status_label}
     </span>
   );
 }
