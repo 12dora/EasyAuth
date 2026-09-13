@@ -1,6 +1,6 @@
 /**
  * 授权表格的权限详情单元格: 表格里只显示条数, 悬停或聚焦时用浮层逐条列出。
- * 门户「我的权限」与控制台「授权明细」共用。
+ * 门户「我的权限」、控制台「授权明细」与门户「待我审批」共用。
  *
  * 一条授权展开后动辄几十项权限, 原来把它们拼成一串塞进单元格, 行高被撑到几十行、
  * 整张表没法看; 条数 + 浮层既保住了「我到底有多少权限」这个第一眼信息,
@@ -61,8 +61,10 @@ export function GrantPermissionsCell({ row }: { row: GrantPermissionsRow }) {
   const { locale, t } = useI18n();
   const count = row.grants.length;
   const countText = t("portal.grants.permissionCount", { count });
+  // 审批格去掉组名文案后, 只有组、没有展开权限的行也必须能打开浮层, 否则组名无处可放。
+  const hasPopover = count > 0 || row.groups.length > 0;
 
-  if (count === 0) {
+  if (!hasPopover) {
     return <span className="whitespace-nowrap">{countText}</span>;
   }
 
@@ -96,11 +98,13 @@ function GrantPermissionList({ row, locale, t }: { row: GrantPermissionsRow; loc
       {buildSections(row, locale, t).map((section) => (
         <div key={section.key}>
           <p className="font-semibold text-ink-soft">{section.label}</p>
-          <ul>
-            {section.lines.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
+          {section.lines.length > 0 ? (
+            <ul>
+              {section.lines.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ))}
     </div>
@@ -125,7 +129,31 @@ function buildSections(row: GrantPermissionsRow, locale: Locale, t: Translator):
     section.lines.push(`${permissionName} · ${scopeName}`);
   }
 
+  prependGroupsWithoutGrants(row, sections, byKey);
   return sections;
+}
+
+/**
+ * 行上声明了但没有任何展开权限的组: 浮层顶部补上组名。
+ * 审批「申请内容」格不再打印组名, 这些组若不进浮层就会丢。
+ */
+function prependGroupsWithoutGrants(
+  row: GrantPermissionsRow,
+  sections: GrantPermissionSection[],
+  byKey: Map<string, GrantPermissionSection>,
+): void {
+  const orphans: GrantPermissionSection[] = [];
+  for (const group of row.groups) {
+    const key = `group:${group.key}`;
+    if (byKey.has(key)) {
+      continue;
+    }
+    orphans.push({ key, label: group.name || group.key, lines: [] });
+  }
+  if (orphans.length === 0) {
+    return;
+  }
+  sections.unshift(...orphans);
 }
 
 function sourceLabel(row: GrantPermissionsRow, grant: GrantPermissionsEntry, t: Translator): string {

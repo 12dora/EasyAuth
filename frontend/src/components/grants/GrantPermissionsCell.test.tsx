@@ -82,4 +82,38 @@ describe("GrantPermissionsCell", () => {
     expect(screen.getByText("查看账目 · 全局")).toBeInTheDocument();
     expect(screen.getByText("导出发票 · 全局")).toBeInTheDocument();
   });
+
+  test("声明了但没有展开权限的组仍出现在浮层顶部", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithAntd(
+      <GrantPermissionsCell
+        row={{
+          groups: [
+            { key: "empty-group", name: "空权限组" },
+            { key: "auditor", name: "审计员" },
+          ],
+          grants: row.grants,
+        }}
+      />,
+    );
+
+    await user.hover(screen.getByRole("button", { name: "2 项权限" }));
+    await waitFor(() => {
+      expect(screen.getByText("空权限组")).toBeInTheDocument();
+    });
+    expect(screen.getByText("审计员")).toBeInTheDocument();
+    expect(screen.getByText("直接授权")).toBeInTheDocument();
+  });
+
+  test("没有展开权限但有权限组时仍给出浮层", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithAntd(
+      <GrantPermissionsCell row={{ groups: [{ key: "sales-reader", name: "销售只读" }], grants: [] }} />,
+    );
+
+    await user.hover(screen.getByRole("button", { name: "0 项权限" }));
+    await waitFor(() => {
+      expect(screen.getByText("销售只读")).toBeInTheDocument();
+    });
+  });
 });

@@ -103,7 +103,7 @@ function requestBodyColumns(
         key: "content",
         title: t("portal.approvals.column.content"),
         ellipsis: false,
-        render: (_value: unknown, approval: PortalApprovalRow) => approvalContentSummary(t, approval),
+        render: (_value: unknown, approval: PortalApprovalRow) => approvalContentSummary(approval),
       },
       sort,
     ),

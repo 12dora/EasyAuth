@@ -36,7 +36,7 @@ describe("PortalApprovalsSection", () => {
     vi.unstubAllGlobals();
   });
 
-  test("待办列表展示申请人、应用、申请内容摘要、期限、提交时间、理由和操作按钮", async () => {
+  test("待办列表展示申请人、应用、权限条数、期限、提交时间、理由和操作按钮", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async (input) => {
@@ -53,14 +53,17 @@ describe("PortalApprovalsSection", () => {
     expect(await screen.findByText("张三")).toBeVisible();
     expect(screen.getByText("销售部")).toBeVisible();
     expect(screen.getByText("客户管理 (CRM)")).toBeVisible();
-    expect(screen.getByText("新增授权")).toBeVisible();
-    expect(screen.getByText("销售只读")).toBeVisible();
+    // 申请内容格只留条数浮层, 申请类型与权限组名都进浮层/决定弹窗, 不再印在单元格里。
+    expect(screen.queryByText("新增授权")).not.toBeInTheDocument();
+    expect(screen.queryByText("销售只读")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "3 项权限" })).toBeVisible();
     expect(screen.queryByText("订单列表 (orders.list) · SELF")).not.toBeInTheDocument();
     await user.hover(screen.getByRole("button", { name: "3 项权限" }));
     await waitFor(() => {
       expect(screen.getByText("订单列表 · SELF")).toBeInTheDocument();
     });
+    expect(screen.getByText("销售只读")).toBeInTheDocument();
+    expect(screen.getByText("直接授权")).toBeInTheDocument();
     expect(screen.getByText("查看订单 · SELF")).toBeInTheDocument();
     expect(screen.getByText("长期")).toBeVisible();
     expect(screen.getByText("处理跨部门工单")).toBeVisible();
@@ -653,8 +656,15 @@ describe("PortalApprovalsSection", () => {
     expect(screen.getByText("已生效")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "审批意见" })).toBeVisible();
     expect(screen.queryByRole("columnheader", { name: "我的意见" })).not.toBeInTheDocument();
+    expect(screen.queryByText("新增授权")).not.toBeInTheDocument();
+    expect(screen.queryByText("销售只读")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "3 项权限" })).toBeVisible();
     expect(screen.queryByText("订单列表 (orders.list) · SELF")).not.toBeInTheDocument();
+    await user.hover(screen.getByRole("button", { name: "3 项权限" }));
+    await waitFor(() => {
+      expect(screen.getByText("销售只读")).toBeInTheDocument();
+    });
+    expect(screen.getByText("订单列表 · SELF")).toBeInTheDocument();
   });
 
   test("详情已被处理时 fail-closed 并提示冲突", async () => {
