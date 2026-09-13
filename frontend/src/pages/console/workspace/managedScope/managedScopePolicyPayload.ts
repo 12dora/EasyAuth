@@ -1,6 +1,7 @@
 import type { MessageKey } from "../../../../i18n/messages";
 import type { JsonObject } from "../../../../lib/api";
 import type { AppManagedScopePolicyPayload, EffectiveManagedScopePolicyItem } from "../../../../lib/domain";
+import { isRecord } from "../../../../lib/domain/parse";
 import type { Translator } from "../../../../lib/status";
 
 export type ManagedScopeSelection = "unconfigured" | "dingtalk_manager_chain" | "easyauth_team" | "union" | "disabled";
@@ -50,9 +51,7 @@ function isEffectiveManagedScopePolicySnapshot(value: unknown): boolean {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+
 
 function isManagedScopeSnapshotResolver(value: unknown): boolean {
   return value === "disabled" || isManagedScopeResolver(value);

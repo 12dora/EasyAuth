@@ -1,5 +1,6 @@
 import type { ListPayload } from "../../../lib/api";
 import type { AuthorizationGroupItem, ConnectorMappingItem } from "../../../lib/domain";
+import { requireArray as parseArray, requireRecord as parseRecord } from "../../../lib/domain/parse";
 
 export interface ConnectorMappingsPayload extends ListPayload<ConnectorMappingItem> {
   data: ConnectorMappingItem[];
@@ -107,17 +108,11 @@ function parseConnectorMapping(value: unknown): ConnectorMappingItem {
 }
 
 function requireRecord(value: unknown, message: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(message);
-  }
-  return value as Record<string, unknown>;
+  return parseRecord(value, message, { message });
 }
 
 function requireArray(value: unknown, message: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(message);
-  }
-  return value;
+  return parseArray(value, message, { message });
 }
 
 function optionalString(value: unknown): string | undefined {

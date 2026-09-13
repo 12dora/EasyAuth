@@ -1,4 +1,5 @@
 import type { AppNotificationChannelPayload, DirectoryScopeItem } from "../../../../lib/domain";
+import { isRecord } from "../../../../lib/domain/parse";
 
 export interface ChannelFormState {
   name: string;
@@ -152,6 +153,4 @@ export function scopeMatchesChannel(scope: DirectoryScopeItem, channel: Notifica
   return scope.directory_source_slug === channel.directory_source_slug && scope.corp_id === channel.corp_id;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+

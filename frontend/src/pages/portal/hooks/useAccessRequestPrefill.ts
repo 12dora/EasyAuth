@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import type { MessageKey } from "../../../i18n/messages";
+import { requireRecord } from "../../../lib/domain/parse";
 import type { PortalGrantRow } from "../portalListPayload";
 
 /** 从授权列表跳转到申请表时携带的预填约定: 目前只支持以某条现有授权为基础发起变更申请。 */
@@ -21,11 +22,13 @@ export function parseAccessRequestPrefill(state: unknown): AccessRequestPrefill 
   if (state === null || state === undefined) {
     return null;
   }
-  const routerState = requireRecord(state, "申请表路由 state 必须是对象");
+  const routerState = requireRecord(state, "申请表路由 state", { message: "申请表路由 state 必须是对象" });
   if (!(PREFILL_STATE_KEY in routerState)) {
     return null;
   }
-  const prefill = requireRecord(routerState[PREFILL_STATE_KEY], `路由 state.${PREFILL_STATE_KEY} 必须是对象`);
+  const prefill = requireRecord(routerState[PREFILL_STATE_KEY], `路由 state.${PREFILL_STATE_KEY}`, {
+    message: `路由 state.${PREFILL_STATE_KEY} 必须是对象`,
+  });
   const unknownFields = Object.keys(prefill).filter((field) => !PREFILL_FIELDS.includes(field));
   if (unknownFields.length > 0) {
     throw new Error(`路由 state.${PREFILL_STATE_KEY} 含未知字段：${unknownFields.join("、")}`);
@@ -37,13 +40,6 @@ export function parseAccessRequestPrefill(state: unknown): AccessRequestPrefill 
     throw new Error(`路由 state.${PREFILL_STATE_KEY}.baseGrantId 必须是非空字符串`);
   }
   return { requestType: prefill.requestType, baseGrantId: prefill.baseGrantId };
-}
-
-function requireRecord(value: unknown, message: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(message);
-  }
-  return value as Record<string, unknown>;
 }
 
 export interface AccessRequestPrefillSource {

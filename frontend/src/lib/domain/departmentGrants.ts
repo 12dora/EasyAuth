@@ -7,6 +7,7 @@
 
 import type { OrgTreeNode } from "../../features/orgTree/OrgTree";
 import type { GrantTermType } from "../../features/grantForm";
+import { bindParse } from "./parse";
 
 export type { OrgTreeNode };
 
@@ -176,26 +177,14 @@ function validateActor(value: unknown, path: string): void {
   contractString(actor.name, `${path}.name`);
 }
 
-function contractRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} 必须为对象`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function contractArray(value: unknown, path: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`${path} 必须为数组`);
-  }
-  return value;
-}
-
-function contractString(value: unknown, path: string): string {
-  if (typeof value !== "string") {
-    throw new Error(`${path} 必须为字符串`);
-  }
-  return value;
-}
+const {
+  requireRecord: contractRecord,
+  requireArray: contractArray,
+  requireString: contractString,
+  requireNumber: contractNumber,
+  requireBoolean: contractBoolean,
+  requireEnum,
+} = bindParse({ copula: "为" });
 
 function contractNonEmptyString(value: unknown, path: string): string {
   const text = contractString(value, path);
@@ -205,23 +194,6 @@ function contractNonEmptyString(value: unknown, path: string): string {
   return text;
 }
 
-function contractNumber(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${path} 必须为数字`);
-  }
-  return value;
-}
-
-function contractBoolean(value: unknown, path: string): boolean {
-  if (typeof value !== "boolean") {
-    throw new Error(`${path} 必须为布尔值`);
-  }
-  return value;
-}
-
 function contractGrantType(value: unknown, path: string): GrantTermType {
-  if (value !== "permanent" && value !== "timed") {
-    throw new Error(`${path} 必须为 permanent 或 timed`);
-  }
-  return value;
+  return requireEnum(value, path, ["permanent", "timed"] as const);
 }

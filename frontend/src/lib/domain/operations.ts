@@ -1,7 +1,8 @@
 /** 本模块定义 Operations 与 Audit 领域契约。 */
 
 import type { JsonObject, JsonValue } from "./common";
-import { isAccountKind, PersonContractError, readPersonRef, type AccountKind, type PersonRef } from "./person";
+import { bindParse, parseNullablePersonRef as parseSharedNullablePersonRef, parsePersonRef as parseSharedPersonRef } from "./parse";
+import { ACCOUNT_KINDS, type AccountKind, type PersonRef } from "./person";
 
 /** 访问申请的审批人: 后端 `person_payload`, 界面一律按姓名展示。 */
 export interface OperationApprover {
@@ -18,77 +19,49 @@ export class OperationContractError extends Error {
   }
 }
 
+const {
+  requireRecord,
+  requireString,
+  requireArray,
+  requireEnum,
+  optionalPresentString,
+} = bindParse({ fail: (path) => new OperationContractError(path) });
+
 /** 审批人必须带 account_kind; 缺失或非法值立即失败。 */
-export function parseOperationApprover(raw: JsonValue, field = "approver"): OperationApprover {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new OperationContractError(field);
-  }
-  const source = raw as JsonObject;
-  const userId = source.user_id;
-  const name = source.name;
-  if (typeof userId !== "string") {
-    throw new OperationContractError(`${field}.user_id`);
-  }
-  if (typeof name !== "string") {
-    throw new OperationContractError(`${field}.name`);
-  }
-  if (!isAccountKind(source.account_kind)) {
-    throw new OperationContractError(`${field}.account_kind`);
-  }
-  const department = source.department;
-  if (department !== undefined && typeof department !== "string") {
-    throw new OperationContractError(`${field}.department`);
-  }
+export function parseOperationApprover(raw: unknown, field = "approver"): OperationApprover {
+  const source = requireRecord(raw, field);
   return {
-    user_id: userId,
-    name,
-    department,
-    account_kind: source.account_kind,
+    user_id: requireString(source.user_id, `${field}.user_id`),
+    name: requireString(source.name, `${field}.name`),
+    department: optionalPresentString(source.department, `${field}.department`),
+    account_kind: requireEnum(source.account_kind, `${field}.account_kind`, ACCOUNT_KINDS),
   };
 }
 
 /** 访问申请行: 审批人数组必填, 每人走 parseOperationApprover。 */
 export function parseOperationAccessRequestRow(raw: JsonValue): OperationRow {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new OperationContractError("row");
-  }
-  const source = raw as JsonObject;
-  const approvers = source.approvers;
-  if (!Array.isArray(approvers)) {
-    throw new OperationContractError("approvers");
-  }
+  const source = requireRecord(raw, "row");
   return {
     ...(source as OperationRow),
-    approvers: approvers.map((item, index) => parseOperationApprover(item, `approvers[${index}]`)),
+    approvers: requireArray(source.approvers, "approvers").map((item, index) =>
+      parseOperationApprover(item, `approvers[${index}]`),
+    ),
   };
 }
 
 /** 人员对象; 字段与 `PersonRef` 一一对应, 缺任一字段即契约违约。 */
-export function parsePersonRef(raw: JsonValue, field = "person"): PersonRef {
-  try {
-    return readPersonRef(raw, field);
-  } catch (error) {
-    if (error instanceof PersonContractError) {
-      throw new OperationContractError(error.field);
-    }
-    throw error;
-  }
+export function parsePersonRef(raw: unknown, field = "person"): PersonRef {
+  return parseSharedPersonRef(raw, field, { fail: (path) => new OperationContractError(path) });
 }
 
 /** null 表示系统 / 未解析到 UserMirror; 缺字段或非法值立即失败。 */
-export function parseNullablePersonRef(raw: JsonValue, field: string): PersonRef | null {
-  if (raw === null) {
-    return null;
-  }
-  return parsePersonRef(raw, field);
+export function parseNullablePersonRef(raw: unknown, field: string): PersonRef | null {
+  return parseSharedNullablePersonRef(raw, field, { fail: (path) => new OperationContractError(path) });
 }
 
 /** 审计日志行: `actor_person` 必填(可为 null)。 */
 export function parseAuditLogRow(raw: JsonValue): OperationRow {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new OperationContractError("row");
-  }
-  const source = raw as JsonObject;
+  const source = requireRecord(raw, "row");
   if (!Object.prototype.hasOwnProperty.call(source, "actor_person")) {
     throw new OperationContractError("actor_person");
   }

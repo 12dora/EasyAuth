@@ -7,6 +7,7 @@ import type {
   PermissionItem,
   PermissionQueryGroupItem,
 } from "./app";
+import { bindParse } from "./parse";
 import type { AccountKind } from "./person";
 
 export interface PortalGrant {
@@ -200,33 +201,27 @@ export class PortalCurrentGrantContractError extends Error {
   }
 }
 
+const GRANT_MEMBERSHIP_SOURCES = ["user", "department"] as const;
+
+const {
+  requireRecord,
+  requireString,
+  requireNullableString,
+  requireObjectArray,
+  requireEnum,
+} = bindParse({ fail: (path) => new PortalCurrentGrantContractError(path) });
+
 /** 解析当前授权上的成员关系; 缺数组或 source 非法立即失败。 */
 export function parsePortalCurrentGrant(value: unknown): PortalCurrentGrant {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new PortalCurrentGrantContractError("row");
-  }
-  const source = value as Record<string, unknown>;
+  const source = requireRecord(value, "row");
   return {
-    authorization_groups: requireMembershipArray(source, "authorization_groups").map((item, index) =>
+    authorization_groups: requireObjectArray(source.authorization_groups, "authorization_groups").map((item, index) =>
       parseAuthorizationGroupMembership(item, `authorization_groups[${index}]`),
     ),
-    direct_grants: requireMembershipArray(source, "direct_grants").map((item, index) =>
+    direct_grants: requireObjectArray(source.direct_grants, "direct_grants").map((item, index) =>
       parseDirectGrantMembership(item, `direct_grants[${index}]`),
     ),
   };
-}
-
-function requireMembershipArray(source: Record<string, unknown>, field: string): Record<string, unknown>[] {
-  const value = source[field];
-  if (!Array.isArray(value)) {
-    throw new PortalCurrentGrantContractError(field);
-  }
-  return value.map((item, index) => {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      throw new PortalCurrentGrantContractError(`${field}[${index}]`);
-    }
-    return item as Record<string, unknown>;
-  });
 }
 
 function parseAuthorizationGroupMembership(
@@ -234,46 +229,22 @@ function parseAuthorizationGroupMembership(
   field: string,
 ): PortalCurrentGrantAuthorizationGroup {
   return {
-    key: requireMembershipString(item, "key", field),
-    kind: requireMembershipString(item, "kind", field),
-    name: requireMembershipString(item, "name", field),
-    expires_at: requireMembershipNullableString(item, "expires_at", field),
-    source: requireMembershipSource(item, field),
+    key: requireString(item.key, `${field}.key`),
+    kind: requireString(item.kind, `${field}.kind`),
+    name: requireString(item.name, `${field}.name`),
+    expires_at: requireNullableString(item.expires_at, `${field}.expires_at`),
+    source: requireEnum(item.source, `${field}.source`, GRANT_MEMBERSHIP_SOURCES),
   };
 }
 
 function parseDirectGrantMembership(item: Record<string, unknown>, field: string): PortalCurrentGrantDirectGrant {
   return {
-    permission: requireMembershipString(item, "permission", field),
-    permission_name: requireMembershipString(item, "permission_name", field),
-    scope: requireMembershipString(item, "scope", field),
-    scope_name: requireMembershipString(item, "scope_name", field),
-    expires_at: requireMembershipNullableString(item, "expires_at", field),
-    source: requireMembershipSource(item, field),
+    permission: requireString(item.permission, `${field}.permission`),
+    permission_name: requireString(item.permission_name, `${field}.permission_name`),
+    scope: requireString(item.scope, `${field}.scope`),
+    scope_name: requireString(item.scope_name, `${field}.scope_name`),
+    expires_at: requireNullableString(item.expires_at, `${field}.expires_at`),
+    source: requireEnum(item.source, `${field}.source`, GRANT_MEMBERSHIP_SOURCES),
   };
-}
-
-function requireMembershipString(item: Record<string, unknown>, key: string, field: string): string {
-  const value = item[key];
-  if (typeof value !== "string") {
-    throw new PortalCurrentGrantContractError(`${field}.${key}`);
-  }
-  return value;
-}
-
-function requireMembershipNullableString(item: Record<string, unknown>, key: string, field: string): string | null {
-  const value = item[key];
-  if (value !== null && typeof value !== "string") {
-    throw new PortalCurrentGrantContractError(`${field}.${key}`);
-  }
-  return value;
-}
-
-function requireMembershipSource(item: Record<string, unknown>, field: string): PortalGrantMembershipSource {
-  const value = item.source;
-  if (value !== "user" && value !== "department") {
-    throw new PortalCurrentGrantContractError(`${field}.source`);
-  }
-  return value;
 }
 

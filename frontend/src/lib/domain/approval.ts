@@ -1,7 +1,8 @@
 /** 本模块定义审批模板与审批实例领域契约。 */
 
-import type { JsonObject, JsonValue } from "./common";
-import { isAccountKind, type AccountKind } from "./person";
+import type { JsonValue } from "./common";
+import { bindParse } from "./parse";
+import { ACCOUNT_KINDS, type AccountKind } from "./person";
 
 export type ApprovalFormFieldType = "string" | "integer" | "number" | "boolean";
 
@@ -66,27 +67,21 @@ export class ApprovalInstanceContractError extends Error {
   }
 }
 
+const {
+  requireRecord,
+  requireString,
+  requireEnum,
+  optionalPresentString,
+} = bindParse({ fail: (path) => new ApprovalInstanceContractError(path) });
+
 /** 审批实例行: originator_account_kind 必填, 缺失或非法值立即失败。 */
 export function parseApprovalInstanceRow(raw: JsonValue): ApprovalInstanceRow {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new ApprovalInstanceContractError("row");
-  }
-  const source = raw as JsonObject;
-  if (!isAccountKind(source.originator_account_kind)) {
-    throw new ApprovalInstanceContractError("originator_account_kind");
-  }
-  const originatorDepartment = source.originator_department;
-  if (originatorDepartment !== undefined && typeof originatorDepartment !== "string") {
-    throw new ApprovalInstanceContractError("originator_department");
-  }
-  if (typeof source.originator_avatar_url !== "string") {
-    throw new ApprovalInstanceContractError("originator_avatar_url");
-  }
+  const source = requireRecord(raw, "row");
   return {
     ...(source as unknown as ApprovalInstanceRow),
-    originator_account_kind: source.originator_account_kind,
-    originator_department: originatorDepartment,
-    originator_avatar_url: source.originator_avatar_url,
+    originator_account_kind: requireEnum(source.originator_account_kind, "originator_account_kind", ACCOUNT_KINDS),
+    originator_department: optionalPresentString(source.originator_department, "originator_department"),
+    originator_avatar_url: requireString(source.originator_avatar_url, "originator_avatar_url"),
   };
 }
 

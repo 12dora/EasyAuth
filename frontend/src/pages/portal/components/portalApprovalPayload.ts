@@ -1,6 +1,7 @@
 import { ApiError } from "../../../lib/api";
 import type { Pagination } from "../../../lib/api";
 import { isAccountKind, type PortalApprovalApplicant, type PortalRequestApprover } from "../../../lib/domain";
+import { isRecord } from "../../../lib/domain/parse";
 
 import type {
   ApprovalAuthorizationGroup,
@@ -354,6 +355,4 @@ function hasExactKeys(value: Record<string, unknown>, expectedKeys: readonly str
   return keys.length === expectedKeys.length && expectedKeys.every((key) => key in value);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+

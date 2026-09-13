@@ -1,7 +1,8 @@
 /** 本模块定义 Lifecycle、Handover 与 Onboarding 领域契约。 */
 
 import type { JsonObject, JsonValue } from "./common";
-import { PersonContractError, readPersonRef, type AccountKind, type PersonRef } from "./person";
+import { bindParse, parsePersonRef as parseSharedPersonRef } from "./parse";
+import type { AccountKind, PersonRef } from "./person";
 
 /** M4 生命周期: 人员列表行, 对齐后端 users_api._person_item 序列化字段。 */
 export interface PersonRow {
@@ -351,40 +352,28 @@ export class HandoverContractError extends Error {
   }
 }
 
+const {
+  requireRecord,
+  requireString,
+  requireArray,
+  parseNullablePersonRef,
+} = bindParse({ fail: (path) => new HandoverContractError(path) });
+
 /** PersonRef: 五字段必填; account_kind 必须是三值之一; avatar_url 必须是字符串。 */
-export function parseHandoverPersonRef(raw: JsonValue, field = "person"): PersonRef {
-  try {
-    return readPersonRef(raw, field);
-  } catch (error) {
-    if (error instanceof PersonContractError) {
-      throw new HandoverContractError(error.field);
-    }
-    throw error;
-  }
+export function parseHandoverPersonRef(raw: unknown, field = "person"): PersonRef {
+  return parseSharedPersonRef(raw, field, { fail: (path) => new HandoverContractError(path) });
 }
 
 /** 字段必须存在; 系统/未知身份为 null, 缺失立即失败。 */
-export function parseNullableHandoverPersonRef(raw: JsonValue, field: string): PersonRef | null {
-  if (raw === undefined) {
-    throw new HandoverContractError(field);
-  }
-  if (raw === null) {
-    return null;
-  }
-  return parseHandoverPersonRef(raw, field);
+export function parseNullableHandoverPersonRef(raw: unknown, field: string): PersonRef | null {
+  return parseNullablePersonRef(raw, field, { undefinedThrows: true });
 }
 
-export function parseHandoverDeferRecord(raw: JsonValue, field = "defer_history[]"): HandoverDeferRecord {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new HandoverContractError(field);
-  }
-  const source = raw as JsonObject;
-  if (typeof source.actor_id !== "string") {
-    throw new HandoverContractError(`${field}.actor_id`);
-  }
+export function parseHandoverDeferRecord(raw: unknown, field = "defer_history[]"): HandoverDeferRecord {
+  const source = requireRecord(raw, field);
   return {
     ...(source as unknown as HandoverDeferRecord),
-    actor_id: source.actor_id,
+    actor_id: requireString(source.actor_id, `${field}.actor_id`),
     actor_person: parseNullableHandoverPersonRef(source.actor_person, `${field}.actor_person`),
   };
 }
@@ -394,35 +383,25 @@ export function parseHandoverDeferRecord(raw: JsonValue, field = "defer_history[
  * escalation.defer_history 每条都要求 actor_person(可为 null)。
  */
 export function parseHandoverTaskPersonContract(
-  raw: JsonValue,
+  raw: unknown,
   field = "task",
 ): {
   created_by_person: PersonRef | null;
   defer_history: HandoverDeferRecord[];
 } {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new HandoverContractError(field);
-  }
-  const source = raw as JsonObject;
+  const source = requireRecord(raw, field);
   const createdByPerson = parseNullableHandoverPersonRef(source.created_by_person, `${field}.created_by_person`);
-  const escalation = source.escalation;
-  if (escalation === null || typeof escalation !== "object" || Array.isArray(escalation)) {
-    throw new HandoverContractError(`${field}.escalation`);
-  }
-  const history = (escalation as JsonObject).defer_history;
-  if (!Array.isArray(history)) {
-    throw new HandoverContractError(`${field}.escalation.defer_history`);
-  }
+  const escalation = requireRecord(source.escalation, `${field}.escalation`);
   return {
     created_by_person: createdByPerson,
-    defer_history: history.map((entry, index) =>
+    defer_history: requireArray(escalation.defer_history, `${field}.escalation.defer_history`).map((entry, index) =>
       parseHandoverDeferRecord(entry, `${field}.escalation.defer_history[${index}]`),
     ),
   };
 }
 
 /** 把人员契约写回 task, 缺 created_by_person / actor_person 立即失败。 */
-function overlayHandoverTaskPersonContract<T>(raw: JsonValue, field: string): T {
+function overlayHandoverTaskPersonContract<T>(raw: unknown, field: string): T {
   const person = parseHandoverTaskPersonContract(raw, field);
   const source = raw as JsonObject;
   const escalation = source.escalation as JsonObject;
@@ -443,10 +422,7 @@ export function parseHandoverTaskListItem(raw: JsonValue, field = "task"): Hando
 
 /** 详情信封 `{ handover_task }`; 缺任务或人员字段立即失败。 */
 export function parseHandoverTaskPayload(raw: JsonValue): HandoverTaskPayload {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new HandoverContractError("payload");
-  }
-  const source = raw as JsonObject;
+  const source = requireRecord(raw, "payload");
   if (!Object.prototype.hasOwnProperty.call(source, "handover_task")) {
     throw new HandoverContractError("handover_task");
   }

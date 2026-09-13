@@ -5,6 +5,15 @@ import type {
   PortalRequest,
   PortalRequestApprover,
 } from "../../lib/domain";
+import {
+  requireArray,
+  requireEnum,
+  requireInteger as parseInteger,
+  requireNullableInteger as parseNullableInteger,
+  requireNullableString,
+  requireRecord as parseRecord,
+  requireString,
+} from "../../lib/domain/parse";
 
 interface PortalGrantGroup {
   key: string;
@@ -214,47 +223,17 @@ function parsePortalRequestRow(value: unknown, index: number): PortalRequestRow 
 }
 
 function requireRecord(value: unknown, message: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(message);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} 必须是数组`);
-  }
-  return value;
-}
-
-function requireString(value: unknown, label: string): asserts value is string {
-  if (typeof value !== "string") {
-    throw new Error(`${label} 必须是字符串`);
-  }
+  return parseRecord(value, message, { message });
 }
 
 function requireAuthorizationGroupKind(value: unknown, label: string): asserts value is AuthorizationGroupKind {
-  if (value !== "role" && value !== "bundle") {
-    throw new Error(`${label} 必须是 role 或 bundle`);
-  }
-}
-
-function requireNullableString(value: unknown, label: string): asserts value is string | null {
-  if (value !== null && typeof value !== "string") {
-    throw new Error(`${label} 必须是字符串或 null`);
-  }
+  requireEnum(value, label, ["role", "bundle"]);
 }
 
 function requireNullableInteger(value: unknown, label: string, minimum: number): number | null {
-  if (value === null) {
-    return null;
-  }
-  return requireInteger(value, label, minimum);
+  return parseNullableInteger(value, label, { minimum });
 }
 
 function requireInteger(value: unknown, label: string, minimum: number): number {
-  if (!Number.isInteger(value) || (value as number) < minimum) {
-    throw new Error(`${label} 必须是大于等于 ${minimum} 的整数`);
-  }
-  return value as number;
+  return parseInteger(value, label, { minimum });
 }

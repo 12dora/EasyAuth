@@ -1,4 +1,5 @@
 import type { ConfigurationIssue, ConfigurationStatus, SecretPayload } from "../../../lib/domain";
+import { isRecord } from "../../../lib/domain/parse";
 import type { CreatedCredentialKind, CredentialKindPath, ManifestDiffItem, ManifestPreviewPayload } from "./types";
 
 export function detectTemplateFormat(content: string): "json" | "yaml" {
@@ -108,9 +109,7 @@ function hasRequiredSecretMaterial(oneTimeSecret: Record<string, unknown>, expec
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+
 
 export function diffFromChanges(
   changes: Array<{ action?: string; key?: string; parent_key?: string }>,

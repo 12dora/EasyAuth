@@ -1,3 +1,4 @@
+import { bindParse } from "../../lib/domain/parse";
 import type {
   ApproverOption,
   AuthorizationGroupItem,
@@ -111,54 +112,30 @@ function validatePermission(value: unknown, path: string): asserts value is Scop
   contractOptionalString(item.approver_resolution_status, `${path}.approver_resolution_status`);
 }
 
-function contractRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} 必须为对象`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function contractArray(value: unknown, path: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`${path} 必须为数组`);
-  }
-  return value;
-}
+const {
+  requireRecord: contractRecord,
+  requireArray: contractArray,
+  requireNumber,
+  requireString: contractString,
+  requireNonEmptyString: contractNonEmptyString,
+  requireEnum,
+  optionalPresentString: contractOptionalString,
+  requireBoolean,
+} = bindParse({ copula: "为" });
 
 function contractNumber(value: unknown, path: string): void {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${path} 必须为有限数字`);
-  }
-}
-
-function contractString(value: unknown, path: string): void {
-  if (typeof value !== "string") {
-    throw new Error(`${path} 必须为字符串`);
-  }
-}
-
-function contractNonEmptyString(value: unknown, path: string): void {
-  if (typeof value !== "string" || !value) {
-    throw new Error(`${path} 必须为非空字符串`);
-  }
+  requireNumber(value, path, { expected: "有限数字" });
 }
 
 function contractAuthorizationGroupKind(value: unknown, path: string): void {
-  if (value !== "role" && value !== "bundle") {
-    throw new Error(`${path} 必须为 role 或 bundle`);
-  }
-}
-
-function contractOptionalString(value: unknown, path: string): void {
-  if (value !== undefined && typeof value !== "string") {
-    throw new Error(`${path} 必须为字符串`);
-  }
+  requireEnum(value, path, ["role", "bundle"]);
 }
 
 function contractOptionalBoolean(value: unknown, path: string): void {
-  if (value !== undefined && typeof value !== "boolean") {
-    throw new Error(`${path} 必须为布尔值`);
+  if (value === undefined) {
+    return;
   }
+  requireBoolean(value, path);
 }
 
 function contractOptionalStringArray(value: unknown, path: string): void {
