@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from typing import TYPE_CHECKING
 
 from django.db.models import QuerySet
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.accounts.department_paths import department_path_labels
+from easyauth.accounts.models import UserMirror
 from easyauth.admin_console.api_responses import (
     error_response as _error_response,
 )
@@ -18,6 +21,7 @@ from easyauth.admin_console.operation_filters import (
     operation_filter_error_response,
     paginate_queryset,
 )
+from easyauth.admin_console.operations_payloads import person_ref_or_none
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.ordering import apply_ordering
@@ -25,6 +29,9 @@ from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.models import AuditLog
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
 
 type AuditQuerysetResult = QuerySet[AuditLog] | JsonResponse
 
@@ -65,10 +72,20 @@ def console_audit_logs(request: HttpRequest) -> JsonResponse:
         return operation_filter_error_response(exc)
 
 
-def _audit_item(audit_log: AuditLog) -> dict[str, JsonValue]:
+def _audit_item(
+    audit_log: AuditLog,
+    *,
+    users: Mapping[str, UserMirror],
+    department_labels: Mapping[str, str],
+) -> dict[str, JsonValue]:
     return {
         "actor_type": audit_log.actor_type,
         "actor_id": audit_log.actor_id,
+        "actor_person": person_ref_or_none(
+            audit_log.actor_id,
+            users=users,
+            department_labels=department_labels,
+        ),
         "event_type": audit_log.event_type,
         "target_type": audit_log.target_type,
         "target_id": audit_log.target_id,
@@ -93,6 +110,20 @@ def _audit_queryset_for_actor(request: HttpRequest, actor: ConsoleActor) -> Audi
 
 
 def _page_response(page: Page[AuditLog]) -> JsonResponse:
-    result: list[JsonValue] = []
-    result.extend(_audit_item(audit_log) for audit_log in page.items)
+    users = _users_by_ids(audit_log.actor_id for audit_log in page.items)
+    department_labels = department_path_labels(users.values())
+    result: list[JsonValue] = [
+        _audit_item(audit_log, users=users, department_labels=department_labels)
+        for audit_log in page.items
+    ]
     return _json_response({"data": result, "pagination": pagination_item(page)})
+
+
+def _users_by_ids(user_ids: Iterable[str]) -> dict[str, UserMirror]:
+    unique_ids = tuple(dict.fromkeys(user_id for user_id in user_ids if user_id))
+    if not unique_ids:
+        return {}
+    return {
+        user.authentik_user_id: user
+        for user in UserMirror.objects.filter(authentik_user_id__in=unique_ids)
+    }

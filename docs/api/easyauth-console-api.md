@@ -604,6 +604,11 @@ PUT 不得变更策略所属部门或应用，否则 422。
 | GET | `/security/two-factor` | 二因素状态 |
 | POST | `/security/two-factor/totp/*`、`passkeys/*` | TOTP / Passkey |
 
+**GET `/audit-logs`** 列表项在既有 `actor_type` / `actor_id` 之外提供 `actor_person`：
+当 `actor_id` 能解析到 `UserMirror` 时为人员对象（`user_id`、`name`、`department`、
+`account_kind`，由 `person_payload` 生成，与 `actor_type` 无关）；系统账号或未知 ID 为
+`null`。人员部门路径按当前页批量解析。
+
 全局 `/settings/integrations` 中的钉钉 agent 配置只用于旧配置迁移、审批等仍属全局的能力；
 `notify` 业务 App 必须在自己的 workspace 配置 `notification-channel`。
 每个版本同时绑定 `directory_source_slug` 和 `corp_id`。GET 返回

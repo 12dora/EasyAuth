@@ -17,10 +17,24 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from easyauth.access_requests.models import AccessRequest
+    from easyauth.accounts.models import UserMirror
     from easyauth.api.errors import JsonValue
     from easyauth.applications.dependency_health import DependencyHealthItem
 
 type JsonObject = dict[str, JsonValue]
+
+
+def person_ref_or_none(
+    user_id: str,
+    *,
+    users: Mapping[str, UserMirror],
+    department_labels: Mapping[str, str],
+) -> JsonObject | None:
+    """解析到 UserMirror 时返回 PersonRef, 系统账号或未知 ID 返回 null。"""
+    user = users.get(user_id)
+    if user is None:
+        return None
+    return person_payload(user, department_labels)
 
 
 def access_request_decision_fields(access_request: AccessRequest) -> JsonObject:

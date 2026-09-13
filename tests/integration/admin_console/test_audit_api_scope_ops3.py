@@ -7,6 +7,8 @@ import pytest
 from django.contrib.auth.models import User
 from django.test import Client
 
+from easyauth.accounts.models import UserMirror
+from easyauth.accounts.person_payload import person_payload
 from easyauth.applications.models import App, AppMembership
 from easyauth.audit.models import AuditLog
 from tests.integration.admin_console.auth_helpers import (
@@ -72,6 +74,43 @@ def test_ops3_developer_cannot_query_app_audit_logs() -> None:
     assert response.status_code == HTTPStatus.FORBIDDEN
     assert app.app_key not in body
     assert "permission_template_imported" not in body
+
+
+def test_ops3_audit_logs_include_batched_actor_person() -> None:
+    client = _logged_in_superuser("ops3-audit-actor-person-admin")
+    actor = UserMirror.objects.create(
+        authentik_user_id="ops3-audit-actor-person-user",
+        name="胡玉琴A",
+        department="安环部",
+    )
+    _ = AuditLog.objects.create(
+        actor_type="admin",
+        actor_id=actor.authentik_user_id,
+        event_type="permission_template_imported",
+        target_type="app",
+        target_id="ops3-audit-actor-person-crm",
+        metadata={"app_key": "ops3-audit-actor-person-crm"},
+    )
+    _ = AuditLog.objects.create(
+        actor_type="system",
+        actor_id="directory_sync",
+        event_type="emergency_revoke_applied",
+        target_type="app",
+        target_id="ops3-audit-actor-person-erp",
+        metadata={"app_key": "ops3-audit-actor-person-erp"},
+    )
+
+    response = client.get(AUDIT_LOGS_API_URL)
+
+    assert response.status_code == HTTPStatus.OK
+    items = response.json()["data"]
+    by_event = {item["event_type"]: item for item in items}
+    user_item = by_event["permission_template_imported"]
+    system_item = by_event["emergency_revoke_applied"]
+    assert user_item["actor_id"] == actor.authentik_user_id
+    assert user_item["actor_person"] == person_payload(actor, {})
+    assert system_item["actor_id"] == "directory_sync"
+    assert system_item["actor_person"] is None
 
 
 def test_ops3_superuser_can_query_global_audit_logs_without_app_key_filter() -> None:
