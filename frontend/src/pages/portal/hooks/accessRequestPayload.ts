@@ -9,29 +9,38 @@ import {
   type CatalogView,
 } from "./accessRequestTypes";
 
-export function buildAccessRequestPayload(values: AccessRequestPayloadValues, catalogView: CatalogView): JsonObject {
-  assertAccessRequestPayloadLimits(values);
-  const coveredKeySet = groupCoveredSelectionKeySet(values.authorizationGroupKeys, catalogView);
-  const overlappingSelection = values.selectedPermissionKeys.find((key) => coveredKeySet.has(key));
+export function buildAccessRequestPayload(
+  values: AccessRequestPayloadValues,
+  catalogView: CatalogView,
+  locked: { groupKeys?: readonly string[]; selectionKeys?: readonly string[] } = {},
+): JsonObject {
+  const lockedGroupKeySet = new Set(locked.groupKeys ?? []);
+  const lockedSelectionKeySet = new Set(locked.selectionKeys ?? []);
+  const authorizationGroupKeys = values.authorizationGroupKeys.filter((key) => !lockedGroupKeySet.has(key));
+  const selectedPermissionKeys = values.selectedPermissionKeys.filter((key) => !lockedSelectionKeySet.has(key));
+  const draft: AccessRequestPayloadValues = { ...values, authorizationGroupKeys, selectedPermissionKeys };
+  assertAccessRequestPayloadLimits(draft);
+  const coveredKeySet = groupCoveredSelectionKeySet(draft.authorizationGroupKeys, catalogView);
+  const overlappingSelection = draft.selectedPermissionKeys.find((key) => coveredKeySet.has(key));
   if (overlappingSelection) {
     throw new Error(`直接权限与权限组覆盖范围重复: ${overlappingSelection}`);
   }
-  const baseGrant: JsonObject = values.requestType === "grant"
+  const baseGrant: JsonObject = draft.requestType === "grant"
     ? {}
     : {
-        base_grant_id: Number(values.baseGrantId),
-        base_grant_revision: values.baseGrantRevision,
+        base_grant_id: Number(draft.baseGrantId),
+        base_grant_revision: draft.baseGrantRevision,
       };
   return {
-    app_key: values.appKey,
-    request_type: values.requestType,
+    app_key: draft.appKey,
+    request_type: draft.requestType,
     ...baseGrant,
-    authorization_group_keys: values.authorizationGroupKeys,
-    direct_grants: values.selectedPermissionKeys.map((selectionKey) => buildDirectGrantPayload(selectionKey)),
-    approver_user_ids: values.selectedApproverUserIds,
-    grant_type: values.grantType,
-    grant_expires_at: values.grantType === "timed" && values.expiresAt ? new Date(values.expiresAt).toISOString() : null,
-    reason: values.reason.trim(),
+    authorization_group_keys: draft.authorizationGroupKeys,
+    direct_grants: draft.selectedPermissionKeys.map((selectionKey) => buildDirectGrantPayload(selectionKey)),
+    approver_user_ids: draft.selectedApproverUserIds,
+    grant_type: draft.grantType,
+    grant_expires_at: draft.grantType === "timed" && draft.expiresAt ? new Date(draft.expiresAt).toISOString() : null,
+    reason: draft.reason.trim(),
   };
 }
 

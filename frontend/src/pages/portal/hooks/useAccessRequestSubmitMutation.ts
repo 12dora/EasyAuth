@@ -11,6 +11,7 @@ export function useAccessRequestSubmitMutation(
   fields: AccessRequestFields,
   catalogView: CatalogView,
   onSubmitted?: () => void,
+  locked: { groupKeys: string[]; selectionKeys: string[] } = { groupKeys: [], selectionKeys: [] },
 ): UseMutationResult<unknown, Error, void, unknown> {
   const pendingSubmission = useRef<{
     payload: string;
@@ -36,7 +37,7 @@ export function useAccessRequestSubmitMutation(
   ]);
   return useMutation({
     mutationFn: () => {
-      const payload = buildAccessRequestPayload(fields, catalogView);
+      const payload = buildAccessRequestPayload(fields, catalogView, locked);
       const serializedPayload = JSON.stringify(payload);
       if (pendingSubmission.current?.payload !== serializedPayload) {
         pendingSubmission.current = {

@@ -984,6 +984,76 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
   });
 
+  test("授权列表晚到: 组织来源的已选项会被剔除且不进载荷", async () => {
+    let releaseGrants = () => {};
+    const grantsArrived = new Promise<void>((resolve) => {
+      releaseGrants = resolve;
+    });
+    const submittedPayloads: unknown[] = [];
+    const grantList = {
+      data: [
+        {
+          ...lifecycleGrantList().data[0],
+          groups: [],
+          grants: [expandedGrant("orders.audit", "direct", null)],
+          authorization_groups: [],
+          direct_grants: [
+            {
+              permission: "orders.audit",
+              permission_name: "审计订单",
+              scope: "SELF",
+              scope_name: "本人",
+              expires_at: null,
+              source: "department",
+            },
+          ],
+        },
+      ],
+      pagination: { page: 1, page_size: 100, total_items: 1, total_pages: 1 },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url === "/portal/api/v1/request-catalog") {
+          return jsonResponse(lifecycleCatalog());
+        }
+        if (url === CURRENT_GRANTS_URL) {
+          await grantsArrived;
+          return jsonResponse(grantList);
+        }
+        if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+          submittedPayloads.push(JSON.parse(String(init.body)));
+          return jsonResponse({ access_request: { id: 1 } }, 201);
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+    const view = await renderReadyForm();
+
+    act(() => view.result.current.changeAppKey("crm"));
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.audit"), "SELF"));
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+
+    await act(async () => {
+      releaseGrants();
+      await grantsArrived;
+    });
+
+    await waitFor(() => expect(view.result.current.lockedSelectionKeys).toContain(AUDIT_KEY));
+    expect(view.result.current.selectedPermissionKeys).not.toContain(AUDIT_KEY);
+
+    act(() => view.result.current.changeAuthorizationGroupKeys(["deleter"]));
+    act(() => view.result.current.changeReason("补权限"));
+    await waitFor(() => expect(view.result.current.canSubmit).toBe(true));
+    act(() => view.result.current.submit());
+    await waitFor(() => expect(submittedPayloads).toHaveLength(1));
+    expect(submittedPayloads[0]).toMatchObject({
+      authorization_group_keys: ["deleter"],
+      direct_grants: [],
+    });
+  });
+
   /** 第一页: 100 条与 crm 无关的授权, 后面还有一页。 */
   function firstGrantPageOfTwo() {
     return {

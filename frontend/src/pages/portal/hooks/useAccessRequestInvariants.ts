@@ -20,6 +20,37 @@ export function useDefaultSingleScopes(
   }, [scopesByPermissionKey, visiblePermissionKeys, setSelectedPermissionScopes]);
 }
 
+/**
+ * 组织授权锁定集合变化时, 把已经勾上的锁定项从草稿里摘掉。
+ *
+ * 授权列表未到齐时 lock set 为空, 员工可能先勾上随后才被标成 department 来源的权限;
+ * 列表到齐后必须立刻剔除, 不能等下一次点击。
+ */
+export function useLockedSelectionInvariant(
+  fields: AccessRequestFields,
+  locked: { groupKeys: string[]; selectionKeys: string[] },
+): void {
+  const { setAuthorizationGroupKeys, setSelectedPermissionKeys } = fields;
+  const lockedGroupKeys = locked.groupKeys;
+  const lockedSelectionKeys = locked.selectionKeys;
+
+  useEffect(() => {
+    if (lockedGroupKeys.length === 0 && lockedSelectionKeys.length === 0) {
+      return;
+    }
+    const lockedGroupKeySet = new Set(lockedGroupKeys);
+    const lockedSelectionKeySet = new Set(lockedSelectionKeys);
+    setAuthorizationGroupKeys((current) => {
+      const next = current.filter((key) => !lockedGroupKeySet.has(key));
+      return listsAreEqual(current, next) ? current : next;
+    });
+    setSelectedPermissionKeys((current) => {
+      const next = current.filter((key) => !lockedSelectionKeySet.has(key));
+      return listsAreEqual(current, next) ? current : next;
+    });
+  }, [lockedGroupKeys, lockedSelectionKeys, setAuthorizationGroupKeys, setSelectedPermissionKeys]);
+}
+
 export function useGroupCoverageInvariant(fields: AccessRequestFields, catalogView: CatalogView): void {
   const { authorizationGroupKeys, setSelectedPermissionKeys } = fields;
   const coveredSelectionKeys = useMemo(

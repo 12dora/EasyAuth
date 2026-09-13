@@ -23,6 +23,7 @@ import {
   useDefaultSingleScopes,
   useGroupCoverageInvariant,
   useLifecycleGrantInvariant,
+  useLockedSelectionInvariant,
 } from "./useAccessRequestInvariants";
 import {
   useAccessRequestPrefillApplication,
@@ -78,7 +79,6 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
   useDefaultSingleScopes(fields.setSelectedPermissionScopes, catalogView);
   useGroupCoverageInvariant(fields, catalogView);
   useDefaultApprovers(fields, catalogView, currentUserId);
-  const submitMutation = useAccessRequestSubmitMutation(fields, catalogView, options.onSubmitted);
   const currentGrants = currentGrantsQuery.data ?? EMPTY_CURRENT_GRANTS;
   const selectedBaseGrant = currentGrants.find((grant) => String(grant.grant_id) === fields.baseGrantId);
   const currentGrantForApp = currentGrants.find((grant) => grant.app_key === fields.appKey);
@@ -86,6 +86,8 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
     () => departmentSourcedLockedKeys(currentGrantForApp, catalogView),
     [catalogView, currentGrantForApp],
   );
+  useLockedSelectionInvariant(fields, locked);
+  const submitMutation = useAccessRequestSubmitMutation(fields, catalogView, options.onSubmitted, locked);
   useLifecycleGrantInvariant(fields, selectedBaseGrant);
   useCurrentGrantForAppInvariant(fields, currentGrants, currentGrantsQuery.isSuccess);
   const actions = buildAccessRequestActions(fields, catalogView, currentGrants, () => {
