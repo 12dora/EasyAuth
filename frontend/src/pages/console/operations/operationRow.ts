@@ -2,6 +2,7 @@ import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionD
 import { userOptionName } from "../../../components/UserCombobox";
 import type { OperationRow as DomainOperationRow } from "../../../lib/domain";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
+import { joinLabels } from "../../../lib/joinLabels";
 
 export type OperationRow = DomainOperationRow & {
   failure_reason?: string;
@@ -39,11 +40,7 @@ export function operationAppDisplayName(row: OperationRow): string {
 
 /** 审批人列: 只展示姓名, 目录里没有姓名的审批人回落展示其 user_id。 */
 export function operationApproverNames(row: OperationRow): string {
-  const approvers = row.approvers ?? [];
-  if (approvers.length === 0) {
-    return "-";
-  }
-  return approvers.map((approver) => userOptionName(approver)).join("、");
+  return joinLabels((row.approvers ?? []).map((approver) => userOptionName(approver)));
 }
 
 export function auditPair(type: string | undefined, id: string | undefined): string {

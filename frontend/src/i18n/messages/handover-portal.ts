@@ -1,6 +1,6 @@
 export const zhCN = {
   "handover.list.description": "跟踪离职与转岗交接的进度，未完成的交接可以随时继续。",
-  "handover.list.loadFailed": "交接单加载失败",
+  "handover.loadFailed": "交接单加载失败",
   "handover.list.deleteTitle": "删除交接单",
   "handover.list.deleteMessage": "确定删除{name}的交接单吗？该操作不可恢复。",
   "handover.list.deleteSuccess": "交接单已删除",
@@ -11,7 +11,6 @@ export const zhCN = {
   "handover.list.empty.title": "暂无交接单",
   "handover.list.empty.description": "在「人员」页面发起离职或转岗交接后，交接单会显示在这里。",
 
-  "handover.detail.loadFailed": "交接单加载失败",
   "handover.detail.backToList": "返回交接单列表",
   "handover.detail.subject": "当事人",
   "handover.detail.reason": "原因",
@@ -53,7 +52,6 @@ export const zhCN = {
   "handover.portal.list.loadFailed": "交接列表加载失败",
   "handover.portal.detail.title": "交接单详情",
   "handover.portal.detail.back": "返回我的交接",
-  "handover.portal.detail.loadFailed": "交接单加载失败",
   "handover.portal.detail.daysLeft": "距上交还剩 {count} 天",
   "handover.portal.detail.escalated": "已上交 {count} 级",
   "handover.portal.detail.assignee": "当前负责人",
@@ -113,7 +111,7 @@ export const zhCN = {
 
 export const en: Record<keyof typeof zhCN, string> = {
   "handover.list.description": "Track offboarding and transfer handovers; unfinished handovers can be resumed at any time.",
-  "handover.list.loadFailed": "Failed to load handover tasks",
+  "handover.loadFailed": "Failed to load handover task",
   "handover.list.deleteTitle": "Delete handover task",
   "handover.list.deleteMessage": "Delete the handover task for {name}? This cannot be undone.",
   "handover.list.deleteSuccess": "Handover task deleted",
@@ -124,7 +122,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "handover.list.empty.title": "No handover tasks",
   "handover.list.empty.description": "Handover tasks appear here once you start an offboarding or transfer from the People page.",
 
-  "handover.detail.loadFailed": "Failed to load handover task",
   "handover.detail.backToList": "Back to handover tasks",
   "handover.detail.subject": "Person",
   "handover.detail.reason": "Reason",
@@ -166,7 +163,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "handover.portal.list.loadFailed": "Failed to load handovers",
   "handover.portal.detail.title": "Handover detail",
   "handover.portal.detail.back": "Back to my handovers",
-  "handover.portal.detail.loadFailed": "Failed to load handover",
   "handover.portal.detail.daysLeft": "{count} days until escalation",
   "handover.portal.detail.escalated": "Escalated {count} level(s)",
   "handover.portal.detail.assignee": "Current assignee",

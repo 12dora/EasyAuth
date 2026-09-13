@@ -30,12 +30,12 @@ export function HandoverTaskList() {
         }
       />
       {tasksQuery.error && tasks.length > 0 ? (
-        <StatusBanner live="alert" tone="signal" title={t("handover.list.loadFailed")} message={(tasksQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("handover.loadFailed")} message={(tasksQuery.error as Error).message} />
       ) : null}
       {tasksQuery.error && tasks.length === 0 ? (
         <PageState
           tone="signal"
-          title={t("handover.list.loadFailed")}
+          title={t("handover.loadFailed")}
           description={(tasksQuery.error as Error).message}
           action={
             <Button icon={<RefreshCcw size={16} />} loading={tasksQuery.isFetching} onClick={() => void tasksQuery.refetch()}>

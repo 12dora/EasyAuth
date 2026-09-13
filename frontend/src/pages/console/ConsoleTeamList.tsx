@@ -33,6 +33,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { userOptionName } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
+import { joinLabels } from "../../lib/joinLabels";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject, ListPayload } from "../../lib/api";
 import type { TeamPayload, TeamSummary } from "../../lib/domain";
@@ -52,8 +53,7 @@ const TEAM_ORDERING_FIELDS = {
 } as const;
 
 export function teamLeadersLabel(leaders: TeamSummary["leaders"] | undefined): string {
-  const names = (leaders ?? []).map((leader) => userOptionName(leader)).filter(Boolean);
-  return names.length > 0 ? names.join(", ") : "—";
+  return joinLabels((leaders ?? []).map((leader) => userOptionName(leader)));
 }
 
 export function ConsoleTeamList() {

@@ -61,11 +61,11 @@ export function AppBasicInfoDialog({
         <Field label={t("common.name")}>
           <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} required />
         </Field>
-        <Field label={t("console.overview.field.appAlias")} hint={t("console.overview.aliasHint")}>
+        <Field label={t("console.overview.field.appAlias")} hint={t("app.alias.hint")}>
           <TextInput
             value={alias}
             maxLength={APP_ALIAS_MAX_LENGTH}
-            placeholder={t("console.overview.aliasPlaceholder")}
+            placeholder={t("app.alias.placeholder")}
             onChange={(event) => setAlias(event.currentTarget.value)}
           />
         </Field>

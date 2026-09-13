@@ -58,7 +58,7 @@ export function PortalHandoverDetail() {
     return (
       <PageState
         tone="signal"
-        title={t("handover.portal.detail.loadFailed")}
+        title={t("handover.loadFailed")}
         description={(taskQuery.error as Error).message}
         action={
           <Button type="button" onClick={() => void taskQuery.refetch()}>
@@ -81,7 +81,7 @@ export function PortalHandoverDetail() {
         <StatusBanner
           live="alert"
           tone="signal"
-          title={t("handover.portal.detail.loadFailed")}
+          title={t("handover.loadFailed")}
           message={(taskQuery.error as Error).message}
         />
       ) : null}

@@ -10,6 +10,7 @@ import { apiRequest, itemsFromPayload } from "../lib/api";
 import type { ListPayload } from "../lib/api";
 import { cn } from "../lib/cn";
 import type { AccountKind } from "../lib/domain/person";
+import { joinLabels } from "../lib/joinLabels";
 import type { Translator } from "../lib/status";
 import { TruncatedText } from "./TruncatedText";
 
@@ -360,10 +361,7 @@ export function resolvePeople(
  * 非表格场景(概览定义列表、向导摘要)走这里, 表格走 `peopleColumn`。
  */
 export function formatPeople(people: readonly PersonLike[] | undefined, t: Translator): string {
-  if (!people || people.length === 0) {
-    return "-";
-  }
-  return people.map((person) => personNameWithDepartment(person, t)).join("、");
+  return joinLabels((people ?? []).map((person) => personNameWithDepartment(person, t)));
 }
 
 /** 把 `formatPeople` 渲染成节点, 给定义列表 / 摘要用。 */

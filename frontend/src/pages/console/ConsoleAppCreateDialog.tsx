@@ -73,11 +73,11 @@ export function ConsoleAppCreateDialog({
         <Field label={t("appList.createDialog.name")}>
           <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} required />
         </Field>
-        <Field label={t("appList.createDialog.alias")} hint={t("appList.createDialog.aliasHint")}>
+        <Field label={t("appList.createDialog.alias")} hint={t("app.alias.hint")}>
           <TextInput
             value={alias}
             maxLength={APP_ALIAS_MAX_LENGTH}
-            placeholder={t("appList.createDialog.aliasPlaceholder")}
+            placeholder={t("app.alias.placeholder")}
             onChange={(event) => setAlias(event.currentTarget.value)}
           />
         </Field>

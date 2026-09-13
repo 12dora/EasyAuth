@@ -36,7 +36,7 @@ export function HandoverTaskDetail() {
     return (
       <PageState
         tone="signal"
-        title={t("handover.detail.loadFailed")}
+        title={t("handover.loadFailed")}
         description={(taskQuery.error as Error).message}
         action={
           <Button icon={<RefreshCcw size={16} />} loading={taskQuery.isFetching} onClick={() => void taskQuery.refetch()}>
@@ -70,7 +70,7 @@ export function HandoverTaskDetail() {
         <StatusBanner
           live="alert"
           tone="signal"
-          title={t("handover.detail.loadFailed")}
+          title={t("handover.loadFailed")}
           message={(taskQuery.error as Error).message}
         />
       ) : null}

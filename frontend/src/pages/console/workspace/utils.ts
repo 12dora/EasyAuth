@@ -11,10 +11,6 @@ function isPermissionGroup(item: PermissionGroupItem | PermissionItem): item is 
   return "type" in item && item.type === "group";
 }
 
-export function safeJoin(values: string[] | undefined): string {
-  return values && values.length > 0 ? values.join("、") : "-";
-}
-
 export function credentialKindLabel(kind: string): string {
   switch (kind) {
     case "static_token":
