@@ -62,8 +62,8 @@ complexity=10、returns=6、branches=12、args=5、statements=50。
 | 后端文件 | 600 | 2（最大 619 `grants/query.py`） |
 | 后端函数 | 60 | 8（最大 90 `Command.handle`） |
 | 后端 C901 | 10 | 0 超标 |
-| 前端文件 | 500 | 1（最大 503 `OrgTree.tsx`；`AppTable.tsx` / `columns.tsx` 已拆到硬帽内） |
-| 前端函数 | 120 | 30（最大 274 `WebhookTab`） |
+| 前端文件 | 500 | 0（`AppTable.tsx` / `columns.tsx` / `OrgTree.tsx` 已拆到硬帽内） |
+| 前端函数 | 120 | 28（最大 237 `GrantForm`） |
 | 前端 hook se | 8 | 2（最大 14） |
 | 前端 import | 25 | 0（最大 23） |
 
