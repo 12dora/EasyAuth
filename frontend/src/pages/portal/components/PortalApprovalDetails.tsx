@@ -1,19 +1,45 @@
 import type { ReactNode } from "react";
 
+import { GrantPermissionsCell } from "../../../components/grants/GrantPermissionsCell";
 import { StatusBanner } from "../../../components/StatusBanner";
+import { formatGrantGroupNames } from "../../../lib/grantMembership";
 import type { Translator } from "../../../lib/status";
 import { formatDateTime, grantTypeLabel } from "../../../lib/status";
 import { formatAuthorizationGroupLabel } from "../authorizationGroupLabel";
 
 import {
   approvalFactsAreComplete,
+  approvalPermissionsRow,
   decisionAlreadyCommitted,
   grantLabel,
   requestTypeLabel,
 } from "./portalApprovalFacts";
 import type { ApprovalAuthorizationGroup, ApprovalGrantFact, PortalApprovalRow } from "./portalApprovalTypes";
 
-/** 列表与弹窗共用的申请内容摘要: 申请类型 + 授权组事实 + 直接授权事实。 */
+/**
+ * 审批列表「申请内容」列: 申请类型 + 权限组名 + 「我的权限 → 权限详情」同一套条数浮层。
+ * 明细不进单元格, 否则行高被撑开、列宽被挤扁。
+ */
+export function approvalContentSummary(t: Translator, approval: PortalApprovalRow): ReactNode {
+  const hasTargets = approval.authorization_groups.length > 0 || approval.direct_grants.length > 0;
+  return (
+    <div className="flex min-w-0 flex-col gap-1 text-xs leading-5">
+      <strong className="whitespace-nowrap text-ink">{requestTypeLabel(t, approval.request_type)}</strong>
+      {hasTargets ? (
+        <>
+          <span className="truncate text-ink-soft">{formatGrantGroupNames(approval.authorization_groups, t)}</span>
+          <GrantPermissionsCell row={approvalPermissionsRow(approval)} />
+        </>
+      ) : approval.request_type === "revoke" ? (
+        <span className="text-ink-soft">{t("portal.approvals.fullRevoke")}</span>
+      ) : (
+        <GrantPermissionsCell row={approvalPermissionsRow(approval)} />
+      )}
+    </div>
+  );
+}
+
+/** 决定弹窗里的完整申请内容: 申请类型 + 授权组事实 + 直接授权事实。 */
 export function approvalContentDetails(t: Translator, approval: PortalApprovalRow): ReactNode {
   const hasTargets = approval.authorization_groups.length > 0 || approval.direct_grants.length > 0;
   return (

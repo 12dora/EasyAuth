@@ -37,6 +37,38 @@ describe("GrantPermissionsCell", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
+  test("没有英文名时回落到中文显示名", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithAntd(
+      <GrantPermissionsCell
+        row={{
+          groups: [{ key: "sales-reader", name: "销售只读" }],
+          grants: [
+            {
+              source_type: "group",
+              source_key: "sales-reader",
+              permission_name: "订单列表",
+              scope_name: "SELF",
+            },
+            {
+              source_type: "direct",
+              source_key: null,
+              permission_name: "查看订单",
+              scope_name: "SELF",
+            },
+          ],
+        }}
+      />,
+    );
+
+    await user.hover(screen.getByRole("button", { name: "2 项权限" }));
+    await waitFor(() => {
+      expect(screen.getByText("销售只读")).toBeInTheDocument();
+    });
+    expect(screen.getByText("订单列表 · SELF")).toBeInTheDocument();
+    expect(screen.getByText("查看订单 · SELF")).toBeInTheDocument();
+  });
+
   test("悬停后按来源分组列出权限明细", async () => {
     const user = userEvent.setup({ delay: null });
     renderWithAntd(<GrantPermissionsCell row={row} />);

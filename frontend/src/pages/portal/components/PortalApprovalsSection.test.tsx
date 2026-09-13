@@ -46,15 +46,22 @@ describe("PortalApprovalsSection", () => {
         throw new Error(`Unexpected fetch: ${String(input)}`);
       }),
     );
+    const user = userEvent.setup();
 
     renderSection();
 
     expect(await screen.findByText("张三")).toBeVisible();
     expect(screen.getByText("销售部")).toBeVisible();
     expect(screen.getByText("客户管理 (CRM)")).toBeVisible();
-    expect(screen.getByText(/销售只读/)).toBeVisible();
-    expect(screen.getByText("订单列表 (orders.list) · SELF")).toBeVisible();
-    expect(screen.getByText("查看订单 (orders.read) · SELF")).toBeVisible();
+    expect(screen.getByText("新增授权")).toBeVisible();
+    expect(screen.getByText("销售只读")).toBeVisible();
+    expect(screen.getByRole("button", { name: "3 项权限" })).toBeVisible();
+    expect(screen.queryByText("订单列表 (orders.list) · SELF")).not.toBeInTheDocument();
+    await user.hover(screen.getByRole("button", { name: "3 项权限" }));
+    await waitFor(() => {
+      expect(screen.getByText("订单列表 · SELF")).toBeInTheDocument();
+    });
+    expect(screen.getByText("查看订单 · SELF")).toBeInTheDocument();
     expect(screen.getByText("长期")).toBeVisible();
     expect(screen.getByText("处理跨部门工单")).toBeVisible();
     expect(screen.getByRole("button", { name: "同意" })).toBeVisible();
@@ -586,7 +593,7 @@ describe("PortalApprovalsSection", () => {
       }
       if (url === PROCESSED_LIST_URL) {
         return jsonResponse({
-          data: [decidedApproval({ status: "grant_applied", status_label: "授权已落库, 权限已生效" })],
+          data: [decidedApproval({ status: "grant_applied", status_label: "已生效" })],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
       }
@@ -624,7 +631,7 @@ describe("PortalApprovalsSection", () => {
             data: [
               decidedApproval({
                 status: "grant_applied",
-                status_label: "授权已落库, 权限已生效",
+                status_label: "已生效",
                 grant_type: "timed",
                 grant_expires_at: "2026-08-15T10:30:00Z",
                 decision_comment: "同意限时开通",
@@ -643,6 +650,11 @@ describe("PortalApprovalsSection", () => {
 
     expect(await screen.findByText("同意限时开通")).toBeVisible();
     expect(screen.getByText(/2026\/08\/15/)).toBeVisible();
+    expect(screen.getByText("已生效")).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "审批意见" })).toBeVisible();
+    expect(screen.queryByRole("columnheader", { name: "我的意见" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "3 项权限" })).toBeVisible();
+    expect(screen.queryByText("订单列表 (orders.list) · SELF")).not.toBeInTheDocument();
   });
 
   test("详情已被处理时 fail-closed 并提示冲突", async () => {

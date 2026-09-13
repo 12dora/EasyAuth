@@ -5,6 +5,7 @@ import { AppTable, type ColumnsType, type UseServerTableResult } from "../../../
 import { PageState } from "../../../components/ui/PageState";
 import { useI18n } from "../../../i18n/I18nProvider";
 
+import { PENDING_APPROVALS_MIN_WIDTH, PROCESSED_APPROVALS_MIN_WIDTH } from "./portalApprovalColumns";
 import type { ApprovalTab, PortalApprovalRow } from "./portalApprovalTypes";
 
 /** 列表整体加载失败(且无可展示行)时替代表格的重试态。 */
@@ -59,7 +60,7 @@ export function PortalApprovalsTable({
       }
       emptyTitle={tab === "pending" ? t("portal.approvals.empty.pending") : t("portal.approvals.empty.processed")}
       loading={isLoading}
-      minWidth={1200}
+      minWidth={tab === "processed" ? PROCESSED_APPROVALS_MIN_WIDTH : PENDING_APPROVALS_MIN_WIDTH}
       rowKey="id"
     />
   );

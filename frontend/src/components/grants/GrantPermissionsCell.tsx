@@ -30,9 +30,10 @@ export interface GrantPermissionsEntry {
   source_type: string;
   source_key: string | null;
   permission_name: string;
-  permission_name_en: string;
+  /** 英文显示名; 审批行等契约没有双语时可以不给, 展示回落到 `permission_name`。 */
+  permission_name_en?: string;
   scope_name: string;
-  scope_name_en: string;
+  scope_name_en?: string;
 }
 
 /** 单元格需要的最小行形状: 门户 `PortalGrantRow` 与控制台 `AccessGrantRow` 都满足。 */

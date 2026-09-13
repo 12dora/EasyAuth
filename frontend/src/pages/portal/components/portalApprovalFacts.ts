@@ -1,3 +1,4 @@
+import type { GrantPermissionsRow } from "../../../components/grants/GrantPermissionsCell";
 import { userOptionName } from "../../../components/UserCombobox";
 import type { Translator } from "../../../lib/status";
 
@@ -18,6 +19,29 @@ export function applicantLabel(approval: PortalApprovalRow): string {
 export function grantLabel(grant: ApprovalGrantFact): string {
   const name = grant.permission_name || grant.permission;
   return `${name} (${grant.permission}) · ${grant.scope}`;
+}
+
+/** 把审批行的授权组 + 直接授权压成「我的权限 → 权限详情」单元格同一份形状。 */
+export function approvalPermissionsRow(approval: PortalApprovalRow): GrantPermissionsRow {
+  return {
+    groups: approval.authorization_groups.map((group) => ({ key: group.key, name: group.name })),
+    grants: [
+      ...approval.authorization_groups.flatMap((group) =>
+        group.grants.map((grant) => ({
+          source_type: "group",
+          source_key: group.key,
+          permission_name: grant.permission_name || grant.permission,
+          scope_name: grant.scope,
+        })),
+      ),
+      ...approval.direct_grants.map((grant) => ({
+        source_type: "direct",
+        source_key: null,
+        permission_name: grant.permission_name || grant.permission,
+        scope_name: grant.scope,
+      })),
+    ],
+  };
 }
 
 export function requestTypeLabel(t: Translator, requestType: string): string {

@@ -104,7 +104,7 @@ export const zhCN = {
   "portal.approvals.column.applicant": "申请人",
   "portal.approvals.column.content": "申请内容",
   "portal.approvals.column.decidedAt": "处理时间",
-  "portal.approvals.column.myComment": "我的意见",
+  "portal.approvals.column.myComment": "审批意见",
   "portal.approvals.approveDescription": "同意后将按申请内容为「{applicant}」开通「{app}」的授权。",
   "portal.approvals.rejectDescription": "驳回「{applicant}」对「{app}」的申请，驳回理由会展示给申请人。",
 
@@ -218,7 +218,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.approvals.column.applicant": "Applicant",
   "portal.approvals.column.content": "Requested access",
   "portal.approvals.column.decidedAt": "Processed at",
-  "portal.approvals.column.myComment": "My comment",
+  "portal.approvals.column.myComment": "Decision comment",
   "portal.approvals.approveDescription": "Approving grants \"{applicant}\" the requested access to \"{app}\".",
   "portal.approvals.rejectDescription": "Reject \"{applicant}\"'s request for \"{app}\"; the reason will be shown to the applicant.",
 

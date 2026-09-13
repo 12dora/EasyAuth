@@ -13,14 +13,16 @@ import {
 import { GrantExpiryCell } from "../../../components/grants/GrantExpiryCell";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
 
-import {
-  accessRequestStatusLabel,
-  badgeToneForAccessRequestStatus,
-} from "../../../lib/status";
+import { badgeToneForAccessRequestStatus } from "../../../lib/status";
 import type { Translator } from "../../../lib/status";
 
-import { approvalContentDetails } from "./PortalApprovalDetails";
+import { approvalContentSummary } from "./PortalApprovalDetails";
 import type { ApprovalTab, PortalApprovalRow } from "./portalApprovalTypes";
+
+/** 已处理表固定列宽合计; 申请内容与审批意见吃剩余宽度, 不够就横向滚动。 */
+export const PROCESSED_APPROVALS_MIN_WIDTH = 1500;
+/** 待办表固定列宽合计(含操作列)。 */
+export const PENDING_APPROVALS_MIN_WIDTH = 1400;
 
 /**
  * 排序发生在后端, 每一个数据列都过 `serverSortColumn`:
@@ -34,9 +36,38 @@ export function approvalColumns(
   onDecision: (mode: ApprovalDecisionMode, approval: PortalApprovalRow) => void,
 ): ColumnsType<PortalApprovalRow> {
   return [
+    ...identityColumns(t, sort),
     ...(tab === "processed" ? [approvalStatusColumn(t, sort)] : []),
-    ...requestColumns(t, sort),
+    ...requestBodyColumns(t, sort, tab),
     ...(tab === "pending" ? [decisionActionsColumn(t, actionsDisabled, onDecision)] : decisionColumns(t, sort)),
+  ];
+}
+
+function identityColumns(t: Translator, sort: ServerSortState): ColumnsType<PortalApprovalRow> {
+  return [
+    serverSortColumn(
+      personColumn<PortalApprovalRow>({
+        key: "applicant",
+        title: t("portal.approvals.column.applicant"),
+        t,
+        getName: (approval) => approval.applicant.name,
+        getUserId: (approval) => approval.applicant.user_id,
+        getDepartment: (approval) => approval.applicant.department,
+        getAccountKind: (approval) => approval.applicant.account_kind,
+        width: 200,
+      }),
+      sort,
+    ),
+    serverSortColumn(
+      appColumn<PortalApprovalRow>({
+        key: "app",
+        title: t("common.app"),
+        width: 200,
+        getDisplayName: (approval) => formatAppDisplayName({ name: approval.app_name, alias: approval.app_alias }),
+        getAppKey: (approval) => approval.app_key,
+      }),
+      sort,
+    ),
   ];
 }
 
@@ -50,47 +81,29 @@ function approvalStatusColumn(t: Translator, sort: ServerSortState): ColumnType<
     {
       key: "status",
       title: t("common.status"),
-      width: 130,
+      width: 110,
+      ellipsis: false,
+      className: "whitespace-nowrap",
       render: (_value: unknown, approval: PortalApprovalRow) => (
-        <Badge tone={badgeToneForAccessRequestStatus(approval.status)}>
-          {approval.status_label ?? accessRequestStatusLabel(t, approval.status)}
-        </Badge>
+        <Badge tone={badgeToneForAccessRequestStatus(approval.status)}>{approval.status_label}</Badge>
       ),
     },
     sort,
   );
 }
 
-function requestColumns(t: Translator, sort: ServerSortState): ColumnsType<PortalApprovalRow> {
+function requestBodyColumns(
+  t: Translator,
+  sort: ServerSortState,
+  tab: ApprovalTab,
+): ColumnsType<PortalApprovalRow> {
   return [
-    serverSortColumn(
-      personColumn<PortalApprovalRow>({
-        key: "applicant",
-        title: t("portal.approvals.column.applicant"),
-        t,
-        getName: (approval) => approval.applicant.name,
-        getUserId: (approval) => approval.applicant.user_id,
-        getDepartment: (approval) => approval.applicant.department,
-        getAccountKind: (approval) => approval.applicant.account_kind,
-        width: 160,
-      }),
-      sort,
-    ),
-    serverSortColumn(
-      appColumn<PortalApprovalRow>({
-        key: "app",
-        title: t("common.app"),
-        width: 160,
-        getDisplayName: (approval) => formatAppDisplayName({ name: approval.app_name, alias: approval.app_alias }),
-        getAppKey: (approval) => approval.app_key,
-      }),
-      sort,
-    ),
     serverSortColumn(
       {
         key: "content",
         title: t("portal.approvals.column.content"),
-        render: (_value: unknown, approval: PortalApprovalRow) => approvalContentDetails(t, approval),
+        ellipsis: false,
+        render: (_value: unknown, approval: PortalApprovalRow) => approvalContentSummary(t, approval),
       },
       sort,
     ),
@@ -98,7 +111,8 @@ function requestColumns(t: Translator, sort: ServerSortState): ColumnsType<Porta
       {
         key: "term",
         title: t("portal.column.term"),
-        width: 130,
+        width: 170,
+        ellipsis: false,
         render: (_value: unknown, approval: PortalApprovalRow) => (
           <GrantExpiryCell grantType={approval.grant_type} expiresAt={approval.grant_expires_at} />
         ),
@@ -111,13 +125,18 @@ function requestColumns(t: Translator, sort: ServerSortState): ColumnsType<Porta
         key: "submitted_at",
         title: t("portal.column.submittedAt"),
         sorter: false,
+        width: 170,
       }),
       sort,
     ),
-    serverSortColumn(
-      textColumn<PortalApprovalRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false }),
-      sort,
-    ),
+    ...(tab === "pending"
+      ? [
+          serverSortColumn(
+            textColumn<PortalApprovalRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false }),
+            sort,
+          ),
+        ]
+      : []),
   ];
 }
 
@@ -152,6 +171,7 @@ function decisionColumns(t: Translator, sort: ServerSortState): ColumnsType<Port
         key: "decided_at",
         title: t("portal.approvals.column.decidedAt"),
         sorter: false,
+        width: 170,
       }),
       sort,
     ),
@@ -159,7 +179,6 @@ function decisionColumns(t: Translator, sort: ServerSortState): ColumnsType<Port
       textColumn<PortalApprovalRow>({
         key: "decision_comment",
         title: t("portal.approvals.column.myComment"),
-        ellipsis: false,
       }),
       sort,
     ),
