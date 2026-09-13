@@ -52,6 +52,9 @@ class AccessGrant(models.Model):
         id: ClassVar[int]
         user_id: ClassVar[int]
         app_id: ClassVar[int]
+        # 同一 Python 实例上的分发去重/紧急标记, 非持久化字段。
+        connector_dispatch_emitted: bool = False
+        connector_dispatch_urgent: bool = False
 
     user: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
         UserMirror,
