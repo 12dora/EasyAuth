@@ -14,18 +14,28 @@ function translatorFor(locale: Locale) {
 }
 
 describe("accessRequestStatusLabel", () => {
-  test("用中文业务文案区分审批通过和授权生效", () => {
+  test("中文文案只描述当前状态, 与后端 status_label 对齐", () => {
     const t = translatorFor("zh-CN");
+    expect(accessRequestStatusLabel(t, "submitted")).toBe("等待审批");
     expect(accessRequestStatusLabel(t, "approved")).toBe("已通过");
     expect(accessRequestStatusLabel(t, "grant_applied")).toBe("已生效");
-    expect(accessRequestStatusLabel(t, "grant_failed")).toBe("授权失败");
-    expect(accessRequestStatusLabel(t, "grant_expired")).toBe("授权期限已过");
+    expect(accessRequestStatusLabel(t, "rejected")).toBe("已拒绝");
+    expect(accessRequestStatusLabel(t, "grant_failed")).toBe("落库失败");
+    expect(accessRequestStatusLabel(t, "grant_conflict")).toBe("已冲突");
+    expect(accessRequestStatusLabel(t, "grant_expired")).toBe("已过期");
+    expect(accessRequestStatusLabel(t, "withdrawn")).toBe("已撤回");
   });
 
   test("英文语言下输出英文文案", () => {
     const t = translatorFor("en");
+    expect(accessRequestStatusLabel(t, "submitted")).toBe("Awaiting approval");
     expect(accessRequestStatusLabel(t, "approved")).toBe("Approved");
-    expect(accessRequestStatusLabel(t, "grant_applied")).toBe("In effect");
+    expect(accessRequestStatusLabel(t, "grant_applied")).toBe("Active");
+    expect(accessRequestStatusLabel(t, "rejected")).toBe("Rejected");
+    expect(accessRequestStatusLabel(t, "grant_failed")).toBe("Apply failed");
+    expect(accessRequestStatusLabel(t, "grant_conflict")).toBe("Conflict");
+    expect(accessRequestStatusLabel(t, "grant_expired")).toBe("Expired");
+    expect(accessRequestStatusLabel(t, "withdrawn")).toBe("Withdrawn");
   });
 });
 

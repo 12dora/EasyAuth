@@ -173,7 +173,7 @@ describe("PortalApprovalsSection", () => {
         return jsonResponse({
           approval: decidedApproval({
             status: "grant_applied",
-            status_label: "授权已落库, 权限已生效",
+            status_label: "已生效",
             decision_comment: "同意开通",
           }),
         });
@@ -359,14 +359,14 @@ describe("PortalApprovalsSection", () => {
   test.each([
     {
       status: "grant_failed",
-      statusLabel: "授权落库失败",
+      statusLabel: "落库失败",
       title: "审批已通过，但授权未落地",
       description: "请联系管理员重试授权落地",
     },
     {
       status: "grant_expired",
-      statusLabel: "授权期限已过, 未应用",
-      title: "授权期限已过",
+      statusLabel: "已过期",
+      title: "已过期",
       description: "",
     },
   ])(
@@ -457,7 +457,7 @@ describe("PortalApprovalsSection", () => {
 
     resolveApproval(
       jsonResponse({
-        approval: decidedApproval({ status: "grant_applied", status_label: "授权已落库, 权限已生效" }),
+        approval: decidedApproval({ status: "grant_applied", status_label: "已生效" }),
       }),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

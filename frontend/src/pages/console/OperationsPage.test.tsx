@@ -252,10 +252,10 @@ describe("OperationsPage", () => {
       expect.objectContaining({ credentials: "include" }),
     );
     expect(screen.getByText("仅显示待审批的申请；可在状态筛选中查看历史。")).toBeInTheDocument();
-    // 默认口径必须在表头看得见: 状态列显示为已筛选, 下拉里选中「待审批」。
+    // 默认口径必须在表头看得见: 状态列显示为已筛选, 下拉里选中「等待审批」。
     expect(columnHeader("状态").querySelector(".ant-table-filter-trigger")).toHaveClass("active");
     const statusFilter = await openHeaderFilter(user, "状态");
-    expect(selectedFilterOption(statusFilter)).toBe("待审批");
+    expect(selectedFilterOption(statusFilter)).toBe("等待审批");
   });
 
   test("状态筛选选其他状态时按该状态取数, 选「全部」才不带 status", async () => {

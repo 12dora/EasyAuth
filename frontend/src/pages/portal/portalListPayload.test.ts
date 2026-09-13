@@ -43,7 +43,7 @@ describe("parsePortalRequestList", () => {
       listPayload(
         requestRow({
           status: "grant_applied",
-          status_label: "已授权",
+          status_label: "已生效",
           decided_at: "2026-07-02T10:00:00Z",
           approved_at: "2026-07-02T10:00:00Z",
           applied_at: "2026-07-02T10:05:00Z",

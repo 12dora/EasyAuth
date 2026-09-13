@@ -84,7 +84,7 @@ describe("parseApprovalListPayload", () => {
     const payload = parseRow(
       decidedApproval({
         status: "grant_applied",
-        status_label: "授权已落库, 权限已生效",
+        status_label: "已生效",
         approved_at: "2026-07-02T09:00:00Z",
         applied_at: "2026-07-02T09:00:05Z",
       }),
@@ -96,7 +96,7 @@ describe("parseApprovalListPayload", () => {
 
   test("接受已决行: current_approvers 为空且决定人三件套已填", () => {
     const payload = parseRow(
-      decidedApproval({ status: "grant_applied", status_label: "授权已落库, 权限已生效" }),
+      decidedApproval({ status: "grant_applied", status_label: "已生效" }),
     );
 
     expect(payload.data[0].current_approvers).toEqual([]);
@@ -177,12 +177,12 @@ describe("parseApprovalListPayload", () => {
     // 下面四条是后端 access_requests_status_field_shape 约束下不可能出现的组合,
     // 出现即说明契约漂移, 必须当成非法载荷而不是照单渲染。
     {
-      label: "待审批行却带了审批通过时间",
+      label: "等待审批行却带了审批通过时间",
       row: { ...pendingApproval, approved_at: "2026-07-02T09:00:00Z" },
     },
     {
       label: "已生效行缺授权生效时间",
-      row: decidedApproval({ status: "grant_applied", status_label: "授权已落库, 权限已生效", applied_at: null }),
+      row: decidedApproval({ status: "grant_applied", status_label: "已生效", applied_at: null }),
     },
     {
       label: "已通过行却带了授权生效时间",

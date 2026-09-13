@@ -50,8 +50,8 @@ export type AccessRequestStatusColor = "success" | "processing" | "error" | "war
  * 「我的申请」状态列的文字颜色。
  *
  * 状态列是纯文字而不是徽章, 颜色只回答「这条申请是成了、在走、还是坏了」:
- * 已批准 / 已授权是好结果, 等待审批是进行中, 驳回与授权失败是坏结果,
- * 授权冲突要人介入(警告), 已过期 / 已撤回是不再需要关注的终态(次要文字色)。
+ * 已通过 / 已生效是好结果, 等待审批是进行中, 已拒绝与落库失败是坏结果,
+ * 已冲突要人介入(警告), 已过期 / 已撤回是不再需要关注的终态(次要文字色)。
  */
 export function accessRequestStatusColor(status: string | null | undefined): AccessRequestStatusColor {
   switch (status) {
@@ -62,7 +62,7 @@ export function accessRequestStatusColor(status: string | null | undefined): Acc
       return "processing";
     case "rejected":
     case "grant_failed":
-    // 后端语义是「授权期限已过, 未应用」: 审批通过却从未生效, 与失败同为错误态。
+    // grant_expired: 审批通过却从未生效, 与失败同为错误态。
     case "grant_expired":
       return "error";
     case "grant_conflict":
