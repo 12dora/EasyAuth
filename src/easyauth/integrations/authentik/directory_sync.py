@@ -67,41 +67,11 @@ def sync_authentik_dingtalk_directory(
         locked_states = _lock_sync_states(snapshot)
         writable_corp_ids, confirmed_corp_ids = _classify_corp_ids(snapshot, locked_states)
         if writable_corp_ids:
-            writable_snapshot = _snapshot_for_corps(snapshot, writable_corp_ids)
-            for department in writable_snapshot.departments:
-                _upsert_department(department)
-            org_context_count = 0
-            for user_payload in writable_snapshot.users:
-                corp_id = _string(user_payload.get("corp_id"))
-                _upsert_user(
-                    user_payload,
-                    generation=writable_snapshot.contracts[corp_id].generation,
-                )
-                org_context = writable_snapshot.org_contexts.get(directory_user_key(user_payload))
-                if org_context is not None:
-                    _upsert_org_context(org_context)
-                    _update_user_mirror_summary(org_context)
-                    org_context_count += 1
-            _sync_user_mirror_avatars(writable_snapshot.users)
-
-            pruned_department_count, tombstoned_user_count = _reconcile_missing_rows(
-                writable_snapshot,
-            )
-            reconciliation = _reconcile_user_mirror_status(writable_snapshot)
-            _apply_sync_states(writable_snapshot, locked_states)
-            result = AuthentikDirectorySyncResult(
-                department_count=len(writable_snapshot.departments),
-                user_count=len(writable_snapshot.users),
-                org_context_count=org_context_count,
-                sync_state_count=len(writable_corp_ids),
-                pruned_department_count=pruned_department_count,
-                tombstoned_user_count=tombstoned_user_count,
-                status_applied_count=reconciliation.applied_count,
-                departed_count=reconciliation.departed_count,
-                revoked_count=reconciliation.revoked_count,
-                org_fetch_failed_count=len(writable_snapshot.org_fetch_failures),
-                offboarding_deferred_count=reconciliation.offboarding_deferred_count,
-                confirmed_corp_count=len(confirmed_corp_ids),
+            result = _write_writable_directory_snapshot(
+                snapshot,
+                locked_states,
+                writable_corp_ids=writable_corp_ids,
+                confirmed_corp_ids=confirmed_corp_ids,
             )
         else:
             result = AuthentikDirectorySyncResult(
@@ -114,6 +84,50 @@ def sync_authentik_dingtalk_directory(
         _refresh_confirmed_sync_states(snapshot, locked_states, confirmed_corp_ids)
         schedule_department_grant_reconcile(trigger="directory-sync")
         return result
+
+
+def _write_writable_directory_snapshot(
+    snapshot: _DirectorySnapshot,
+    locked_states: dict[str, DingTalkDirectorySyncState],
+    *,
+    writable_corp_ids: frozenset[str],
+    confirmed_corp_ids: frozenset[str],
+) -> AuthentikDirectorySyncResult:
+    writable_snapshot = _snapshot_for_corps(snapshot, writable_corp_ids)
+    for department in writable_snapshot.departments:
+        _upsert_department(department)
+    org_context_count = 0
+    for user_payload in writable_snapshot.users:
+        corp_id = _string(user_payload.get("corp_id"))
+        _upsert_user(
+            user_payload,
+            generation=writable_snapshot.contracts[corp_id].generation,
+        )
+        org_context = writable_snapshot.org_contexts.get(directory_user_key(user_payload))
+        if org_context is not None:
+            _upsert_org_context(org_context)
+            _update_user_mirror_summary(org_context)
+            org_context_count += 1
+    _sync_user_mirror_avatars(writable_snapshot.users)
+    pruned_department_count, tombstoned_user_count = _reconcile_missing_rows(
+        writable_snapshot,
+    )
+    reconciliation = _reconcile_user_mirror_status(writable_snapshot)
+    _apply_sync_states(writable_snapshot, locked_states)
+    return AuthentikDirectorySyncResult(
+        department_count=len(writable_snapshot.departments),
+        user_count=len(writable_snapshot.users),
+        org_context_count=org_context_count,
+        sync_state_count=len(writable_corp_ids),
+        pruned_department_count=pruned_department_count,
+        tombstoned_user_count=tombstoned_user_count,
+        status_applied_count=reconciliation.applied_count,
+        departed_count=reconciliation.departed_count,
+        revoked_count=reconciliation.revoked_count,
+        org_fetch_failed_count=len(writable_snapshot.org_fetch_failures),
+        offboarding_deferred_count=reconciliation.offboarding_deferred_count,
+        confirmed_corp_count=len(confirmed_corp_ids),
+    )
 
 
 def _lock_sync_states(
