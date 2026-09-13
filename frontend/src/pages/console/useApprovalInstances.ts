@@ -18,13 +18,18 @@ const DEFAULT_PAGE_SIZE = 20;
 const LIST_ENDPOINT = "/console/api/v1/operations/approval-instances";
 
 /**
- * 列 key -> 后端 `ordering` 字段(只认这四个)。
- * 模板列的 key 是 template_key(payload 字段名), 后端公开的排序字段名叫 template。
+ * 列 key -> 后端 `ordering` 字段。
+ * 模板列的 key 是 template_key, 后端公开的排序字段名叫 template;
+ * 发起人列的 key 是 originator_user_id, 后端字段叫 originator。
  */
 const INSTANCE_ORDERING_FIELDS = {
   app_key: "app_key",
   template_key: "template",
+  biz_key: "biz_key",
+  originator_user_id: "originator",
   status: "status",
+  dingtalk_process_instance_id: "dingtalk_process_instance_id",
+  delivery: "delivery",
   created_at: "created_at",
 } as const;
 

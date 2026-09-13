@@ -14,13 +14,14 @@ import type { ListPayload } from "../../../lib/api";
 import type { HandoverTaskRow } from "../../../lib/domain";
 
 /**
- * 列 key -> 后端 `ordering` 字段(GET /console/api/v1/lifecycle/handover-tasks 只认这四个)。
- * 负责人(assignee_state)与阻塞(blocked)两列只能筛不能排。
+ * 列 key -> 后端 `ordering` 字段。
  */
 const HANDOVER_ORDERING_FIELDS = {
   subject: "subject",
   kind: "kind",
   status: "status",
+  assignee_state: "assignee_state",
+  blocked: "blocked",
   created_at: "created_at",
 } as const;
 

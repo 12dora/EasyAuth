@@ -17,11 +17,13 @@ import type { ListPayload } from "../../../../lib/api";
 import { manifestVersionsQueryPrefix, type ManifestVersion } from "./manifestImportModel";
 
 /**
- * 列 key -> 后端 `ordering` 字段。接口另外允许 `imported_at`, 但版本项的 payload
- * (`template_version_item`)根本不下发导入时间, 那一列永远是 "-", 排它没有意义,
- * 因此只保留版本一列可排。导入人后端排不了。
+ * 列 key -> 后端 `ordering` 字段。导入时间读 payload 的 `imported_at`。
  */
-const MANIFEST_ORDERING_FIELDS = { version: "version" } as const;
+const MANIFEST_ORDERING_FIELDS = {
+  version: "version",
+  imported_at: "imported_at",
+  imported_by: "imported_by",
+} as const;
 
 export function useManifestHistory(appKey: string) {
   const serverTable = useServerTable<ManifestVersion>({
@@ -58,15 +60,16 @@ export function ManifestHistory({ state }: { state: ReturnType<typeof useManifes
         }),
         sort,
       ),
-      // 导入时间与导入人后端都排不了(前者 payload 里压根没有), 因此不给 sorter:
-      // 客户端比较函数只会重排当前页, 与「共 N 条」自相矛盾。
-      dateTimeColumn<ManifestVersion>({
-        key: "imported_at",
-        title: "导入时间",
-        getValue: (row) => row.imported_at ?? row.created_at,
-        sorter: false,
-      }),
-      textColumn<ManifestVersion>({ key: "imported_by", title: "导入人" }),
+      serverSortColumn(
+        dateTimeColumn<ManifestVersion>({
+          key: "imported_at",
+          title: "导入时间",
+          getValue: (row) => row.imported_at,
+          sorter: false,
+        }),
+        sort,
+      ),
+      serverSortColumn(textColumn<ManifestVersion>({ key: "imported_by", title: "导入人" }), sort),
     ],
     [sort],
   );

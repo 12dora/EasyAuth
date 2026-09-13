@@ -9,13 +9,14 @@ import type { AppListPayload, AppSummary } from "../../lib/domain";
 import type { AppCreateFormPayload } from "./ConsoleAppCreateDialog";
 
 /**
- * 列 key -> 后端 `ordering` 字段(GET /console/api/v1/apps 只认这四个)。
- * 应用列同时显示名称与 app_key, 排序按后端默认序的那一个(app_key);
- * owners / configuration_status 后端排不了, 因此列上也不给 sorter。
+ * 列 key -> 后端 `ordering` 字段。
+ * 应用列同时显示名称与 app_key, 排序按后端默认序的那一个(app_key)。
  * owners 列展示 PersonRef, 筛选参数仍是后端的 owner_user_id。
  */
 const APP_ORDERING_FIELDS = {
   app: "app_key",
+  owners: "owners",
+  configuration_status: "configuration_status",
   status: "status",
   updated_at: "updated_at",
 } as const;

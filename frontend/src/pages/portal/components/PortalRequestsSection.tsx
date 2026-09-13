@@ -29,6 +29,9 @@ const REQUEST_ORDERING_FIELDS = {
   status: "status",
   app: "app_key",
   grant_expires_at: "expires_at",
+  approver: "approver",
+  groups: "groups",
+  reason: "reason",
 } as const;
 
 /**
@@ -82,12 +85,15 @@ export function PortalRequestsSection() {
         },
         sort,
       ),
-      textColumn<PortalRequestRow>({
-        key: "approver",
-        title: t("portal.requests.columns.approver"),
-        getValue: (row) => formatApprovers(t, row),
-        width: 120,
-      }),
+      serverSortColumn(
+        textColumn<PortalRequestRow>({
+          key: "approver",
+          title: t("portal.requests.columns.approver"),
+          getValue: (row) => formatApprovers(t, row),
+          width: 120,
+        }),
+        sort,
+      ),
       // 排序在后端(ordering=app_key): 预设的 localeCompare 只会重排当前页。
       serverSortColumn(
         textColumn<PortalRequestRow>({
@@ -98,15 +104,18 @@ export function PortalRequestsSection() {
         }),
         sort,
       ),
-      textColumn<PortalRequestRow>({
-        key: "groups",
-        title: t("portal.column.groups"),
-        // 与「我的权限」同一个口径: 只给组名。只申请了直接授权的行这里是「自定义」,
-        // 具体授权在详情弹窗里列。
-        getValue: (row) => formatGrantGroupNames(row.authorization_groups, t),
-        ellipsis: false,
-        width: 160,
-      }),
+      serverSortColumn(
+        textColumn<PortalRequestRow>({
+          key: "groups",
+          title: t("portal.column.groups"),
+          // 与「我的权限」同一个口径: 只给组名。只申请了直接授权的行这里是「自定义」,
+          // 具体授权在详情弹窗里列。
+          getValue: (row) => formatGrantGroupNames(row.authorization_groups, t),
+          ellipsis: false,
+          width: 160,
+        }),
+        sort,
+      ),
       serverSortColumn(
         {
           key: "grant_expires_at",
@@ -127,7 +136,10 @@ export function PortalRequestsSection() {
         }),
         sort,
       ),
-      textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false, width: 170 }),
+      serverSortColumn(
+        textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false, width: 170 }),
+        sort,
+      ),
       actionsColumn<PortalRequestRow>({
         width: 120,
         render: (row) => <RequestRowActions mutation={withdrawMutation} row={row} onOpenDetail={(row) => setDetailRequestId(row.id)} />,

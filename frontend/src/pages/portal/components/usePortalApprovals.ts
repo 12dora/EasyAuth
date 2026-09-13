@@ -32,13 +32,18 @@ import {
 /**
  * 列 key -> 后端 `ordering` 字段。
  * 提交时间列的 key 是 payload 的 submitted_at, 后端公开的排序字段名叫 created_at;
- * 申请人列的 key 就是 applicant。内容 / 期限 / 我的意见三列后端排不了。
+ * 申请人列的 key 就是 applicant。
  */
 const APPROVAL_ORDERING_FIELDS = {
   submitted_at: "created_at",
   decided_at: "decided_at",
   app: "app_key",
   applicant: "applicant",
+  status: "status",
+  content: "content",
+  term: "term",
+  reason: "reason",
+  decision_comment: "decision_comment",
 } as const;
 
 export interface PortalApprovalsController {

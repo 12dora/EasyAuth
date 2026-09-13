@@ -67,8 +67,8 @@ export function ConsolePeopleTable({
 }
 
 /**
- * 四列(姓名/部门/邮箱/状态)都在后端排(`ordering=name|department|email|status`),
- * 因此一律过 `serverSortColumn`: 客户端比较函数只会重排当前页, 与「共 N 条」矛盾。
+ * 每一个数据列都在后端排, 因此一律过 `serverSortColumn`:
+ * 客户端比较函数只会重排当前页, 与「共 N 条」矛盾。
  */
 function peopleColumns(
   t: Translator,
@@ -91,17 +91,19 @@ function peopleColumns(
       }),
       sort,
     ),
-    // 管理员是只读展示: 后端 GET /users 不支持按它筛选也不支持按它排序,
-    // 所以既不套 serverColumn 也不套 serverSortColumn; 写入只走行内「权限」弹窗。
-    // 用纯文本而不是状态徽章: 管理员显示「是」, 非管理员按 textColumn 空值约定显示 "-"。
+    // 管理员列: 纯文本「是」/「-」, 后端不按它过滤, 排序走服务端 `is_console_admin`。
+    // 写入只走行内「权限」弹窗。
     // 位置紧跟姓名: 操作列是 fixed: "right" 的粘性列, 排在它前面的列在默认视口下会被
     // 压在粘性列底下要横向滚动才看得见, 而这一列的意义正是「不点开就能一眼扫出谁是管理员」。
-    textColumn<PersonRow>({
-      key: "is_console_admin",
-      title: t("people.column.consoleAdmin"),
-      getValue: (person) => (person.is_console_admin ? t("people.consoleAdmin.yes") : ""),
-      width: 90,
-    }),
+    serverSortColumn(
+      textColumn<PersonRow>({
+        key: "is_console_admin",
+        title: t("people.column.consoleAdmin"),
+        getValue: (person) => (person.is_console_admin ? t("people.consoleAdmin.yes") : ""),
+        width: 90,
+      }),
+      sort,
+    ),
     // 部门与邮箱后端不支持单列过滤(它们由工具栏的 q 一起做跨列搜索), 但支持排序。
     serverSortColumn(
       textColumn<PersonRow>({ key: "department", title: t("people.column.department"), width: 180 }),

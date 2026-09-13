@@ -40,11 +40,11 @@ import type { TeamPayload, TeamSummary } from "../../lib/domain";
 export const TEAMS_LIST_QUERY_KEY = ["console", "teams", "list"];
 
 /**
- * 列 key -> 后端 `ordering` 字段(GET /console/api/v1/teams 只认这四个)。
- * 负责人列后端排不了(它是聚合出来的名字串), 因此列上不给 sorter。
+ * 列 key -> 后端 `ordering` 字段。
  */
 const TEAM_ORDERING_FIELDS = {
   name: "name",
+  leaders: "leaders",
   status: "status",
   created_at: "created_at",
   member_count: "member_count",
@@ -106,8 +106,7 @@ export function ConsoleTeamList() {
     },
   });
 
-  // 排序在后端做: 四列一律过 serverSortColumn(sorter 只当开关、指示器受控),
-  // 客户端比较函数会只对当前页重排, 与「共 N 条」自相矛盾。
+  // 排序在后端做: 每一个数据列都过 serverSortColumn(sorter 只当开关、指示器受控)。
   const columns = useMemo<ColumnsType<TeamSummary>>(
     () => [
       serverSortColumn(
@@ -120,12 +119,15 @@ export function ConsoleTeamList() {
         },
         sort,
       ),
-      textColumn<TeamSummary>({
-        key: "leaders",
-        title: t("console.teams.column.leaders"),
-        getValue: (team) => teamLeadersLabel(team.leaders),
-        width: 220,
-      }),
+      serverSortColumn(
+        textColumn<TeamSummary>({
+          key: "leaders",
+          title: t("console.teams.column.leaders"),
+          getValue: (team) => teamLeadersLabel(team.leaders),
+          width: 220,
+        }),
+        sort,
+      ),
       serverSortColumn(
         textColumn<TeamSummary>({
           key: "member_count",

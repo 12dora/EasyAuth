@@ -72,9 +72,8 @@ export function ConsoleAppTable({
 }
 
 /**
- * 排序在后端做(`ordering=app_key|status|updated_at`), 因此三列一律过 `serverSortColumn`:
+ * 排序在后端做, 每一个数据列都过 `serverSortColumn`:
  * `sorter: true` 只当开关、不带比较函数, 指示器由 useServerTable 的查询状态受控。
- * owners / configuration_status 后端排不了, 不给 sorter。
  * owners 是 PersonRef[], 单元格走 peopleColumn, 筛选仍按后端 owner_user_id。
  */
 function appColumns(
@@ -94,30 +93,34 @@ function appColumns(
       }),
       sort,
     ),
-    // 后端按 owner_user_id 精确过滤; 单元格展示姓名/部门, 客户端再按展示文案筛一遍
-    // 会把后端筛出来的行筛掉, 因此必须过 serverColumn。
-    serverColumn(
-      peopleColumn<AppSummary>({
-        key: "owners",
-        title: t("appList.column.owners"),
-        t,
-        getPeople: (app) => app.owners,
-        filter: true,
-        width: 200,
-      }),
-      filters.owners,
+    serverSortColumn(
+      serverColumn(
+        peopleColumn<AppSummary>({
+          key: "owners",
+          title: t("appList.column.owners"),
+          t,
+          getPeople: (app) => app.owners,
+          filter: true,
+          width: 200,
+        }),
+        filters.owners,
+      ),
+      sort,
     ),
-    statusColumn<AppSummary>({
-      key: "configuration_status",
-      title: t("appList.column.configuration"),
-      filter: false,
-      options: READINESS_VALUES.map((status) => ({
-        value: status,
-        label: readinessLabel(t, status),
-        tone: readinessTone(status),
-      })),
-      width: 130,
-    }),
+    serverSortColumn(
+      statusColumn<AppSummary>({
+        key: "configuration_status",
+        title: t("appList.column.configuration"),
+        filter: false,
+        options: READINESS_VALUES.map((status) => ({
+          value: status,
+          label: readinessLabel(t, status),
+          tone: readinessTone(status),
+        })),
+        width: 130,
+      }),
+      sort,
+    ),
     // 后端只认单个 status, serverColumn 默认 multiple: false, 下拉即为单选,
     // 不给用户多选却只有一个生效的错觉。
     serverSortColumn(

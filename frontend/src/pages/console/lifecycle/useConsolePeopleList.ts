@@ -14,11 +14,11 @@ import type { HandoverTaskPayload, PersonRow } from "../../../lib/domain";
 import { DEFAULT_PAGE_SIZE, PEOPLE_QUERY_PREFIX, type HandoverStartTarget } from "./consolePeopleModel";
 
 /**
- * 列 key -> 后端 `ordering` 字段(GET /console/api/v1/users 只认这四个)。
- * 姓名列的 key 就是 name, 与后端字段同名。
+ * 列 key -> 后端 `ordering` 字段。姓名列的 key 就是 name, 与后端字段同名。
  */
 const PEOPLE_ORDERING_FIELDS = {
   name: "name",
+  is_console_admin: "is_console_admin",
   department: "department",
   email: "email",
   status: "status",

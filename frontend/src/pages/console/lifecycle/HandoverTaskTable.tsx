@@ -80,8 +80,7 @@ export function HandoverTaskTable({
  * 负责人列显示的是人名、阻塞列显示的是计数, 都和筛选值对不上, 整页会被筛空。
  * serverColumn 默认 multiple: false, 与后端每个键只接受一个值一致。
  *
- * 排序同样发生在后端(`ordering=subject|kind|status|created_at`), 对应四列过
- * `serverSortColumn`; 负责人与阻塞两列后端排不了, 因此不给 sorter。
+ * 排序同样发生在后端, 每一个数据列都过 `serverSortColumn`。
  */
 function taskColumns(
   t: Translator,
@@ -138,39 +137,45 @@ function taskColumns(
       ),
       sort,
     ),
-    serverColumn(
-      {
-        ...textColumn<HandoverTaskRow>({
-          key: "assignee_state",
-          title: t("handover.console.column.assignee"),
-          getValue: (task) =>
-            task.assignee?.name || task.assignee?.user_id || handoverAssigneeStateLabel(t, task.assignee_state),
-          width: 160,
-        }),
-        ...enumFilter<HandoverTaskRow>(
-          "assignee_state",
-          ASSIGNEE_STATES.map((state) => ({ value: state, label: handoverAssigneeStateLabel(t, state) })),
-        ),
-      },
-      filters.assignee_state,
+    serverSortColumn(
+      serverColumn(
+        {
+          ...textColumn<HandoverTaskRow>({
+            key: "assignee_state",
+            title: t("handover.console.column.assignee"),
+            getValue: (task) =>
+              task.assignee?.name || task.assignee?.user_id || handoverAssigneeStateLabel(t, task.assignee_state),
+            width: 160,
+          }),
+          ...enumFilter<HandoverTaskRow>(
+            "assignee_state",
+            ASSIGNEE_STATES.map((state) => ({ value: state, label: handoverAssigneeStateLabel(t, state) })),
+          ),
+        },
+        filters.assignee_state,
+      ),
+      sort,
     ),
-    serverColumn(
-      {
-        key: "blocked",
-        title: t("handover.console.column.blocked"),
-        width: 130,
-        render: (_value: unknown, task: HandoverTaskRow) =>
-          task.blocked_app_count > 0 ? <Badge tone="signal">{task.blocked_app_count}</Badge> : "-",
-        ...enumFilter<HandoverTaskRow>(
-          "blocked",
-          [
-            { value: "true", label: t("handover.console.filter.blockedYes") },
-            { value: "false", label: t("handover.console.filter.blockedNo") },
-          ],
-          { getValue: (task) => (task.blocked_app_count > 0 ? "true" : "false") },
-        ),
-      },
-      filters.blocked,
+    serverSortColumn(
+      serverColumn(
+        {
+          key: "blocked",
+          title: t("handover.console.column.blocked"),
+          width: 130,
+          render: (_value: unknown, task: HandoverTaskRow) =>
+            task.blocked_app_count > 0 ? <Badge tone="signal">{task.blocked_app_count}</Badge> : "-",
+          ...enumFilter<HandoverTaskRow>(
+            "blocked",
+            [
+              { value: "true", label: t("handover.console.filter.blockedYes") },
+              { value: "false", label: t("handover.console.filter.blockedNo") },
+            ],
+            { getValue: (task) => (task.blocked_app_count > 0 ? "true" : "false") },
+          ),
+        },
+        filters.blocked,
+      ),
+      sort,
     ),
     serverSortColumn(
       // 预设自带的时间戳比较函数只会重排当前页, 由 serverSortColumn 换成服务端排序。

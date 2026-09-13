@@ -43,10 +43,15 @@ export type PortalView = "grants" | "request" | "requests" | "expiring" | "appro
  * 授权表的列 key -> 后端 `ordering` 字段。
  *
  * 接口另外允许 `created_at`, 但表里没有「授权时间」这一列 —— 给一个看不见的字段
- * 排序只会让人猜不到表格为什么变了顺序, 因此只映射展示得出来的两列。
+ * 排序只会让人猜不到表格为什么变了顺序, 因此只映射展示得出来的列。
  * 应用列同时显示名字与 app_key, 排序按后端默认序的那一个(app_key)。
  */
-const GRANT_ORDERING_FIELDS = { app: "app_key", grant_expires_at: "expires_at" } as const;
+const GRANT_ORDERING_FIELDS = {
+  app: "app_key",
+  groups: "groups",
+  permission_details: "permission_details",
+  grant_expires_at: "expires_at",
+} as const;
 
 export function PortalPage({ view }: { view: PortalView }) {
   const { t } = useI18n();
@@ -133,19 +138,25 @@ function PortalGrantSection({
         },
         sort,
       ),
-      textColumn<PortalGrantRow>({
-        key: "groups",
-        title: t("portal.column.groups"),
-        getValue: (row) => formatGrantGroupNames(row.groups, t),
-        ellipsis: false,
-        width: 200,
-      }),
-      {
-        key: "permission_details",
-        title: t("portal.column.permissionDetails"),
-        width: 160,
-        render: (_value: unknown, row: PortalGrantRow) => <GrantPermissionsCell row={row} />,
-      },
+      serverSortColumn(
+        textColumn<PortalGrantRow>({
+          key: "groups",
+          title: t("portal.column.groups"),
+          getValue: (row) => formatGrantGroupNames(row.groups, t),
+          ellipsis: false,
+          width: 200,
+        }),
+        sort,
+      ),
+      serverSortColumn(
+        {
+          key: "permission_details",
+          title: t("portal.column.permissionDetails"),
+          width: 160,
+          render: (_value: unknown, row: PortalGrantRow) => <GrantPermissionsCell row={row} />,
+        },
+        sort,
+      ),
       serverSortColumn(
         {
           key: "grant_expires_at",

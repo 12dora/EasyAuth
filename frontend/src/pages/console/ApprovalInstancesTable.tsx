@@ -66,8 +66,7 @@ export function ApprovalInstancesTable({
 }
 
 /**
- * 排序在后端(`ordering=app_key|template|status|created_at`), 对应四列过
- * `serverSortColumn`; 业务键 / 发起人 / 钉钉实例 / 投递状态后端排不了, 不给 sorter。
+ * 排序在后端, 每一个数据列都过 `serverSortColumn`。
  */
 function instanceColumns(
   t: Translator,
@@ -104,17 +103,23 @@ function instanceColumns(
       }),
       sort,
     ),
-    textColumn<ApprovalInstanceRow>({ key: "biz_key", title: t("approvalInstances.column.bizKey"), mono: true }),
-    personColumn<ApprovalInstanceRow>({
-      key: "originator_user_id",
-      title: t("approvalInstances.column.originator"),
-      t,
-      getName: (row) => row.originator_name,
-      getUserId: (row) => row.originator_user_id,
-      getDepartment: (row) => row.originator_department,
-      getAccountKind: (row) => row.originator_account_kind,
-      width: 190,
-    }),
+    serverSortColumn(
+      textColumn<ApprovalInstanceRow>({ key: "biz_key", title: t("approvalInstances.column.bizKey"), mono: true }),
+      sort,
+    ),
+    serverSortColumn(
+      personColumn<ApprovalInstanceRow>({
+        key: "originator_user_id",
+        title: t("approvalInstances.column.originator"),
+        t,
+        getName: (row) => row.originator_name,
+        getUserId: (row) => row.originator_user_id,
+        getDepartment: (row) => row.originator_department,
+        getAccountKind: (row) => row.originator_account_kind,
+        width: 190,
+      }),
+      sort,
+    ),
     // 失败原因没有独立的列, 沿用旧表格挂在状态徽章上的 title 提示。
     withTitle(
       serverSortColumn(
@@ -131,18 +136,24 @@ function instanceColumns(
       ),
       (row) => row.last_error || undefined,
     ),
-    textColumn<ApprovalInstanceRow>({
-      key: "dingtalk_process_instance_id",
-      title: t("approvalInstances.column.dingtalkInstance"),
-      mono: true,
-      width: 180,
-    }),
-    {
-      key: "delivery",
-      title: t("approvalInstances.column.delivery"),
-      width: 190,
-      render: (_value: unknown, row: ApprovalInstanceRow) => <DeliveryCell t={t} row={row} actions={actions} />,
-    },
+    serverSortColumn(
+      textColumn<ApprovalInstanceRow>({
+        key: "dingtalk_process_instance_id",
+        title: t("approvalInstances.column.dingtalkInstance"),
+        mono: true,
+        width: 180,
+      }),
+      sort,
+    ),
+    serverSortColumn(
+      {
+        key: "delivery",
+        title: t("approvalInstances.column.delivery"),
+        width: 190,
+        render: (_value: unknown, row: ApprovalInstanceRow) => <DeliveryCell t={t} row={row} actions={actions} />,
+      },
+      sort,
+    ),
     serverSortColumn(
       dateTimeColumn<ApprovalInstanceRow>({
         key: "created_at",

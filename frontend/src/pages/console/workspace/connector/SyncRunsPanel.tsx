@@ -28,11 +28,13 @@ import {
 
 const RUN_STATUSES = ["success", "partial", "failed"] as const;
 
-/** 列 key -> 后端 `ordering` 字段(同步记录接口只认这三个)。 */
+/** 列 key -> 后端 `ordering` 字段。 */
 const SYNC_RUN_ORDERING_FIELDS = {
   started_at: "started_at",
   trigger: "trigger",
   status: "status",
+  stats: "stats",
+  error: "error",
 } as const;
 
 export function SyncRunsPanel({
@@ -61,7 +63,6 @@ export function SyncRunsPanel({
   });
   const runs = runsQuery.data?.data ?? [];
   serverTable.setTotal(runsQuery.data?.pagination?.total_items);
-  // 时间/触发/结果三列在后端排; 统计与错误两列后端排不了, 不给 sorter。
   const columns = useMemo<ColumnsType<ConnectorSyncRunItem>>(
     () => [
       serverSortColumn(
@@ -97,17 +98,23 @@ export function SyncRunsPanel({
         }),
         sort,
       ),
-      textColumn<ConnectorSyncRunItem>({
-        key: "stats",
-        title: t("console.connector.runsColumn.stats"),
-        getValue: (run) => formatRunStats(run.stats),
-        mono: true,
-        width: 200,
-      }),
-      textColumn<ConnectorSyncRunItem>({
-        key: "error",
-        title: t("console.connector.runsColumn.error"),
-      }),
+      serverSortColumn(
+        textColumn<ConnectorSyncRunItem>({
+          key: "stats",
+          title: t("console.connector.runsColumn.stats"),
+          getValue: (run) => formatRunStats(run.stats),
+          mono: true,
+          width: 200,
+        }),
+        sort,
+      ),
+      serverSortColumn(
+        textColumn<ConnectorSyncRunItem>({
+          key: "error",
+          title: t("console.connector.runsColumn.error"),
+        }),
+        sort,
+      ),
     ],
     [sort, t],
   );
