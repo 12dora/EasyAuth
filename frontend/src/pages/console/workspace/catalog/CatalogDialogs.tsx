@@ -5,7 +5,7 @@ import type { Dispatch, FormEvent, SetStateAction } from "react";
 import { Button } from "../../../../components/Button";
 import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
-import { StatusBanner } from "../../../../components/StatusBanner";
+import { MutationErrorBanner } from "../../../../components/StatusBanner";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { PermissionGroupItem } from "../../../../lib/domain";
 import type { PermissionForm, PermissionGroupForm, ScopeForm } from "./catalogModel";
@@ -41,7 +41,7 @@ export function ScopeDialog({ form, editingKey, mutation, onChange, onClose }: {
         <Field label={t("common.description")}>
           <TextArea value={form.description} onChange={(event) => onChange((current) => ({ ...current, description: event.currentTarget.value }))} />
         </Field>
-        {mutation.error ? <StatusBanner live="alert" tone="signal" title={t("console.catalog.scopeSaveFailed")} message={mutation.error.message} /> : null}
+        <MutationErrorBanner title={t("console.catalog.scopeSaveFailed")} error={mutation.error} />
       </form>
     </Dialog>
   );
@@ -81,7 +81,7 @@ export function GroupDialog({ form, groups, editingKey, mutation, onChange, onCl
         <Field label={t("common.description")}>
           <TextArea value={form.description} onChange={(event) => onChange((current) => ({ ...current, description: event.currentTarget.value }))} />
         </Field>
-        {mutation.error ? <StatusBanner live="alert" tone="signal" title={t("console.catalog.groupSaveFailed")} message={mutation.error.message} /> : null}
+        <MutationErrorBanner title={t("console.catalog.groupSaveFailed")} error={mutation.error} />
       </form>
     </Dialog>
   );
@@ -130,7 +130,7 @@ export function PermissionDialog({ form, groups, editingKey, mutation, onChange,
         <Field label={t("common.description")}>
           <TextArea value={form.description} onChange={(event) => onChange((current) => ({ ...current, description: event.currentTarget.value }))} />
         </Field>
-        {mutation.error ? <StatusBanner live="alert" tone="signal" title={t("console.catalog.permissionSaveFailed")} message={mutation.error.message} /> : null}
+        <MutationErrorBanner title={t("console.catalog.permissionSaveFailed")} error={mutation.error} />
       </form>
     </Dialog>
   );

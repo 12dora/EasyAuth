@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -6,6 +6,7 @@ import { ORDERING_PARAM, orderingSerializer, serverTableQuery, useServerTable } 
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
 import type { AppListPayload, AppSummary } from "../../lib/domain";
+import { useApiMutation } from "../../lib/query";
 import type { AppCreateFormPayload } from "./ConsoleAppCreateDialog";
 
 /**
@@ -24,7 +25,6 @@ const APP_ORDERING_FIELDS = {
 /** 应用列表的装载、快速新建、行内启停与删除。 */
 export function useConsoleAppList() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AppSummary | null>(null);
   // 表头筛选映射到后端支持的两个查询键; 其余列后端无法过滤, 因此列上也不给筛选。
@@ -42,36 +42,36 @@ export function useConsoleAppList() {
     // 翻页时保留上一页数据, 分页条的总数与页码不会先塌回 0 再跳回来。
     placeholderData: (previous) => previous,
   });
-  const createMutation = useMutation({
+  const createMutation = useApiMutation({
     mutationFn: (payload: AppCreateFormPayload) =>
       apiRequest<AppListPayload>("/console/api/v1/apps", {
         method: "POST",
         body: { ...payload } satisfies JsonObject,
       }),
+    invalidateQueryKeys: [["console", "apps"]],
     onSuccess: (payload) => {
-      void queryClient.invalidateQueries({ queryKey: ["console", "apps"] });
       const appKey = payload.app?.app_key;
       if (appKey) {
         void navigate(`/console/apps/${appKey}`);
       }
     },
   });
-  const updateStatusMutation = useMutation({
+  const updateStatusMutation = useApiMutation({
     mutationFn: ({ appKey, isActive }: { appKey: string; isActive: boolean }) =>
       apiRequest(`/console/api/v1/apps/${appKey}`, {
         method: "PATCH",
         body: { is_active: isActive },
       }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["console", "apps"] }),
+    invalidateQueryKeys: [["console", "apps"]],
   });
-  const deleteMutation = useMutation({
+  const deleteMutation = useApiMutation({
     mutationFn: (app: AppSummary) =>
       apiRequest(`/console/api/v1/apps/${app.app_key}`, {
         method: "DELETE",
       }),
+    invalidateQueryKeys: [["console", "apps"]],
     onSuccess: () => {
       setDeleteTarget(null);
-      void queryClient.invalidateQueries({ queryKey: ["console", "apps"] });
     },
   });
 

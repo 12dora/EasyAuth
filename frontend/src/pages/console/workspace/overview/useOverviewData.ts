@@ -1,15 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../../lib/api";
 import type { ConfigurationStatus } from "../../../../lib/domain";
+import { useApiMutation } from "../../../../lib/query";
 import { invalidateAppDerivedQueries } from "../invalidateAppQueries";
 import type { MembershipCreatePayload, MembershipItem } from "./overviewModel";
 
 /** 概览页的配置状态/成员两条查询与成员增改, 以及新建成员弹窗开合。 */
 export function useOverviewData(appKey: string) {
-  const queryClient = useQueryClient();
   const [membershipDialogOpen, setMembershipDialogOpen] = useState(false);
   const membershipsQueryKey = ["console", "app", appKey, "memberships"];
   const statusQuery = useQuery({
@@ -22,28 +22,28 @@ export function useOverviewData(appKey: string) {
     queryFn: () => apiRequest<ListPayload<MembershipItem>>(`/console/api/v1/apps/${appKey}/memberships`),
     enabled: Boolean(appKey),
   });
-  const refreshMemberships = () => {
-    void queryClient.invalidateQueries({ queryKey: membershipsQueryKey });
-    invalidateAppDerivedQueries(queryClient, appKey);
+  const invalidateMemberships = (client: QueryClient) => {
+    void client.invalidateQueries({ queryKey: membershipsQueryKey });
+    invalidateAppDerivedQueries(client, appKey);
   };
-  const createMembershipMutation = useMutation({
+  const createMembershipMutation = useApiMutation({
     mutationFn: (payload: MembershipCreatePayload) =>
       apiRequest(`/console/api/v1/apps/${appKey}/memberships`, {
         method: "POST",
         body: { ...payload } satisfies JsonObject,
       }),
+    invalidate: invalidateMemberships,
     onSuccess: () => {
-      refreshMemberships();
       setMembershipDialogOpen(false);
     },
   });
-  const disableMembershipMutation = useMutation({
+  const disableMembershipMutation = useApiMutation({
     mutationFn: (membershipId: number) =>
       apiRequest(`/console/api/v1/apps/${appKey}/memberships/${membershipId}`, {
         method: "PATCH",
         body: { is_active: false },
       }),
-    onSuccess: refreshMemberships,
+    invalidate: invalidateMemberships,
   });
 
   return {

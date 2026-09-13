@@ -20,6 +20,24 @@ const TONE_CLASSES: Record<StatusBannerTone, string> = {
   bond: "border-bond/30 bg-bond/8 text-bond",
 };
 
+/** 变更失败横幅: 无错误时不渲染, 有 Error 或非空字符串时走 signal + alert。 */
+export function MutationErrorBanner({
+  title,
+  error,
+}: {
+  title: string;
+  error: Error | string | null | undefined;
+}) {
+  if (!error) {
+    return null;
+  }
+  const message = typeof error === "string" ? error : error.message;
+  if (!message) {
+    return null;
+  }
+  return <StatusBanner live="alert" tone="signal" title={title} message={message} />;
+}
+
 export function StatusBanner({ tone = "neutral", title, message, live = "off" }: StatusBannerProps) {
   const Icon = toneIcon(tone);
   const liveProps: Pick<HTMLAttributes<HTMLDivElement>, "aria-live" | "role"> =

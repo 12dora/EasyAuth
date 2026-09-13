@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "../../../../components/Button";
 import { Dialog } from "../../../../components/Dialog";
 import { Field, TextArea, TextInput } from "../../../../components/Field";
-import { StatusBanner } from "../../../../components/StatusBanner";
+import { MutationErrorBanner } from "../../../../components/StatusBanner";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import { APP_ALIAS_MAX_LENGTH } from "../../../../lib/appDisplayName";
 import type { AppSummary } from "../../../../lib/domain";
@@ -72,7 +72,7 @@ export function AppBasicInfoDialog({
         <Field label={t("common.description")}>
           <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
         </Field>
-        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("console.overview.saveFailed")} message={errorMessage} /> : null}
+        <MutationErrorBanner title={t("console.overview.saveFailed")} error={errorMessage} />
       </form>
     </Dialog>
   );

@@ -4,7 +4,7 @@ import { AppKeyInput } from "../../components/AppKeyInput";
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
 import { Field, TextArea, TextInput } from "../../components/Field";
-import { StatusBanner } from "../../components/StatusBanner";
+import { MutationErrorBanner } from "../../components/StatusBanner";
 import { UserMultiSelect } from "../../components/UserSelect";
 import { useI18n } from "../../i18n/I18nProvider";
 import { APP_ALIAS_MAX_LENGTH } from "../../lib/appDisplayName";
@@ -90,7 +90,7 @@ export function ConsoleAppCreateDialog({
         <Field label={t("appList.createDialog.developerIds")} hint={t("appList.createDialog.userIdsHint")}>
           <UserMultiSelect aria-label="Developer 用户 ID" value={developerUserIds} onChange={setDeveloperUserIds} />
         </Field>
-        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("appList.createDialog.failed")} message={errorMessage} /> : null}
+        <MutationErrorBanner title={t("appList.createDialog.failed")} error={errorMessage} />
       </form>
     </Dialog>
   );

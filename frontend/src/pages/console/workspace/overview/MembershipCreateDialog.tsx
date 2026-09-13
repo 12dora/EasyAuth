@@ -3,7 +3,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "../../../../components/Button";
 import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextInput } from "../../../../components/Field";
-import { StatusBanner } from "../../../../components/StatusBanner";
+import { MutationErrorBanner } from "../../../../components/StatusBanner";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { MembershipCreatePayload, MembershipRole } from "./overviewModel";
 
@@ -57,7 +57,7 @@ export function MembershipCreateDialog({
             <option value="owner">{t("console.overview.roleOption.owner")}</option>
           </SelectInput>
         </Field>
-        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("console.overview.addMemberFailed")} message={errorMessage} /> : null}
+        <MutationErrorBanner title={t("console.overview.addMemberFailed")} error={errorMessage} />
       </form>
     </Dialog>
   );
