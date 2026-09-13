@@ -90,6 +90,30 @@ def test_operations_access_grants_order_by_groups_permissions_and_expiry() -> No
     assert _ids(client, "-grant_expires_at") == [zeta.id, alpha.id, empty.id, permanent.id]
 
 
+def test_operations_access_grants_default_order_is_user_name_app_key_then_version() -> None:
+    client = _admin("ord-ops-grant-default-admin")
+    cara = UserMirror.objects.create(authentik_user_id="ord-ops-grant-default-cara", name="Cara")
+    ada = UserMirror.objects.create(authentik_user_id="ord-ops-grant-default-ada", name="Ada")
+    ada_zeta = _grant(ada, "ord-ops-grant-default-z")
+    cara_mu = _grant(cara, "ord-ops-grant-default-m")
+    ada_alpha_v1 = _grant(ada, "ord-ops-grant-default-a", is_current=False)
+    ada_alpha_v2 = AccessGrant.objects.create(
+        user=ada,
+        app=ada_alpha_v1.app,
+        status=GRANT_STATUS_ACTIVE,
+        is_current=True,
+        version=2,
+    )
+
+    response = client.get(GRANTS_URL, {"current_only": "false", "page_size": "20"})
+    assert response.status_code == HTTPStatus.OK, response.content
+    payload = cast("dict[str, JsonValue]", response.json())
+    data = payload["data"]
+    assert isinstance(data, list), payload
+    ids = [item["id"] for item in data if isinstance(item, dict)]
+    assert ids == [ada_alpha_v2.id, ada_alpha_v1.id, ada_zeta.id, cara_mu.id]
+
+
 def test_operations_access_grants_reject_unknown_ordering() -> None:
     client = _admin("ord-ops-grant-unknown-admin")
     response = client.get(GRANTS_URL, {"ordering": "does_not_exist"})

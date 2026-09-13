@@ -4,7 +4,6 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 from django.db import transaction
-from django.db.models import Q
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 
@@ -12,7 +11,7 @@ from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.accounts.person_payload import person_payload
-from easyauth.accounts.pinyin import pinyin_query_filter
+from easyauth.accounts.user_search import apply_user_search
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
 from easyauth.admin_console.api_responses import (
     error_response,
@@ -118,7 +117,7 @@ def _people_page(request: HttpRequest) -> JsonResponse:
         users = users.filter(status=status)
     query = request.GET.get("q", "").strip()
     if query:
-        users = _apply_query_filter(users, query)
+        users = apply_user_search(users, query)
     queryset = apply_ordering(request, users, PEOPLE_LIST_ORDERING, PEOPLE_LIST_DEFAULT_ORDER)
     if isinstance(queryset, JsonResponse):
         return queryset
@@ -202,7 +201,7 @@ def _user_options_search(request: HttpRequest) -> JsonResponse:
             return response
         case str() as purpose:
             pass
-    users = _apply_query_filter(_active_option_users(purpose), query)
+    users = apply_user_search(_active_option_users(purpose), query)
     matched = tuple(users.order_by("name", "authentik_user_id")[: _limit(request)])
     return json_response(list_payload(_user_items(matched)))
 
@@ -211,22 +210,6 @@ def _user_options_for_ids(purpose: str, user_ids: tuple[str, ...]) -> JsonRespon
     users = _active_option_users(purpose).filter(authentik_user_id__in=user_ids)
     matched = tuple(users.order_by("name", "authentik_user_id"))
     return json_response(list_payload(_user_items(matched)))
-
-
-def _apply_query_filter(
-    users: QuerySet[UserMirror],
-    query: str,
-) -> QuerySet[UserMirror]:
-    filters = (
-        Q(name__icontains=query)
-        | Q(email__icontains=query)
-        | Q(authentik_user_id__icontains=query)
-        | Q(employee_number__icontains=query)
-    )
-    pinyin_filter = pinyin_query_filter(query)
-    if pinyin_filter is not None:
-        filters |= pinyin_filter
-    return users.filter(filters)
 
 
 def _user_items(users: Iterable[UserMirror]) -> list[JsonValue]:

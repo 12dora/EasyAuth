@@ -8,6 +8,7 @@ from django.db import models
 from django.utils.dateparse import parse_datetime
 
 from easyauth.access_requests.models import REQUEST_STATUS_VALUES, REQUEST_TYPE_VALUES
+from easyauth.accounts.user_search import apply_user_search
 from easyauth.admin_console.api_responses import error_response
 from easyauth.api.errors import ErrorCode
 from easyauth.api.pagination import total_pages
@@ -105,6 +106,7 @@ def filter_access_grants(
         allowed=GRANT_STATUS_VALUES,
     )
     queryset = _filter_text(queryset, query, key="user_id", lookup="user__authentik_user_id")
+    queryset = _filter_user_query(queryset, query)
     queryset = _filter_integer(queryset, query, key="version", lookup="version")
     queryset = _filter_boolean(queryset, query, key="current", lookup="is_current")
     queryset = _filter_datetime(queryset, query, key="created_from", lookup="created_at__gte")
@@ -147,6 +149,16 @@ def paginate_queryset[T: models.Model](queryset: QuerySet[T], query: QueryDict) 
         total_items=total_items,
         total_pages=total_pages(total_items=total_items, page_size=page_size),
     )
+
+
+def _filter_user_query(
+    queryset: QuerySet[AccessGrant],
+    query: QueryDict,
+) -> QuerySet[AccessGrant]:
+    value = query.get("user_query", "").strip()
+    if value == "":
+        return queryset
+    return apply_user_search(queryset, value, prefix="user__")
 
 
 def _filter_text[T: models.Model](

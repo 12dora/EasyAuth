@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar, cast, override
+from typing import TYPE_CHECKING, ClassVar, Final, cast, override
 
 from django.db.models import Prefetch, QuerySet
 from django.http import HttpRequest, JsonResponse
@@ -122,6 +122,7 @@ ACCESS_GRANT_ORDERING = {
     "permission_details": "ordering_permission_count",
     "grant_expires_at": "ordering_expires_at",
 }
+ACCESS_GRANT_DEFAULT_ORDER: Final[tuple[str, ...]] = ("user__name", "app__app_key", "-version")
 
 
 def operations_access_requests(request: HttpRequest) -> JsonResponse:
@@ -347,7 +348,7 @@ def _access_grant_page(request: HttpRequest) -> Page[AccessGrant] | JsonResponse
         request,
         filter_access_grants(queryset, request.GET),
         ACCESS_GRANT_ORDERING,
-        tuple(AccessGrant._meta.ordering),
+        ACCESS_GRANT_DEFAULT_ORDER,
         annotations=GRANT_ORDERING_ANNOTATIONS,
     )
     if isinstance(queryset, JsonResponse):

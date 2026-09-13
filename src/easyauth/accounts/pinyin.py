@@ -46,11 +46,14 @@ def _ascii_alnum(value: str) -> str:
     return "".join(ch.lower() for ch in value if ch.isascii() and ch.isalnum())
 
 
-def pinyin_query_filter(q: str) -> Q | None:
-    """纯字母数字查询时匹配姓名全拼/首字母; 否则返回 None。"""
+def pinyin_query_filter(q: str, *, prefix: str = "") -> Q | None:
+    """纯字母数字查询时匹配姓名全拼/首字母; 否则返回 None。
+
+    `prefix` 用于关联查询, 例如 `user__` 生成 `user__name_pinyin__icontains`。
+    """
     pinyin_query = q.lower().replace(" ", "")
     if pinyin_query.isascii() and pinyin_query.isalnum():
-        return Q(name_pinyin__icontains=pinyin_query) | Q(
-            name_pinyin_initials__icontains=pinyin_query,
+        return Q(**{f"{prefix}name_pinyin__icontains": pinyin_query}) | Q(
+            **{f"{prefix}name_pinyin_initials__icontains": pinyin_query},
         )
     return None

@@ -182,6 +182,39 @@ def test_ops3_access_grants_supports_version_current_revoked_and_expiration_filt
     assert item["grants"] == []
 
 
+def test_ops3_access_grants_user_query_matches_name_id_and_pinyin_initials() -> None:
+    client = _logged_in_superuser("ops3-grant-user-query-admin")
+    matched = UserMirror.objects.create(
+        authentik_user_id="ops3-grant-user-query-huyuqin",
+        name="胡玉琴A",
+        email="huyuqin.query@example.com",
+    )
+    other = UserMirror.objects.create(
+        authentik_user_id="ops3-grant-user-query-zhangsan",
+        name="张三",
+    )
+    app = App.objects.create(app_key="ops3-grant-user-query-app", name="CRM")
+    matched_grant = AccessGrant.objects.create(user=matched, app=app)
+    other_grant = AccessGrant.objects.create(user=other, app=app)
+
+    by_name = client.get(ACCESS_GRANTS_API_URL, {"user_query": "胡玉"})
+    by_initials = client.get(ACCESS_GRANTS_API_URL, {"user_query": "HYQ"})
+    by_id = client.get(ACCESS_GRANTS_API_URL, {"user_query": "query-huyu"})
+    by_user_id = client.get(
+        ACCESS_GRANTS_API_URL,
+        {"user_id": matched.authentik_user_id},
+    )
+    blank = client.get(ACCESS_GRANTS_API_URL, {"user_query": "   "})
+
+    assert by_name.status_code == HTTPStatus.OK
+    assert _grant_ids(by_name) == {matched_grant.id}
+    assert _grant_ids(by_initials) == {matched_grant.id}
+    assert _grant_ids(by_id) == {matched_grant.id}
+    assert _grant_ids(by_user_id) == {matched_grant.id}
+    assert blank.status_code == HTTPStatus.OK
+    assert _grant_ids(blank) == {matched_grant.id, other_grant.id}
+
+
 def test_ops3_access_grants_defaults_to_current_only() -> None:
     client = _logged_in_superuser("ops3-current-only-admin")
     user = UserMirror.objects.create(authentik_user_id="ops3-current-only-user")
@@ -379,6 +412,16 @@ def _json_object(value: JsonValue) -> dict[str, JsonValue]:
 def _json_list(value: JsonValue) -> list[JsonValue]:
     assert isinstance(value, list)
     return value
+
+
+def _grant_ids(response: HttpResponseLike) -> set[int]:
+    ids: set[int] = set()
+    for item in _json_list(_response_json(response)["data"]):
+        row = _json_object(item)
+        grant_id = row["id"]
+        assert isinstance(grant_id, int)
+        ids.add(grant_id)
+    return ids
 
 
 def _json_int(response: HttpResponseLike, key: str) -> int:

@@ -274,6 +274,13 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 的行；`current_only=false` 才包含历史版本。取值必须是 `true` 或 `false`，否则 422。
 既有 `app_key`、`status`、`user_id`、`version`、`current`、`revoked` 等筛选仍然生效。
 
+`user_query` 按授权对象 `UserMirror` 做大小写不敏感模糊匹配，规则与
+`GET /user-options` 的 `q` 相同（姓名、邮箱、Authentik 用户 ID、工号；纯字母数字可含空格时
+另按姓名全拼/首字母匹配）。省略或空白视为未筛选。`user_id` 仍为精确匹配，可与 `user_query`
+同时使用。
+
+省略 `ordering` 时默认按 `user__name`、`app__app_key`、`-version`、主键排序（授权明细按用户姓名）。
+
 ### 紧急撤权
 
 **POST `/operations/emergency-revokes`** 请求体含 `user_id`、`app_key`、`reason`。
@@ -392,8 +399,9 @@ UserMirror 的人员，因此只有 `directory` 或 `local`。
 超过 50 个或解析结果为空均拒绝。回填结果只含在职用户；`purpose=employee` 排除本地管理员，
 `approver` 可包含。未知 ID、停用用户不出现在 `data` 中，顺序无约定。
 
-未给 `user_ids` 时保持既有联想：空 `q` 为 422；按姓名、邮箱、用户 ID、工号模糊匹配，
-纯字母数字（可含空格）的 `q` 另按姓名全拼/首字母匹配（如 `huyu`、`hyq` 可命中「胡玉琴A」），
+未给 `user_ids` 时保持既有联想：空 `q` 为 422；匹配规则由 `accounts/user_search.py`
+统一提供（姓名、邮箱、用户 ID、工号模糊匹配，纯字母数字可含空格时另按姓名全拼/首字母匹配，
+如 `huyu`、`hyq` 可命中「胡玉琴A」），运营授权列表 `user_query` 使用同一套规则，
 并受 `limit` 截断。非法 `purpose` 无论哪条路径均为 422。
 
 ### 授权目录

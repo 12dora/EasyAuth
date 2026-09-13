@@ -46,6 +46,13 @@ def test_pinyin_query_filter_skips_non_ascii_and_empty() -> None:
     assert pinyin_query_filter("-") is None
 
 
+def test_pinyin_query_filter_prefix_uses_related_lookups() -> None:
+    expected = Q(user__name_pinyin__icontains="hyq") | Q(
+        user__name_pinyin_initials__icontains="hyq",
+    )
+    assert pinyin_query_filter("hyq", prefix="user__") == expected
+
+
 def test_user_mirror_save_fills_pinyin_when_name_set() -> None:
     user = UserMirror.objects.create(authentik_user_id="ak-pinyin-save", name="胡玉琴A")
 
