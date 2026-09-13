@@ -16,16 +16,16 @@ from easyauth.applications.models import (
     Permission,
 )
 from easyauth.connectors.base import RECONCILE_STATUS_PARTIAL, ReconcileReport
+from easyauth.connectors.desired_state import build_desired_state
 from easyauth.connectors.models import (
     SYNC_TRIGGER_MANUAL,
     ConnectorInstance,
     ConnectorMapping,
     ConnectorSyncRun,
 )
-from easyauth.connectors.services import (
+from easyauth.connectors.reconcile import (
     _claim_generation,  # pyright: ignore[reportPrivateUsage]
     _finish_generation,  # pyright: ignore[reportPrivateUsage]
-    build_desired_state,
     claim_instance_lease,
     external_write_allowed,
     mark_reconcile_dirty,

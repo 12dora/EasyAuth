@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final
 from django.db import transaction
 
 from easyauth.connectors.models import SYNC_TRIGGER_EVENT, ConnectorInstance
-from easyauth.connectors.services import mark_reconcile_dirty
+from easyauth.connectors.reconcile import mark_reconcile_dirty
 from easyauth.grants.models import GRANT_STATUS_EXPIRED
 from easyauth.outbox.services import enqueue_task
 from easyauth.webhooks.events import emit_grant_changed

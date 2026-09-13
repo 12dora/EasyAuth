@@ -11,6 +11,7 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DEPARTED, U
 from easyauth.applications.models import App
 from easyauth.connectors import dispatch as dispatch_module
 from easyauth.connectors.base import ExternalGroup, ExternalGroupPage
+from easyauth.connectors.external_groups import EXTERNAL_GROUP_REFRESH_STATUS_SUCCESS
 from easyauth.connectors.models import (
     SYNC_TRIGGER_MANUAL,
     SYNC_TRIGGER_OFFBOARD,
@@ -18,8 +19,7 @@ from easyauth.connectors.models import (
     ConnectorInstance,
     ConnectorSyncRun,
 )
-from easyauth.connectors.services import (
-    EXTERNAL_GROUP_REFRESH_STATUS_SUCCESS,
+from easyauth.connectors.reconcile import (
     RECONCILE_LEASE_GRACE_SECONDS,
     RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS,
     RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS,

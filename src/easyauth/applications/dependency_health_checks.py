@@ -407,7 +407,7 @@ def _check_connectors() -> DependencyCheckResult:
         SYNC_RUN_STATUS_FAILED,
         ConnectorInstance,
     )
-    from easyauth.connectors.services import (  # noqa: PLC0415
+    from easyauth.connectors.reconcile import (  # noqa: PLC0415
         CONNECTOR_UNHEALTHY_FAILURE_THRESHOLD,
     )
 

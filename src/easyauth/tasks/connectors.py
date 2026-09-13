@@ -14,22 +14,22 @@ from easyauth.connectors.dispatch import (
     RECONCILE_TASK_NAME,
     request_instance_reconcile,
 )
+from easyauth.connectors.external_groups import refresh_external_groups
 from easyauth.connectors.models import (
     SYNC_TRIGGER_OFFBOARD,
     SYNC_TRIGGER_PERIODIC,
     ConnectorInstance,
     ConnectorSyncRun,
 )
-from easyauth.connectors.registry import get_connector
-from easyauth.connectors.services import (
+from easyauth.connectors.reconcile import (
     RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS,
     RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS,
     RECONCILE_TASK_TIME_LIMIT_SECONDS,
     claim_instance_lease,
     reconcile_instance,
-    refresh_external_groups,
     release_instance_lease,
 )
+from easyauth.connectors.registry import get_connector
 
 logger = logging.getLogger(__name__)
 

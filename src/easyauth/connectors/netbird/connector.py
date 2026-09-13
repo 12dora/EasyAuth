@@ -566,7 +566,7 @@ def _revoke_ungranted_user(
 
 def _expansion_allowed(instance: ConnectorInstance, user_id: str) -> bool:
     # 局部导入避免框架加载连接器注册表时形成循环依赖。
-    from easyauth.connectors.services import expansion_allowed  # noqa: PLC0415
+    from easyauth.connectors.reconcile import expansion_allowed  # noqa: PLC0415
 
     return expansion_allowed(instance, user_id=user_id)
 
@@ -580,7 +580,7 @@ def _external_write_allowed(
     require_clean_dirty: bool = True,
 ) -> bool:
     # 局部导入避免框架加载连接器注册表时形成循环依赖。
-    from easyauth.connectors.services import external_write_allowed  # noqa: PLC0415
+    from easyauth.connectors.reconcile import external_write_allowed  # noqa: PLC0415
 
     return external_write_allowed(
         instance,
