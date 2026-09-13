@@ -91,18 +91,18 @@ def _grant_page(
     queryset: QuerySet[AccessGrant],
     request: HttpRequest,
 ) -> PortalPage | JsonResponse:
-    queryset = apply_ordering(
+    ordered = apply_ordering(
         request,
         queryset,
         PORTAL_GRANT_ORDERING,
         PORTAL_GRANT_DEFAULT_ORDER,
         annotations=GRANT_ORDERING_ANNOTATIONS,
     )
-    if isinstance(queryset, JsonResponse):
-        return queryset
+    if isinstance(ordered, JsonResponse):
+        return ordered
     page = page_request(request.GET)
-    total_items = queryset.count()
-    grants = tuple(queryset[page.start : page.stop])
+    total_items = ordered.count()
+    grants = tuple(ordered[page.start : page.stop])
     return build_page(_grant_items(grants), request=page, total_items=total_items)
 
 

@@ -114,7 +114,7 @@ def list_console_apps(request: HttpRequest) -> JsonResponse:
                     apps,
                     key=lambda app: (
                         -ranks[statuses[app.id]] if descending else ranks[statuses[app.id]],
-                        app.pk,
+                        app.id,
                     ),
                 )
             )
