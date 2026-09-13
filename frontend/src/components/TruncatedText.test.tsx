@@ -37,4 +37,22 @@ describe("TruncatedText", () => {
     await waitFor(() => expect(visibleTooltip()).not.toBeNull());
     expect(visibleTooltip()).toHaveTextContent("捷发科技-安全管理部-安环组");
   });
+
+  test("文案变化时关闭 Tooltip, 下次悬停重新测量", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderWithAntd(<TruncatedText text="捷发科技-安全管理部-安环组" />);
+
+    const longNode = screen.getByText("捷发科技-安全管理部-安环组");
+    mockLayout(longNode, 200, 80);
+    await user.hover(longNode);
+    await waitFor(() => expect(visibleTooltip()).not.toBeNull());
+
+    rerender(<TruncatedText text="捷发-安环部" />);
+    await waitFor(() => expect(visibleTooltip()).toBeNull());
+
+    const shortNode = screen.getByText("捷发-安环部", { selector: "span.truncate" });
+    mockLayout(shortNode, 40, 80);
+    await user.hover(shortNode);
+    expect(visibleTooltip()).toBeNull();
+  });
 });
