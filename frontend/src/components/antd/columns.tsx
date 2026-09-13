@@ -552,7 +552,7 @@ export function peopleColumn<T>({
 }: PeopleColumnConfig<T>): ColumnType<T> {
   const read = (record: T) => getPeople(record) ?? [];
   const line = (person: PersonRef) => ({
-    name: person.name || person.user_id,
+    name: userOptionName(person),
     secondary: userSecondaryLabel(person, t),
   });
 
