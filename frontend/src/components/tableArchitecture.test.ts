@@ -99,6 +99,21 @@ describe("表格架构", () => {
     expect(rulesTab).toMatch(/formatPeople\(resolvePeople\(rule\.approver_userids/);
     expect(rulesTab).not.toMatch(/safeJoin\(\s*rule\.approver_userids/);
   });
+
+  test("人员姓名回退只允许写在 userOptionName 里", () => {
+    const files = sourceFiles(sourceRoot).filter(
+      (file) =>
+        /\.tsx?$/.test(file) &&
+        !/\.test\.tsx?$/.test(file) &&
+        !file.endsWith("tableArchitecture.test.ts") &&
+        !file.endsWith(join("components", "UserCombobox.tsx")),
+    );
+    const violations = files.flatMap((file) => {
+      const relativePath = relative(sourceRoot, file).split(sep).join("/");
+      return nameOrUserIdViolations(file).map((snippet) => `${relativePath}: ${snippet} —— 改用 userOptionName`);
+    });
+    expect(violations).toEqual([]);
+  });
 });
 
 /**
@@ -134,6 +149,13 @@ function personIdDisplayViolations(file: string): string[] {
   }
 
   return hits;
+}
+
+const NAME_OR_USER_ID = /\b(?:[A-Za-z0-9_?.]*\.)?name\s*(?:\|\||\?\?)\s*(?:[A-Za-z0-9_?.]*\.)?user_id\b/g;
+
+function nameOrUserIdViolations(file: string): string[] {
+  const content = stripComments(readFileSync(file, "utf8"));
+  return [...content.matchAll(NAME_OR_USER_ID)].map((match) => match[0].replace(/\s+/g, " "));
 }
 
 function personArrayFieldInExpression(expression: string): boolean {
