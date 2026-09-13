@@ -1,14 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import { AppTable, enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
-import { RowActionButton, actionsColumn, activeStatusColumn, textColumn } from "../../../../components/antd/columns";
-import { EmptyState } from "../../../../components/ui/EmptyState";
 
+import { AppTable } from "../../../../components/antd/AppTable";
+import { EmptyState } from "../../../../components/ui/EmptyState";
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
-import { Dialog } from "../../../../components/Dialog";
-import { SecretDialog } from "../../../../components/SecretDialog";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { useToast } from "../../../../components/ui/Toast";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
@@ -16,10 +13,10 @@ import type { ListPayload } from "../../../../lib/api";
 import type { AppCapabilityKey, CredentialItem } from "../../../../lib/domain";
 import { credentialDisablePathSegment } from "../../../../lib/credentials";
 import { useI18n } from "../../../../i18n/I18nProvider";
-import { CreateCredentialForm } from "../credentials/CreateCredentialForm";
 import { useCredentialsActions } from "../credentials/useCredentialsActions";
 import { invalidateAppDerivedQueries } from "../invalidateAppQueries";
-import { credentialKindLabel } from "../utils";
+import { CreateCredentialDialog, CredentialSecretDialog, EditCapabilitiesDialog } from "./CredentialDialogs";
+import { buildCredentialColumns } from "./credentialsTabColumns";
 
 export function CredentialsTab({ appKey, canManage }: { appKey: string; canManage: boolean }) {
   const { t } = useI18n();
@@ -57,98 +54,17 @@ export function CredentialsTab({ appKey, canManage }: { appKey: string; canManag
       toast.error(t("console.credentials.operationFailed"), operationError.message);
     }
   }, [operationError, toast, t]);
-  const credentialColumns: ColumnsType<CredentialItem> = [
-    textColumn<CredentialItem>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
-    {
-      key: "kind",
-      dataIndex: "kind",
-      title: t("common.type"),
-      width: 140,
-      sorter: (a: CredentialItem, b: CredentialItem) =>
-        credentialKindLabel(a.kind).localeCompare(credentialKindLabel(b.kind)),
-      render: (_value: unknown, credential: CredentialItem) => credentialKindLabel(credential.kind),
-      ...enumFilter<CredentialItem>("kind", [
-        { label: credentialKindLabel("static_token"), value: "static_token" },
-        { label: credentialKindLabel("oauth_client"), value: "oauth_client" },
-      ]),
+  const credentialColumns = buildCredentialColumns({
+    canManage,
+    t,
+    isCredentialPending,
+    onEditCapabilities: (credential) => {
+      setEditingCredential(credential);
+      setEditingCapabilities(credential.capabilities ?? []);
     },
-    textColumn<CredentialItem>({
-      key: "client_id",
-      title: "client_id",
-      mono: true,
-      filter: true,
-      sorter: true,
-      width: 220,
-    }),
-    {
-      key: "capabilities",
-      title: t("console.credentials.capabilities"),
-      width: 200,
-      sorter: (a: CredentialItem, b: CredentialItem) =>
-        (a.capabilities ?? []).join(",").localeCompare((b.capabilities ?? []).join(",")),
-      render: (_value: unknown, credential: CredentialItem) => (
-        <div className="flex min-w-36 flex-wrap gap-1">
-          {(credential.capabilities ?? []).length > 0 ? (
-            credential.capabilities?.map((capability) => <Badge key={capability} tone="bond">{capability}</Badge>)
-          ) : (
-            <Badge tone="faint">{t("console.credentials.permissionOnly")}</Badge>
-          )}
-        </div>
-      ),
-      // 能力是多值, 未授予任何能力的凭据归到「仅权限查询」这一档。
-      ...enumFilter<CredentialItem>(
-        "capabilities",
-        [
-          { label: "directory", value: "directory" },
-          { label: "notify", value: "notify" },
-          { label: t("console.credentials.permissionOnly"), value: "none" },
-        ],
-        {
-          getValue: (credential) => ((credential.capabilities ?? []).length > 0 ? (credential.capabilities ?? []) : ["none"]),
-        },
-      ),
-    },
-    activeStatusColumn<CredentialItem>({ t, getActive: (credential) => credential.is_active }),
-    actionsColumn<CredentialItem>({
-      title: t("common.actions"),
-      render: (credential) => (
-        <>
-          {canManage ? (
-            <RowActionButton
-              type="button"
-              disabled={isCredentialPending(credential)}
-              onClick={() => {
-                setEditingCredential(credential);
-                setEditingCapabilities(credential.capabilities ?? []);
-              }}
-            >
-              <Pencil size={13} aria-hidden="true" />
-              {t("console.credentials.editCapabilities")}
-            </RowActionButton>
-          ) : null}
-          {canManage && credential.kind === "static_token" ? (
-            <RowActionButton
-              type="button"
-              disabled={isCredentialPending(credential)}
-              onClick={() => rotateCredential(credential)}
-            >
-              {t("console.credentials.rotate")}
-            </RowActionButton>
-          ) : null}
-          {canManage ? (
-            <RowActionButton
-              type="button"
-              variant="ghost-danger"
-              disabled={isCredentialPending(credential)}
-              onClick={() => disableCredential(credential)}
-            >
-              {t("console.credentials.disable")}
-            </RowActionButton>
-          ) : <span className="text-xs text-ink-faint">{t("console.integration.readOnlyMode")}</span>}
-        </>
-      ),
-    }),
-  ];
+    onRotate: rotateCredential,
+    onDisable: disableCredential,
+  });
 
   return (
     <section className="space-y-6">
@@ -179,65 +95,26 @@ export function CredentialsTab({ appKey, canManage }: { appKey: string; canManag
         minWidth={1080}
         empty={<EmptyState title={t("console.credentials.empty")} description={t("console.credentials.emptyDescription")} />}
       />
-      {createDialogOpen ? (
-        <Dialog title={t("console.credentials.createTitle")} onClose={() => setCreateDialogOpen(false)}>
-          <CreateCredentialForm
-            isCreating={isCreating}
-            onCreateCredential={async (kind, name, capabilities) => {
-              await createCredential(kind, name, capabilities);
-              setCreateDialogOpen(false);
-            }}
-          />
-        </Dialog>
-      ) : null}
-      {secretEntries[0] ? (
-        <SecretDialog
-          title={t("console.credentials.secretTitle")}
-          primaryLabel={secretEntries[0][0]}
-          primaryValue={secretEntries[0][1]}
-          secondaryLabel={secretEntries[1]?.[0]}
-          secondaryValue={secretEntries[1]?.[1]}
-          onClose={closeSecretDialog}
-        />
-      ) : null}
-      {editingCredential ? (
-        <Dialog title={t("console.credentials.editCapabilitiesTitle")} onClose={() => setEditingCredential(null)}>
-          <div className="space-y-5">
-            <p className="text-body leading-5 text-ink-soft">
-              {t("console.credentials.editCapabilitiesDescription", { name: editingCredential.name })}
-            </p>
-            <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label={t("console.credentials.capabilities")}>
-              {(["directory", "notify"] as const).map((capability) => (
-                <label key={capability} className="flex items-center gap-2 border border-ink/12 bg-paper-soft px-3 py-2 text-body text-ink">
-                  <input
-                    type="checkbox"
-                    checked={editingCapabilities.includes(capability)}
-                    onChange={(event) => {
-                      const checked = event.currentTarget.checked;
-                      setEditingCapabilities((current) => checked
-                        ? [...current, capability]
-                        : current.filter((item) => item !== capability));
-                    }}
-                  />
-                  <code>{capability}</code>
-                </label>
-              ))}
-            </div>
-            <StatusBanner tone="amber" title={t("console.credentials.capabilityWarningTitle")} message={t("console.credentials.capabilityWarningDescription")} />
-            <div className="flex justify-end gap-2">
-              <Button type="button" onClick={() => setEditingCredential(null)}>{t("common.cancel")}</Button>
-              <Button
-                type="button"
-                variant="primary"
-                loading={capabilitiesMutation.isPending}
-                onClick={() => capabilitiesMutation.mutate({ credential: editingCredential, capabilities: editingCapabilities })}
-              >
-                {t("console.credentials.saveCapabilities")}
-              </Button>
-            </div>
-          </div>
-        </Dialog>
-      ) : null}
+      <CreateCredentialDialog
+        open={createDialogOpen}
+        isCreating={isCreating}
+        onClose={() => setCreateDialogOpen(false)}
+        onCreateCredential={createCredential}
+      />
+      <CredentialSecretDialog secretEntries={secretEntries} onClose={closeSecretDialog} />
+      <EditCapabilitiesDialog
+        credential={editingCredential}
+        capabilities={editingCapabilities}
+        saving={capabilitiesMutation.isPending}
+        onCapabilitiesChange={setEditingCapabilities}
+        onClose={() => setEditingCredential(null)}
+        onSave={() => {
+          if (!editingCredential) {
+            return;
+          }
+          capabilitiesMutation.mutate({ credential: editingCredential, capabilities: editingCapabilities });
+        }}
+      />
     </section>
   );
 }
