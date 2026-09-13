@@ -25,6 +25,23 @@ describe("OrgTree", () => {
     vi.unstubAllGlobals();
   });
 
+  test("部门名走 TruncatedText, 展开缩进只写在行的 depth 变量上", () => {
+    renderTree();
+
+    const rootName = screen.getByText("公司");
+    expect(rootName).toHaveClass("truncate");
+    expect(rootName).toHaveClass("org-tree__name");
+    expect(rootName.closest(".org-tree")).toHaveClass("org-tree");
+
+    const salesName = screen.getByText("销售部");
+    expect(salesName).toHaveClass("truncate");
+    const salesRow = salesName.closest(".org-tree__row");
+    expect(salesRow).toHaveStyle({ "--org-tree-depth": "1" });
+    expect(salesRow).toHaveClass("org-tree__row");
+    // 缩进不得用 margin 把整棵树撑宽, 只落在行的 padding-left(由 --org-tree-depth 驱动)。
+    expect(salesName.closest(".org-tree__item")).not.toHaveClass("ml-4", "pl-4");
+  });
+
   test("展开的层级渲染出子部门, 行上不带人数", () => {
     renderTree();
 

@@ -237,6 +237,21 @@ describe("DepartmentGrantsPage", () => {
     vi.unstubAllGlobals();
   });
 
+  test("左栏部门树按内容取宽并设上限, 长部门名截断", async () => {
+    stubFetch();
+    renderPage();
+
+    await screen.findByRole("tree", { name: "组织架构" });
+    const layout = document.querySelector(".grid.gap-6");
+    expect(layout?.className).toContain("lg:grid-cols-[minmax(14rem,max-content)_1fr]");
+    const treePanel = layout?.querySelector("section");
+    expect(treePanel?.className).toContain("max-w-[20rem]");
+    expect(treePanel?.className).toContain("lg:w-max");
+    expect(treePanel?.className).toContain("overflow-hidden");
+    const tree = screen.getByRole("tree", { name: "组织架构" });
+    expect(within(tree).getByText("公司")).toHaveClass("truncate");
+  });
+
   test("默认选中根部门, 按目录来源与企业 ID 取该部门的授权", async () => {
     const { fetchMock } = stubFetch();
 

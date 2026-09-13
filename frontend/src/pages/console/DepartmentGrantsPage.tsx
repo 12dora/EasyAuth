@@ -81,15 +81,15 @@ export function DepartmentGrantsPage() {
           }
         />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(16rem,22rem)_1fr]">
-          <PanelSurface padding="sm" className="self-start">
+        <div className="grid gap-6 lg:grid-cols-[minmax(14rem,max-content)_1fr]">
+          <PanelSurface padding="sm" className="min-w-0 max-w-[20rem] self-start overflow-hidden lg:min-w-[14rem] lg:w-max">
             <TextInput
               value={page.treeFilter}
               onChange={(event) => page.setTreeFilter(event.target.value)}
               aria-label={t("departmentGrants.tree.searchLabel")}
               placeholder={t("departmentGrants.tree.searchPlaceholder")}
             />
-            <div className="mt-3 max-h-[34rem] overflow-y-auto">
+            <div className="mt-3 max-h-[34rem] min-w-0 overflow-x-hidden overflow-y-auto">
               {tree ? (
                 <OrgTree
                   root={tree.root}

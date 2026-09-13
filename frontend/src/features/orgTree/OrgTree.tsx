@@ -12,6 +12,7 @@ import {
 } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 
+import { TruncatedText } from "../../components/TruncatedText";
 import { useI18n } from "../../i18n/I18nProvider";
 import { cn } from "../../lib/cn";
 import { useGroupTransitionKeys } from "../../pages/portal/components/useGroupTransitionKeys";
@@ -407,7 +408,7 @@ const OrgTreeItem = memo(function OrgTreeItem({ node, depth }: { node: OrgTreeNo
         ) : (
           <span className="org-tree__chevron-placeholder" aria-hidden="true" />
         )}
-        <span className="org-tree__name">{label}</span>
+        <TruncatedText className="org-tree__name" text={label} />
       </div>
       {showChildren ? (
         <div
