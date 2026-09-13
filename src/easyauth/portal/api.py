@@ -23,6 +23,7 @@ from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.pagination import pagination_item
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
+from easyauth.api.responses import method_not_allowed_response
 from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.portal.access_request_payloads import (
     AccessRequestPayload,
@@ -123,11 +124,7 @@ def portal_access_requests(request: HttpRequest) -> JsonResponse:
         case "POST":
             return _submit_access_request(request, user)
         case _:
-            return _error_response(
-                ErrorCode.VALIDATION_ERROR,
-                "请求方法无效。",
-                status=HTTPStatus.METHOD_NOT_ALLOWED,
-            )
+            return method_not_allowed_response()
 
 
 def portal_request_catalog(request: HttpRequest) -> JsonResponse:
@@ -137,11 +134,7 @@ def portal_request_catalog(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method != "GET":
-        return _error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
 
     return _json_response(request_catalog_payload(user))
 
@@ -154,11 +147,7 @@ def portal_access_request_withdraw(request: HttpRequest, request_id: int) -> Jso
         case JsonResponse() as response:
             return response
     if request.method != "POST":
-        return _error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     try:
         access_request = withdraw_access_request(
             request_id=request_id,

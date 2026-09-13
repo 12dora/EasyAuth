@@ -7,7 +7,11 @@ from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from easyauth.admin_console.api_responses import error_response, json_response
+from easyauth.admin_console.api_responses import (
+    error_response,
+    json_response,
+    method_not_allowed_response,
+)
 from easyauth.admin_console.authz import require_superuser
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
@@ -74,11 +78,7 @@ def console_integration_settings(request: HttpRequest) -> JsonResponse:
         return _settings_response()
     if request.method == "PATCH":
         return _update_settings(request, actor_id=actor_id)
-    return error_response(
-        ErrorCode.VALIDATION_ERROR,
-        "请求方法无效。",
-        status=HTTPStatus.METHOD_NOT_ALLOWED,
-    )
+    return method_not_allowed_response()
 
 
 def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
@@ -169,11 +169,7 @@ def console_dingtalk_connectivity_test(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method != "POST":
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     try:
         _ = DingTalkApiClient.from_settings().get_access_token(force_refresh=True)
     except DingTalkApiError as error:

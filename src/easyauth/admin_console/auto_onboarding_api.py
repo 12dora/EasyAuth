@@ -15,7 +15,11 @@ from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from easyauth.admin_console.api_responses import error_response, json_response
+from easyauth.admin_console.api_responses import (
+    error_response,
+    json_response,
+    method_not_allowed_response,
+)
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.permission_template_handlers import CONFLICT_TEMPLATE_CODES
 from easyauth.api.errors import ErrorCode
@@ -103,11 +107,7 @@ def console_app_auto_onboarding(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method != "POST":
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     try:
         payload = AutoOnboardingPayload.model_validate_json(request.body)
     except ValidationError as exc:

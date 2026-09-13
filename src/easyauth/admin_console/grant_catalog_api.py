@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from http import HTTPStatus
 from typing import TYPE_CHECKING
 
 from django.http import HttpRequest, JsonResponse
 
-from easyauth.admin_console.api_responses import error_response, json_response
+from easyauth.admin_console.api_responses import (
+    json_response,
+    method_not_allowed_response,
+)
 from easyauth.admin_console.authz import require_superuser
-from easyauth.api.errors import ErrorCode
 from easyauth.portal.request_catalog_approvers import ApproverResolution, RequestCatalogApprovers
 from easyauth.portal.request_catalog_data import (
     CONSOLE_CATALOG_SCOPE,
@@ -32,11 +33,7 @@ def console_grant_catalog(request: HttpRequest) -> JsonResponse:
         case str():
             pass
     if request.method != "GET":
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     catalog = load_request_catalog_data(scope=CONSOLE_CATALOG_SCOPE)
     return json_response(serialize_request_catalog(catalog, _console_catalog_approvers(catalog)))
 

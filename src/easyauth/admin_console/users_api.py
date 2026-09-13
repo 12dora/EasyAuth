@@ -14,7 +14,11 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.accounts.person_payload import person_payload
 from easyauth.accounts.pinyin import pinyin_query_filter
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
-from easyauth.admin_console.api_responses import error_response, json_response
+from easyauth.admin_console.api_responses import (
+    error_response,
+    json_response,
+    method_not_allowed_response,
+)
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.operation_filters import (
     OperationFilterValidationError,
@@ -64,11 +68,7 @@ class _ConsoleAdminPayload(BaseModel):
 
 def console_users(request: HttpRequest) -> JsonResponse:
     if request.method != "GET":
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     match require_superuser(request):
         case JsonResponse() as response:
             return response
@@ -79,11 +79,7 @@ def console_users(request: HttpRequest) -> JsonResponse:
 
 def console_user_options(request: HttpRequest) -> JsonResponse:
     if request.method != "GET":
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     match require_superuser(request):
         case JsonResponse() as response:
             return response
@@ -103,11 +99,7 @@ def _user_options_payload(request: HttpRequest) -> JsonResponse:
 
 def console_user_console_admin(request: HttpRequest, user_id: str) -> JsonResponse:
     if request.method != "PUT":
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     match require_superuser(request):
         case str() as actor_id:
             pass

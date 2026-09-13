@@ -9,8 +9,16 @@ if TYPE_CHECKING:
 
 from easyauth.admin_console.api_responses import error_response as admin_error_response
 from easyauth.admin_console.api_responses import json_response as admin_json_response
+from easyauth.admin_console.api_responses import (
+    method_not_allowed_response as admin_method_not_allowed_response,
+)
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.api.responses import error_response, json_response
+from easyauth.api.responses import (
+    METHOD_NOT_ALLOWED_MESSAGE,
+    error_response,
+    json_response,
+    method_not_allowed_response,
+)
 
 type JsonObject = dict[str, JsonValue]
 
@@ -86,6 +94,20 @@ def test_admin_console_reexports_json_response_with_public_helper_behavior() -> 
     assert _json_object(response) == payload
     assert response.status_code == HTTPStatus.CREATED
     assert b"\\u63a7" not in response.content
+
+
+def test_method_not_allowed_response_uses_shared_message() -> None:
+    response = method_not_allowed_response()
+
+    assert response.status_code == HTTPStatus.METHOD_NOT_ALLOWED
+    assert _error_object(response) == {
+        "code": ErrorCode.VALIDATION_ERROR,
+        "message": METHOD_NOT_ALLOWED_MESSAGE,
+        "details": {},
+    }
+    admin_response = admin_method_not_allowed_response()
+    assert admin_response.status_code == response.status_code
+    assert _error_object(admin_response) == _error_object(response)
 
 
 def test_admin_console_reexports_error_response_with_public_helper_behavior() -> None:

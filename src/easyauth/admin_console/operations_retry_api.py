@@ -25,6 +25,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.authz import require_superuser
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.audit.services import AuditRecord, AuditService
@@ -67,11 +68,7 @@ def operations_retry_grant(request: HttpRequest, request_id: int) -> JsonRespons
         case JsonResponse() as response:
             return response
     if request.method != "POST":
-        return _error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     try:
         payload = _RetryGrantPayload.model_validate_json(request.body)
         grant = _retry_grant(request_id=request_id, actor_id=actor_id, reason=payload.reason)

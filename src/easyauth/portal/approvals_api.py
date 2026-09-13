@@ -32,6 +32,7 @@ from easyauth.api.ordering_expressions import REQUEST_ORDERING_ANNOTATIONS
 from easyauth.api.pagination import pagination_item, total_pages
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
+from easyauth.api.responses import method_not_allowed_response
 from easyauth.portal.access_request_data import (
     APPROVER_PREFETCH,
     access_request_items,
@@ -78,7 +79,7 @@ def portal_approvals(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method != "GET":
-        return _method_not_allowed()
+        return method_not_allowed_response()
     status = request.GET.get("status", APPROVAL_STATUS_PENDING)
     if status not in {APPROVAL_STATUS_PENDING, APPROVAL_STATUS_PROCESSED}:
         return _error_response(
@@ -97,7 +98,7 @@ def portal_approval_detail(request: HttpRequest, request_id: int) -> JsonRespons
         case JsonResponse() as response:
             return response
     if request.method != "GET":
-        return _method_not_allowed()
+        return method_not_allowed_response()
     access_request = _visible_approval(user, request_id)
     if access_request is None:
         return _not_found_response()
@@ -119,7 +120,7 @@ def _decide(request: HttpRequest, request_id: int, *, action: str) -> JsonRespon
         case JsonResponse() as response:
             return response
     if request.method != "POST":
-        return _method_not_allowed()
+        return method_not_allowed_response()
     try:
         payload = _ApprovalDecisionPayload.model_validate_json(request.body or b"{}")
     except ValidationError as exc:
@@ -413,14 +414,6 @@ def _not_found_response() -> JsonResponse:
         ErrorCode.NOT_FOUND,
         "申请不存在或无权查看。",
         status=HTTPStatus.NOT_FOUND,
-    )
-
-
-def _method_not_allowed() -> JsonResponse:
-    return _error_response(
-        ErrorCode.VALIDATION_ERROR,
-        "请求方法无效。",
-        status=HTTPStatus.METHOD_NOT_ALLOWED,
     )
 
 

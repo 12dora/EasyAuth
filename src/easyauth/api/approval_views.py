@@ -13,6 +13,7 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from easyauth.api.errors import ErrorCode, JsonValue, build_error_response
 from easyauth.api.pagination import pagination_item, total_pages
 from easyauth.api.permission_query_auth import authenticate_permission_query_token
+from easyauth.api.responses import method_not_allowed_response
 from easyauth.applications.models import App
 from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceeded
 from easyauth.workflows.models import ApprovalInstance, ApprovalTemplate
@@ -84,11 +85,7 @@ def app_approval_instances(request: HttpRequest, app_key: str) -> JsonResponse:
         case "POST":
             return _create_approval_instance(request, app_key)
         case _:
-            return _error(
-                ErrorCode.VALIDATION_ERROR,
-                "请求方法无效。",
-                HTTPStatus.METHOD_NOT_ALLOWED,
-            )
+            return method_not_allowed_response()
 
 
 @csrf_exempt
@@ -99,7 +96,7 @@ def app_approval_instance_detail(
 ) -> JsonResponse:
     """下游应用查询自身审批实例详情。"""
     if request.method != "GET":
-        return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
+        return method_not_allowed_response()
     match _authenticated_app(request, app_key):
         case (App() as app, credential_id):
             pass
@@ -131,7 +128,7 @@ def app_approval_instance_detail(
 def app_approval_templates(request: HttpRequest, app_key: str) -> JsonResponse:
     """列出本应用可用的活跃审批模板(含平台共用模板)。"""
     if request.method != "GET":
-        return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
+        return method_not_allowed_response()
     match _authenticated_app(request, app_key):
         case (App() as app, credential_id):
             pass

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.authorization_groups_payloads import (
     AuthorizationGroupGrantPayload,
     AuthorizationGroupPayload,
@@ -22,7 +23,6 @@ from easyauth.admin_console.authorization_groups_write_api import (
 from easyauth.admin_console.authorization_groups_write_api import (
     update_authorization_group as _update_authorization_group,
 )
-from easyauth.admin_console.catalog_write_common import method_not_allowed_response
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, JsonResponse

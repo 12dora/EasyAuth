@@ -4,8 +4,8 @@ from http import HTTPStatus
 
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.admin_console.api_responses import error_response, json_response
 from easyauth.admin_console.authorization_groups_payloads import AuthorizationGroupQueryOptions
-from easyauth.admin_console.catalog_write_common import error_response, json_response
 from easyauth.admin_console.operation_filters import (
     OperationFilterValidationError,
     operation_filter_error_response,

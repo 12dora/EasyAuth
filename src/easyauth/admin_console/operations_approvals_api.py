@@ -21,6 +21,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.authz import require_superuser
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
@@ -61,7 +62,7 @@ def operations_reassign_access_request(request: HttpRequest, request_id: int) ->
         case JsonResponse() as response:
             return response
     if request.method != "POST":
-        return _method_not_allowed()
+        return method_not_allowed_response()
     try:
         payload = _ReassignPayload.model_validate_json(request.body)
     except ValidationError as exc:
@@ -84,7 +85,7 @@ def _admin_decide(request: HttpRequest, request_id: int, *, action: str) -> Json
         case JsonResponse() as response:
             return response
     if request.method != "POST":
-        return _method_not_allowed()
+        return method_not_allowed_response()
     try:
         payload = _AdminDecisionPayload.model_validate_json(request.body or b"{}")
     except ValidationError as exc:
@@ -171,9 +172,4 @@ def _invalid_payload_response(exc: ValidationError) -> JsonResponse:
     )
 
 
-def _method_not_allowed() -> JsonResponse:
-    return _error_response(
-        ErrorCode.VALIDATION_ERROR,
-        "请求方法无效。",
-        status=HTTPStatus.METHOD_NOT_ALLOWED,
-    )
+

@@ -12,6 +12,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.operation_filters import (
     OperationFilterValidationError,
     operation_filter_error_response,
@@ -87,11 +88,7 @@ def permission_template_versions_api(request: HttpRequest, app_key: str) -> Json
             return response
 
     if request.method != "GET":
-        return _error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     queryset = apply_ordering(
         request,
         PermissionTemplateVersion.objects.filter(app=app),
@@ -129,11 +126,7 @@ def app_manifest_api(request: HttpRequest, app_key: str) -> JsonResponse:
             return response
 
     if request.method != "GET":
-        return _error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     return _json_response(export_manifest(app))
 
 

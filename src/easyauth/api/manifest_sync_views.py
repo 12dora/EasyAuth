@@ -19,6 +19,7 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
 from easyauth.api.errors import ErrorCode, JsonValue, build_error_response
 from easyauth.api.permission_query_auth import authenticate_permission_query_token
+from easyauth.api.responses import method_not_allowed_response
 from easyauth.applications.manifest_import import (
     ManifestSyncOutcome,
     ManifestVersionConflictError,
@@ -75,7 +76,7 @@ class _ManifestSyncPayload(BaseModel):
 @csrf_exempt
 def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:
     if request.method != "POST":
-        return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
+        return method_not_allowed_response()
     match _authenticated_app(request, app_key):
         case App() as app:
             pass

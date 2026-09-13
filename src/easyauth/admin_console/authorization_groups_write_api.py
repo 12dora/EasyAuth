@@ -5,6 +5,7 @@ from http import HTTPStatus
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.admin_console.api_responses import json_response
 from easyauth.admin_console.authorization_group_grants import (
     record_group_event,
     replace_grant_policies,
@@ -19,7 +20,6 @@ from easyauth.admin_console.catalog_write_common import (
     CatalogWriteContext,
     bad_request,
     conflict_response,
-    json_response,
     parse_payload,
     save_model,
     semantic_response,

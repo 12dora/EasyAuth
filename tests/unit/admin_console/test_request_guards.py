@@ -110,7 +110,7 @@ def test_require_post_returns_405_for_non_post_request() -> None:
     assert response.status_code == HTTPStatus.METHOD_NOT_ALLOWED
     assert _json_object(response)["error"] == {
         "code": ErrorCode.VALIDATION_ERROR,
-        "message": "请求方法无效。",
+        "message": "不支持的请求方法。",
         "details": {},
     }
 

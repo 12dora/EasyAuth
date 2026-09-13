@@ -3,7 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import TYPE_CHECKING
 
-from easyauth.admin_console.api_responses import error_response
+from easyauth.admin_console.api_responses import error_response, method_not_allowed_response
 from easyauth.admin_console.identity import actor_from_request
 from easyauth.api.errors import ErrorCode
 
@@ -27,8 +27,4 @@ def require_console_actor(request: HttpRequest) -> ConsoleActor | JsonResponse:
 def require_post(request: HttpRequest) -> JsonResponse | None:
     if request.method == "POST":
         return None
-    return error_response(
-        ErrorCode.VALIDATION_ERROR,
-        "请求方法无效。",
-        status=HTTPStatus.METHOD_NOT_ALLOWED,
-    )
+    return method_not_allowed_response()

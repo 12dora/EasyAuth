@@ -9,8 +9,9 @@ from django.db import IntegrityError
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.admin_console.api_responses import error_response
 from easyauth.admin_console.request_guards import require_console_actor
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.services import AuditRecord, AuditService
@@ -98,32 +99,6 @@ def semantic_response(message: str) -> JsonResponse:
         message,
         status=HTTPStatus.UNPROCESSABLE_ENTITY,
     )
-
-
-def method_not_allowed_response() -> JsonResponse:
-    return error_response(
-        ErrorCode.VALIDATION_ERROR,
-        "不支持的请求方法。",
-        status=HTTPStatus.METHOD_NOT_ALLOWED,
-    )
-
-
-def error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: HTTPStatus,
-) -> JsonResponse:
-    return json_response(build_error_response(code, message, details), status=status)
-
-
-def json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: HTTPStatus = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(payload, status=status, json_dumps_params={"ensure_ascii": False})
 
 
 def save_model(model: DjangoModel) -> SaveResult:

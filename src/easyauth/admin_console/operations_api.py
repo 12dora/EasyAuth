@@ -19,6 +19,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.grant_row_payloads import (
     access_grant_row_queryset,
@@ -165,11 +166,7 @@ def operations_emergency_revokes(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method != "POST":
-        return _error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     try:
         result = _execute_emergency_revoke(request=request, actor_id=actor_id)
     except ValidationError as exc:
@@ -305,11 +302,7 @@ def operations_dependency_health_check(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method != "POST":
-        return _error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+        return method_not_allowed_response()
     items = run_dependency_health_checks()
     record_dependency_health_check_run(actor_id)
     return _dependency_health_response(items)

@@ -6,13 +6,12 @@ from typing import TYPE_CHECKING
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.admin_console.api_responses import json_response, method_not_allowed_response
 from easyauth.admin_console.catalog_relationships import ResolvedGroupReference
 from easyauth.admin_console.catalog_write_common import (
     CatalogEvent,
     CatalogWriteContext,
     conflict_response,
-    json_response,
-    method_not_allowed_response,
     parse_payload,
     record_catalog_event,
     save_model,
