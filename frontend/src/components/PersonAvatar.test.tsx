@@ -71,4 +71,13 @@ describe("PersonAvatar", () => {
       "https://cdn.example.com/ok.png",
     );
   });
+
+  test("空姓名渲染中性占位符, 不留下空白圆", () => {
+    const { rerender } = render(<PersonAvatar name="" size={24} />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("?")).toBeVisible();
+
+    rerender(<PersonAvatar name="   " size={20} />);
+    expect(screen.getByText("?")).toBeVisible();
+  });
 });

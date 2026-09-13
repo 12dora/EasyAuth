@@ -13,6 +13,9 @@ const SIZE_CLASS: Record<PersonAvatarSize, string> = {
   32: "h-8 w-8 text-xs",
 };
 
+/** 姓名为空时圆形占位, 不伪造首字母。 */
+const EMPTY_NAME_GLYPH = "?";
+
 /**
  * 人员头像: 安全 URL 才渲染照片, 否则用姓名首字母。
  * 中日韩姓名取第一个字; 其余按词取首尾字母。
@@ -52,7 +55,7 @@ export function PersonAvatar({
       )}
       aria-hidden="true"
     >
-      {avatarInitials(name)}
+      {avatarInitials(name) || EMPTY_NAME_GLYPH}
     </span>
   );
 }
