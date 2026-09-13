@@ -68,24 +68,35 @@ describe("PortalReassignDialog", () => {
   });
 
   test("转出方选择框支持键盘导航与 combobox 无障碍属性", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const url = String(input);
-        if (url.includes("purpose=reassign_subject")) {
-          return new Response(
-            JSON.stringify({
-              items: [
-                { user_id: "u-sub", name: "下属甲", department: "销售" },
-                { user_id: "u-sub-2", name: "下属乙", department: "研发" },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        throw new Error(`GET ${url}`);
-      }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("purpose=reassign_subject")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              { user_id: "u-sub", name: "下属甲", department: "销售" },
+              { user_id: "u-sub-2", name: "下属乙", department: "研发" },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("handover-app-options")) {
+        return new Response(JSON.stringify({ items: [{ app_key: "easytrade", app_name: "EasyTrade", app_alias: "易交易" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/handover-tasks/reassign") && method === "POST") {
+        return new Response(JSON.stringify({ handover_task: { id: 42 } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -107,6 +118,20 @@ describe("PortalReassignDialog", () => {
       "aria-activedescendant",
       screen.getByRole("option", { name: /下属乙/ }).id,
     );
+    await user.keyboard("{Enter}");
+    expect(input).toHaveValue("下属乙");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole("checkbox", { name: /EasyTrade/ }));
+    await user.type(screen.getByRole("textbox", { name: "理由" }), "这是足够长的移交理由说明");
+    await user.click(screen.getByRole("button", { name: "创建移交单" }));
+    await waitFor(() => {
+      const posted = fetchMock.mock.calls.find(
+        ([requestUrl, requestInit]) => String(requestUrl).includes("/reassign") && requestInit?.method === "POST",
+      );
+      expect(posted).toBeDefined();
+      expect(JSON.parse(String(posted?.[1]?.body))).toMatchObject({ subject_user_id: "u-sub-2" });
+    });
   });
 });
 
