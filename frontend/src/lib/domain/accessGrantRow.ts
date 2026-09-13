@@ -4,7 +4,8 @@
  */
 
 import type { JsonObject, JsonValue } from "../api";
-import { isAccountKind, type AccountKind } from "./person";
+import { bindParse } from "./parse";
+import { ACCOUNT_KINDS, type AccountKind } from "./person";
 
 export type GrantMembershipSource = "user" | "department";
 export type GrantLifecycleType = "permanent" | "timed" | "mixed";
@@ -53,6 +54,8 @@ export interface AccessGrantRow {
   /** 用户部门路径; 后端未下发或为空时按空串展示。 */
   user_department?: string;
   user_account_kind: AccountKind;
+  /** 用户头像 URL; 无照片时为空串。 */
+  user_avatar_url: string;
   app_key: string;
   app_name: string;
   app_alias: string;
@@ -167,6 +170,7 @@ export function parseAccessGrantRow(raw: JsonValue): AccessGrantRow {
     user_name: requireString(source, "user_name"),
     user_department: optionalString(source, "user_department"),
     user_account_kind: requireAccountKind(source, "user_account_kind"),
+    user_avatar_url: requireString(source, "user_avatar_url"),
     app_key: requireString(source, "app_key"),
     app_name: requireString(source, "app_name"),
     app_alias: requireString(source, "app_alias"),

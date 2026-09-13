@@ -106,6 +106,8 @@ export interface OperationRow {
   /** 用户部门路径; 未同步或本地账号时缺省/空串。 */
   user_department?: string;
   user_account_kind?: AccountKind;
+  /** 用户头像 URL; 无照片时为空串。 */
+  user_avatar_url?: string;
   app_key?: string;
   app_name?: string;
   app_alias?: string;

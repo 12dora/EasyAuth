@@ -39,6 +39,8 @@ export interface HandoverUserRef {
   name: string;
   department?: string;
   account_kind?: AccountKind;
+  /** 头像 URL; 无照片时为空串。与 PersonRef.avatar_url 同一口径。 */
+  avatar_url?: string;
   status?: "active" | "disabled" | "departed";
 }
 

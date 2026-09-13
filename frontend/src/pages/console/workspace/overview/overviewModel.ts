@@ -21,6 +21,8 @@ export interface MembershipItem {
   /** 成员部门路径; 未同步或本地账号时缺省/空串。 */
   user_department?: string;
   user_account_kind?: AccountKind;
+  /** 成员头像 URL; 无照片或未解析到 UserMirror 时为空串。 */
+  user_avatar_url?: string;
   role: MembershipRole | string;
   is_active?: boolean;
 }

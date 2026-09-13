@@ -48,6 +48,8 @@ export interface ApprovalInstanceRow {
   /** 发起人部门路径; 未同步或本地账号时缺省/空串。 */
   originator_department?: string;
   originator_account_kind: AccountKind;
+  /** 发起人头像 URL; 无照片时为空串。 */
+  originator_avatar_url: string;
   dingtalk_process_instance_id: string;
   delivery_state: "" | "pending" | "delivered" | "failed" | "skipped" | string;
   delivery_attempts: number;
@@ -77,10 +79,14 @@ export function parseApprovalInstanceRow(raw: JsonValue): ApprovalInstanceRow {
   if (originatorDepartment !== undefined && typeof originatorDepartment !== "string") {
     throw new ApprovalInstanceContractError("originator_department");
   }
+  if (typeof source.originator_avatar_url !== "string") {
+    throw new ApprovalInstanceContractError("originator_avatar_url");
+  }
   return {
     ...(source as unknown as ApprovalInstanceRow),
     originator_account_kind: source.originator_account_kind,
     originator_department: originatorDepartment,
+    originator_avatar_url: source.originator_avatar_url,
   };
 }
 

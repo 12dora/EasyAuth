@@ -59,7 +59,7 @@ test("使用真实成员序列化形状按 membership ID 停用成员", async ()
     }
     if (url.endsWith("/memberships") && !init?.method) {
       return jsonResponse({
-        data: [{ id: 42, user_id: "member-42", role: "developer", is_active: true }],
+        data: [{ id: 42, user_id: "member-42", user_name: "member-42", user_avatar_url: "", role: "developer", is_active: true }],
       });
     }
     if (url.endsWith("/memberships/42") && init?.method === "PATCH") {
@@ -105,8 +105,8 @@ test("成员表头按角色筛选并保留 AppTable 分页", async () => {
       if (url.endsWith("/memberships")) {
         return jsonResponse({
           data: [
-            { id: 11, user_id: "owner-a", role: "owner", is_active: true },
-            { id: 22, user_id: "dev-a", role: "developer", is_active: true },
+            { id: 11, user_id: "owner-a", user_name: "owner-a", user_avatar_url: "", role: "owner", is_active: true },
+            { id: 22, user_id: "dev-a", user_name: "dev-a", user_avatar_url: "", role: "developer", is_active: true },
           ],
         });
       }

@@ -14,6 +14,7 @@ const INSTANCE = {
   originator_name: "胡玉琴",
   originator_department: "捷发-安环部",
   originator_account_kind: "directory",
+  originator_avatar_url: "",
   dingtalk_process_instance_id: "PROC-1",
   delivery_state: "delivered",
   delivery_attempts: 1,
@@ -36,5 +37,17 @@ describe("parseApprovalInstanceRow", () => {
     const { originator_account_kind: _omitted, ...missing } = INSTANCE;
     expect(() => parseApprovalInstanceRow(missing)).toThrow(ApprovalInstanceContractError);
     expect(() => parseApprovalInstanceRow(missing)).toThrow(/originator_account_kind/);
+  });
+
+  test("保留 originator_avatar_url, 缺字段立即失败", () => {
+    expect(parseApprovalInstanceRow(INSTANCE).originator_avatar_url).toBe("");
+    expect(
+      parseApprovalInstanceRow({
+        ...INSTANCE,
+        originator_avatar_url: "https://cdn.example.com/emp-1.png",
+      }).originator_avatar_url,
+    ).toBe("https://cdn.example.com/emp-1.png");
+    const { originator_avatar_url: _omitted, ...missing } = INSTANCE;
+    expect(() => parseApprovalInstanceRow(missing)).toThrow(/originator_avatar_url/);
   });
 });

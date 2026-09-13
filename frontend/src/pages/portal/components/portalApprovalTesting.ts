@@ -47,6 +47,7 @@ export const pendingApproval = {
     email: "zhangsan@example.test",
     department: "销售部",
     account_kind: "directory",
+    avatar_url: "",
   },
   approver_user_ids: ["me"],
   decided_by: "",

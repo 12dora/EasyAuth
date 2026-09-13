@@ -205,6 +205,7 @@ function taskRow(id: number, name: string, status: string, allowedActions: strin
       name,
       email: "",
       department: "",
+      avatar_url: "",
       status: "active",
     },
     reason: "",

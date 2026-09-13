@@ -37,6 +37,7 @@ describe("ConsoleTeamDetail", () => {
       name: `成员${index + 1}`,
       email: `u${index + 1}@example.com`,
       department: "销售部",
+      avatar_url: "",
       status: "active",
       role: index % 3 === 0 ? "leader" : "member",
       added_at: "2026-07-01T09:00:00Z",

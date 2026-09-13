@@ -56,6 +56,7 @@ function identityColumns(t: Translator, sort: ServerSortState): ColumnsType<Port
         getUserId: (approval) => approval.applicant.user_id,
         getDepartment: (approval) => approval.applicant.department,
         getAccountKind: (approval) => approval.applicant.account_kind,
+        getAvatarUrl: (approval) => approval.applicant.avatar_url,
         width: 200,
       }),
       sort,

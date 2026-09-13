@@ -308,12 +308,13 @@ function isApprovalGrantFact(value: unknown): value is ApprovalGrantFact {
 function isApprovalApplicant(value: unknown): value is Required<PortalApprovalApplicant> {
   return (
     isRecord(value) &&
-    hasExactKeys(value, ["user_id", "name", "email", "department", "account_kind"]) &&
+    hasExactKeys(value, ["user_id", "name", "email", "department", "account_kind", "avatar_url"]) &&
     isNonEmptyString(value.user_id) &&
     typeof value.name === "string" &&
     typeof value.email === "string" &&
     typeof value.department === "string" &&
-    isAccountKind(value.account_kind)
+    isAccountKind(value.account_kind) &&
+    typeof value.avatar_url === "string"
   );
 }
 

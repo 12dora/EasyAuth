@@ -260,6 +260,7 @@ describe("现有授权回填", () => {
     user_id: "u-1",
     user_name: "张三",
     user_account_kind: "directory",
+    user_avatar_url: "",
     app_key: "crm",
     app_name: "CRM",
     app_alias: "客户管理",

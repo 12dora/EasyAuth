@@ -176,6 +176,7 @@ def _instance_item(
         "originator_name": originator_person["name"],
         "originator_department": originator_person["department"],
         "originator_account_kind": originator_person["account_kind"],
+        "originator_avatar_url": originator_person["avatar_url"],
         "dingtalk_process_instance_id": instance.dingtalk_process_instance_id,
         "delivery_state": instance.delivery_state(),
         "delivery_attempts": delivery.attempts if delivery is not None else 0,

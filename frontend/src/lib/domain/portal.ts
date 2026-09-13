@@ -85,6 +85,8 @@ export interface PortalApprovalApplicant {
   email?: string;
   department?: string;
   account_kind?: AccountKind;
+  /** 头像 URL; 无照片时为空串。与 PersonRef.avatar_url 同一口径。 */
+  avatar_url?: string;
 }
 
 /** 门户「待我审批」条目: 对齐后端 /portal/api/v1/me/approvals 序列化字段。 */

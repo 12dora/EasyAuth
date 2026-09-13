@@ -70,6 +70,7 @@ describe("parseApprovalListPayload", () => {
         email: "",
         department: "",
         account_kind: "directory",
+        avatar_url: "",
       },
       approver_user_ids: ["1294dde0-4c54-460f-9728-0f4f54b91414"],
     });
@@ -139,6 +140,7 @@ describe("parseApprovalListPayload", () => {
         email: "",
         department: "",
         account_kind: "unresolved",
+        avatar_url: "",
       },
     });
 
@@ -156,6 +158,19 @@ describe("parseApprovalListPayload", () => {
   test.each([
     { label: "多出未知字段", row: { ...pendingApproval, unexpected: true } },
     { label: "缺少 app_alias", row: rowWithout("app_alias") },
+    {
+      label: "申请人缺少 avatar_url",
+      row: {
+        ...pendingApproval,
+        applicant: {
+          user_id: "u-1",
+          name: "张三",
+          email: "zhangsan@example.test",
+          department: "销售部",
+          account_kind: "directory",
+        },
+      },
+    },
     { label: "app_alias 不是字符串", row: { ...pendingApproval, app_alias: null } },
     { label: "缺少 current_approvers", row: rowWithout("current_approvers") },
     { label: "缺少 decision_actor_type", row: rowWithout("decision_actor_type") },
