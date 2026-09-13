@@ -8,6 +8,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
+from easyauth.access_requests.decision_actors import AccessRequestDecisionActorMissingError
 from easyauth.access_requests.models import (
     DECISION_ACTOR_CONSOLE_ADMIN,
     DECISION_ACTOR_USER,
@@ -22,7 +23,6 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App
 from easyauth.portal.access_request_data import (
     APPROVER_PREFETCH,
-    AccessRequestDecisionActorMissingError,
     access_request_items,
     access_request_items_for_user,
 )

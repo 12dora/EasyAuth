@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, Final
 
 from django.db.models import Prefetch
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.access_requests.decision_actors import (
+    MISSING_DECISION_ACTOR_RAISE,
+    decided_by_names,
+)
 from easyauth.access_requests.models import (
     DECISION_ACTOR_USER,
     REQUEST_STATUS_SUBMITTED,
@@ -14,7 +17,6 @@ from easyauth.access_requests.models import (
     AccessRequestGroup,
     AccessRequestPermission,
 )
-from easyauth.accounts.models import UserMirror
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import JsonValue
 from easyauth.api.ordering import apply_ordering
@@ -26,6 +28,8 @@ from easyauth.portal.status_text import status_label
 if TYPE_CHECKING:
     from django.db.models import QuerySet
 
+    from easyauth.accounts.models import UserMirror
+
 type PortalJsonObject = dict[str, JsonValue]
 
 APPROVER_PREFETCH: Final = Prefetch(
@@ -34,15 +38,7 @@ APPROVER_PREFETCH: Final = Prefetch(
     to_attr="loaded_approver_assignments",
 )
 
-
-@dataclass(frozen=True, slots=True)
-class AccessRequestDecisionActorMissingError(RuntimeError):
-    missing_user_ids: tuple[str, ...]
-
-    @override
-    def __str__(self) -> str:
-        missing = list(self.missing_user_ids)
-        return f"user-actor access request decisions are missing UserMirror rows: {missing}"
+PORTAL_DECISION_ACTOR_TYPES: Final = frozenset({DECISION_ACTOR_USER})
 
 
 PORTAL_ACCESS_REQUEST_ORDERING: Final[dict[str, str]] = {
@@ -73,13 +69,17 @@ def access_request_items(
     request_ids = tuple(access_request.id for access_request in access_requests)
     group_items = _request_groups_by_request_id(request_ids)
     direct_grant_items = _request_direct_grants_by_request_id(request_ids)
-    decided_by_names = _decided_by_names(access_requests)
+    names = decided_by_names(
+        access_requests,
+        actor_types=PORTAL_DECISION_ACTOR_TYPES,
+        missing=MISSING_DECISION_ACTOR_RAISE,
+    )
     return tuple(
         _access_request_item(
             access_request,
             group_items=group_items.get(access_request.id, ()),
             direct_grant_items=direct_grant_items.get(access_request.id, ()),
-            decided_by_name=decided_by_names.get(access_request.id),
+            decided_by_name=names.get(access_request.id),
         )
         for access_request in access_requests
     )
@@ -163,30 +163,6 @@ def _request_direct_grants_by_request_id(
             },
         )
     return {request_id: tuple(items) for request_id, items in direct_grant_items.items()}
-
-
-def _decided_by_names(access_requests: tuple[AccessRequest, ...]) -> dict[int, str]:
-    actor_ids = tuple(
-        dict.fromkeys(
-            access_request.decided_by
-            for access_request in access_requests
-            if access_request.decision_actor_type == DECISION_ACTOR_USER
-        ),
-    )
-    if not actor_ids:
-        return {}
-    names_by_user_id = {
-        user.authentik_user_id: user.name
-        for user in UserMirror.objects.filter(authentik_user_id__in=actor_ids)
-    }
-    missing_user_ids = tuple(actor_id for actor_id in actor_ids if actor_id not in names_by_user_id)
-    if missing_user_ids:
-        raise AccessRequestDecisionActorMissingError(missing_user_ids)
-    return {
-        access_request.id: names_by_user_id[access_request.decided_by]
-        for access_request in access_requests
-        if access_request.decision_actor_type == DECISION_ACTOR_USER
-    }
 
 
 def _current_approver_items(

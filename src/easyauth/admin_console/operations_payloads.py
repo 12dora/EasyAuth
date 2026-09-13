@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from easyauth.access_requests.approvals import loaded_approver_user_ids
-from easyauth.accounts.models import UserMirror
+from easyauth.access_requests.decision_actors import (
+    MISSING_DECISION_ACTOR_EMPTY,
+)
+from easyauth.access_requests.decision_actors import (
+    decided_by_names as load_decided_by_names,
+)
 from easyauth.accounts.person_payload import person_payload
 from easyauth.api.datetime_json import datetime_value
 from easyauth.applications import health_models
@@ -47,27 +52,7 @@ def access_request_approvers(
 
 
 def decided_by_names(access_requests: tuple[AccessRequest, ...]) -> dict[int, str]:
-    actor_ids = tuple(
-        dict.fromkeys(
-            access_request.decided_by
-            for access_request in access_requests
-            if access_request.decided_by
-        ),
-    )
-    names_by_user_id = (
-        {
-            user.authentik_user_id: user.name
-            for user in UserMirror.objects.filter(authentik_user_id__in=actor_ids)
-        }
-        if actor_ids
-        else {}
-    )
-    return {
-        access_request.id: names_by_user_id.get(access_request.decided_by, "")
-        if access_request.decided_by
-        else ""
-        for access_request in access_requests
-    }
+    return load_decided_by_names(access_requests, missing=MISSING_DECISION_ACTOR_EMPTY)
 
 
 def health_item(item: DependencyHealthItem) -> JsonObject:
