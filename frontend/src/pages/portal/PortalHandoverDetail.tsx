@@ -12,6 +12,7 @@ import { HandoverActionPanel } from "../../features/handover/HandoverActionPanel
 import { daysLeftTone } from "../../features/handover/surface";
 import { personNameWithDepartment, userOptionName } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
+import { handoverKindLabel, handoverTaskStatusLabel } from "../console/lifecycle/lifecycleLabels";
 import { apiRequest } from "../../lib/api";
 import type { HandoverAction, HandoverTaskDetail, HandoverTaskPayload } from "../../lib/domain";
 
@@ -72,7 +73,7 @@ export function PortalHandoverDetail() {
     <>
       <PageHeader
         eyebrow={t("shell.portal.title")}
-        title={task ? `${kindLabel(t, task.kind)} · ${userOptionName(task.subject)}` : t("handover.portal.detail.title")}
+        title={task ? `${handoverKindLabel(t, task.kind)} · ${userOptionName(task.subject)}` : t("handover.portal.detail.title")}
         description={task?.reason || undefined}
         actions={<ButtonLink to="/portal/handovers">{t("handover.portal.detail.back")}</ButtonLink>}
       />
@@ -106,8 +107,8 @@ function DetailBody({
     <section className="space-y-6">
       <PanelSurface padding="lg" className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge tone="bond">{kindLabel(t, task.kind)}</Badge>
-          <Badge tone="neutral">{taskStatusLabel(t, task.status)}</Badge>
+          <Badge tone="bond">{handoverKindLabel(t, task.kind)}</Badge>
+          <Badge tone="neutral">{handoverTaskStatusLabel(t, task.status)}</Badge>
           {task.escalation.deadline == null ? (
             <Badge tone="neutral">{t("handover.portal.list.awaitingSuperuser")}</Badge>
           ) : (
@@ -148,32 +149,4 @@ function DetailBody({
   );
 }
 
-function kindLabel(t: ReturnType<typeof useI18n>["t"], kind: string): string {
-  switch (kind) {
-    case "offboard":
-      return t("handover.kind.offboard");
-    case "transfer":
-      return t("handover.kind.transfer");
-    case "pre_offboard":
-      return t("handover.kind.pre_offboard");
-    case "reassign":
-      return t("handover.kind.reassign");
-    default:
-      return kind;
-  }
-}
 
-function taskStatusLabel(t: ReturnType<typeof useI18n>["t"], status: string): string {
-  switch (status) {
-    case "pending":
-      return t("handover.taskStatus.pending");
-    case "in_progress":
-      return t("handover.taskStatus.inProgress");
-    case "completed":
-      return t("handover.taskStatus.completed");
-    case "cancelled":
-      return t("handover.taskStatus.cancelled");
-    default:
-      return status;
-  }
-}

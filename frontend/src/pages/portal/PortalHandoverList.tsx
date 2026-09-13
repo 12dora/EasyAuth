@@ -11,6 +11,7 @@ import { PanelSurface } from "../../components/ui/PanelSurface";
 import { daysLeftTone } from "../../features/handover/surface";
 import { personNameWithDepartment } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
+import { handoverKindLabel } from "../console/lifecycle/lifecycleLabels";
 import { apiRequest } from "../../lib/api";
 import type { HandoverMeTasksPayload, HandoverTaskListItem } from "../../lib/domain";
 import { PortalPreOffboardDialog } from "./PortalPreOffboardDialog";
@@ -129,7 +130,7 @@ function HandoverTaskCard({ task, interactive }: { task: HandoverTaskListItem; i
           <div>
             <p className="text-body font-semibold text-ink">{personNameWithDepartment(task.subject, t)}</p>
             <div className="mt-1 flex flex-wrap gap-1.5">
-              <Badge tone="bond">{kindLabel(t, task.kind)}</Badge>
+              <Badge tone="bond">{handoverKindLabel(t, task.kind)}</Badge>
               {task.escalation?.deadline == null ? (
                 <Badge tone="neutral">{t("handover.portal.list.awaitingSuperuser")}</Badge>
               ) : (
@@ -158,17 +159,4 @@ function HandoverTaskCard({ task, interactive }: { task: HandoverTaskListItem; i
   );
 }
 
-function kindLabel(t: ReturnType<typeof useI18n>["t"], kind: string): string {
-  switch (kind) {
-    case "offboard":
-      return t("handover.kind.offboard");
-    case "transfer":
-      return t("handover.kind.transfer");
-    case "pre_offboard":
-      return t("handover.kind.pre_offboard");
-    case "reassign":
-      return t("handover.kind.reassign");
-    default:
-      return kind;
-  }
-}
+
