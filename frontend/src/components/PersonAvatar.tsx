@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { cn } from "../lib/cn";
 import { safeAvatarUrl } from "../lib/avatarUrl";
 
@@ -14,6 +16,7 @@ const SIZE_CLASS: Record<PersonAvatarSize, string> = {
 /**
  * 人员头像: 安全 URL 才渲染照片, 否则用姓名首字母。
  * 中日韩姓名取第一个字; 其余按词取首尾字母。
+ * 照片 404 / 加载失败时保持失败态, 回落为首字母, 同一 URL 不再重试。
  */
 export function PersonAvatar({
   name,
@@ -27,9 +30,19 @@ export function PersonAvatar({
   alt?: string;
 }) {
   const src = safeAvatarUrl(avatarUrl);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const boxClass = cn("shrink-0 rounded-full object-cover", SIZE_CLASS[size]);
-  if (src) {
-    return <img src={src} alt={alt} width={size} height={size} className={boxClass} />;
+  if (src && src !== failedSrc) {
+    return (
+      <img
+        src={src}
+        alt={alt}
+        width={size}
+        height={size}
+        className={boxClass}
+        onError={() => setFailedSrc(src)}
+      />
+    );
   }
   return (
     <span

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { avatarInitials, PersonAvatar } from "./PersonAvatar";
@@ -48,5 +48,27 @@ describe("PersonAvatar", () => {
 
     rerender(<PersonAvatar name="Alice Smith" avatarUrl="" size={20} />);
     expect(screen.getByText("AS")).toBeVisible();
+  });
+
+  test("照片加载失败时保持失败态并回落为首字母", () => {
+    const missing = "https://cdn.example.com/missing.png";
+    const { rerender } = render(
+      <PersonAvatar name="张三" avatarUrl={missing} size={24} alt="张三 的头像" />,
+    );
+    fireEvent.error(screen.getByRole("img", { name: "张三 的头像" }));
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("张")).toBeVisible();
+
+    rerender(<PersonAvatar name="张三" avatarUrl={missing} size={24} alt="张三 的头像" />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("张")).toBeVisible();
+
+    rerender(
+      <PersonAvatar name="张三" avatarUrl="https://cdn.example.com/ok.png" size={24} alt="张三 的头像" />,
+    );
+    expect(screen.getByRole("img", { name: "张三 的头像" })).toHaveAttribute(
+      "src",
+      "https://cdn.example.com/ok.png",
+    );
   });
 });
