@@ -228,10 +228,12 @@ def test_app_detail_includes_documented_summary_fields() -> None:
     assert item["authorization_group_count"] == EXPECTED_DETAIL_COUNT
     assert item["permission_count"] == EXPECTED_DETAIL_COUNT
     assert item["active_credential_count"] == 1
-    assert item["latest_template_version"] == {
+    latest_template = _json_object(item["latest_template_version"])
+    assert latest_template == {
         "version": 2,
         "status": "imported",
         "imported_by": "apps-contract-detail-owner",
+        "imported_at": _iso_timestamp(latest_template["imported_at"]),
         "action_count": 1,
     }
     assert item["configuration_summary"] == {
@@ -428,6 +430,13 @@ def _authorization_group_with_rule(*, app: App, key: str, name: str) -> Authoriz
         approver_userids=["manager-001"],
     )
     return group
+
+
+def _iso_timestamp(value: JsonValue) -> str:
+    assert isinstance(value, str), value
+    parsed = datetime.fromisoformat(value)
+    assert parsed.tzinfo is not None, value
+    return value
 
 
 def _local_person(user_id: str) -> dict[str, str]:

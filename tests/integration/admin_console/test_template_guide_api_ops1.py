@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from http import HTTPStatus
 from json import dumps
 from typing import Any, Final, Protocol
@@ -111,10 +111,13 @@ def test_ops1_template_confirm_api_imports_previewed_manifest() -> None:
     assert response.status_code == HTTPStatus.OK
     assert payload["app_key"] == app.app_key
     assert payload["template_version"] == 1
-    assert payload["template_version_detail"] == {
+    detail = payload["template_version_detail"]
+    assert isinstance(detail, dict)
+    assert detail == {
         "version": 1,
         "status": "imported",
         "imported_by": "ops1-manifest-api-confirm-owner",
+        "imported_at": _iso_timestamp(detail["imported_at"]),
         "action_count": 6,
     }
     assert app.name == "Manifest App"
@@ -357,11 +360,17 @@ def test_ops1_template_versions_api_returns_latest_first_with_pagination() -> No
         "total_items": 2,
         "total_pages": 2,
     }
-    assert payload["data"] == [
+    items = payload["data"]
+    assert isinstance(items, list)
+    assert len(items) == 1
+    item = items[0]
+    assert isinstance(item, dict)
+    assert items == [
         {
             "version": 2,
             "status": "imported",
             "imported_by": "ops1-manifest-api-versions-owner",
+            "imported_at": _iso_timestamp(item["imported_at"]),
             "action_count": 0,
         },
     ]
@@ -620,6 +629,13 @@ def _confirm_payload_manifest(
     return client.post(
         f"/console/api/v1/apps/{app.app_key}/permission-template-imports/{preview_id}/confirm",
     )
+
+
+def _iso_timestamp(value: JsonValue) -> str:
+    assert isinstance(value, str), value
+    parsed = datetime.fromisoformat(value)
+    assert parsed.tzinfo is not None, value
+    return value
 
 
 def _json_object(response: HttpResponseLike) -> dict[str, JsonValue]:

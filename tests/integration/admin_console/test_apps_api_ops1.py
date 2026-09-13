@@ -767,7 +767,7 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
             "user_id": "ops1-memberships-api-developer",
             "user_name": "",
             "user_department": "",
-            "user_account_kind": "unresolved",
+            "user_account_kind": "local",
             "role": "developer",
             "is_active": True,
         },
