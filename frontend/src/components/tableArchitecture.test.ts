@@ -91,18 +91,20 @@ describe("表格架构", () => {
 
     const ownersPanel = readFileSync(join(sourceRoot, "pages/console/workspace/overview/AppBasicInfoPanel.tsx"), "utf8");
     expect(ownersPanel).not.toMatch(/safeJoin\(\s*app\?\.owners/);
-    expect(ownersPanel).toMatch(/formatOwnerList\(app\?\.owners/);
+    expect(ownersPanel).toMatch(/PeopleList people=\{app\?\.owners\}/);
+    expect(ownersPanel).toMatch(/PeopleList people=\{developers\}/);
+    expect(ownersPanel).not.toMatch(/safeJoin\(\s*app\?\.developers/);
+
+    const rulesTab = readFileSync(join(sourceRoot, "pages/console/workspace/tabs/RulesTab.tsx"), "utf8");
+    expect(rulesTab).toMatch(/formatPeople\(resolvePeople\(rule\.approver_userids/);
+    expect(rulesTab).not.toMatch(/safeJoin\(\s*rule\.approver_userids/);
   });
 });
 
 /**
- * 本批次仍把人员 ID 当字符串拼接的页面。台账只能变短, 不得新增;
- * 对应接口改为 PersonRef[] 后必须删掉对应条目。
+ * 人员 ID 数组仍被当成字符串拼接的页面。台账只能变短, 不得新增。
  */
-const ALLOWED_PERSON_ID_DISPLAY: Record<string, string> = {
-  "pages/console/workspace/tabs/RulesTab.tsx": "审批规则 approver_userids 本批次仍为 string[]",
-  "pages/console/workspace/overview/AppBasicInfoPanel.tsx": "developers 本批次仍为 string[]",
-};
+const ALLOWED_PERSON_ID_DISPLAY: Record<string, string> = {};
 
 /** 人员 ID 数组字段: 把它们 join 成单元格就是 UUID 回归。单数 user_id 常作姓名回退, 不在此列。 */
 const PERSON_ARRAY_FIELD = /^(?:owners|developers|[A-Za-z0-9_]*user_ids|[A-Za-z0-9_]*userids)$/;

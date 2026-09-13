@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { useState } from "react";
-import { AppTable, enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
+import { useMemo, useState } from "react";
+import { AppTable, enumFilter, textFilter, type ColumnsType } from "../../../../components/antd/AppTable";
 import { RowActionButton, actionsColumn, textColumn } from "../../../../components/antd/columns";
 import { EmptyState } from "../../../../components/ui/EmptyState";
 
@@ -10,13 +10,13 @@ import { Button } from "../../../../components/Button";
 import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { formatPeople, resolvePeople, useUserOptionsByIds } from "../../../../components/UserCombobox";
 import { UserMultiSelect } from "../../../../components/UserSelect";
 import { useToast } from "../../../../components/ui/Toast";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { ApprovalRuleItem } from "../../../../lib/domain";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { Translator } from "../../../../lib/status";
-import { safeJoin } from "../utils";
 
 type RuleTargetType = "authorization_group" | "permission";
 type EditableApprovalRule = ApprovalRuleItem & { blocking?: boolean; status?: string };
@@ -40,6 +40,11 @@ export function RulesTab({ appKey }: { appKey: string }) {
     queryFn: () => apiRequest<{ data?: EditableApprovalRule[] }>(`/console/api/v1/apps/${appKey}/approval-rules`),
   });
   const rules = itemsFromPayload<EditableApprovalRule>(rulesQuery.data);
+  const approverIds = useMemo(
+    () => [...new Set(rules.flatMap((rule) => rule.approver_userids ?? []))],
+    [rules],
+  );
+  const approverOptionsQuery = useUserOptionsByIds(approverIds, "approver");
   const saveMutation = useMutation({
     mutationFn: () => {
       const body = {
@@ -90,13 +95,19 @@ export function RulesTab({ appKey }: { appKey: string }) {
       sorter: true,
       width: 280,
     }),
-    textColumn<EditableApprovalRule>({
+    {
       key: "approvers",
       title: t("console.rules.column.approvers"),
-      getValue: (rule) => safeJoin(rule.approver_userids),
-      filter: true,
-      sorter: true,
-    }),
+      render: (_value: unknown, rule: EditableApprovalRule) =>
+        formatPeople(resolvePeople(rule.approver_userids, approverOptionsQuery.data), t),
+      sorter: (a: EditableApprovalRule, b: EditableApprovalRule) =>
+        formatPeople(resolvePeople(a.approver_userids, approverOptionsQuery.data), t).localeCompare(
+          formatPeople(resolvePeople(b.approver_userids, approverOptionsQuery.data), t),
+        ),
+      ...textFilter<EditableApprovalRule>("approvers", {
+        getValue: (rule) => formatPeople(resolvePeople(rule.approver_userids, approverOptionsQuery.data), t),
+      }),
+    },
     {
       key: "status",
       title: t("common.status"),

@@ -310,11 +310,62 @@ export function userOptionDisplayName(option: UserOption): string {
 }
 
 /**
+ * 人员展示用到的最小字段。UserOption / PersonRef / 交接候选人都能收窄到这一份。
+ * 姓名缺失时由 `userOptionName` 退回 user_id, 次行由 `userSecondaryLabel` 决定。
+ */
+export type PersonLike = {
+  user_id: string;
+  name?: string | null;
+  department?: string | null;
+  account_kind?: AccountKind | null;
+};
+
+/**
  * 用户的展示名: 目录里有姓名就用姓名, 否则只能退回用户 ID。
  *
  * 姓名可能是空串(目录镜像没同步到姓名, 见批次契约 A3), 那时显示 ID 是唯一诚实的选择,
  * 不能拿 ID 拼一个假名字。
  */
-export function userOptionName(option: UserOption | undefined, fallbackUserId: string = ""): string {
+export function userOptionName(option: PersonLike | undefined, fallbackUserId: string = ""): string {
   return option?.name || option?.user_id || fallbackUserId;
+}
+
+/**
+ * 把 ID 列表对齐到已解析的候选。目录里还没有姓名时留下空 name, 由 `userOptionName` 退回 ID;
+ * 不在这里伪造姓名, 也不丢弃尚未解析到的 ID。
+ */
+export function resolvePeople(
+  userIds: readonly string[] | undefined,
+  options: readonly PersonLike[] | undefined,
+): PersonLike[] {
+  const byId = new Map((options ?? []).map((option) => [option.user_id, option]));
+  return (userIds ?? []).map((userId) => byId.get(userId) ?? { user_id: userId, name: "" });
+}
+
+/**
+ * 多人一行文案: 每人「姓名 · 部门/本地用户」, 用顿号拼接; 空列表为 "-"。
+ * 非表格场景(概览定义列表、向导摘要)走这里, 表格走 `peopleColumn`。
+ */
+export function formatPeople(people: readonly PersonLike[] | undefined, t: Translator): string {
+  if (!people || people.length === 0) {
+    return "-";
+  }
+  return people
+    .map((person) => {
+      const name = userOptionName(person);
+      const secondary = userSecondaryLabel(person, t);
+      return secondary ? `${name} · ${secondary}` : name;
+    })
+    .join("、");
+}
+
+/** 把 `formatPeople` 渲染成节点, 给定义列表 / 摘要用。 */
+export function PeopleList({
+  people,
+  t,
+}: {
+  people: readonly PersonLike[] | undefined;
+  t: Translator;
+}) {
+  return <>{formatPeople(people, t)}</>;
 }

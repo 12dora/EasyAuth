@@ -813,6 +813,24 @@ describe("ConsoleAppWorkspace", () => {
         return jsonResponse({ data: rules });
       }
       if (url.startsWith("/console/api/v1/user-options?")) {
+        const parsed = new URL(url, "http://local.test");
+        const userIds = parsed.searchParams.get("user_ids");
+        if (userIds) {
+          return jsonResponse({
+            data: userIds.split(",").map((userId) => {
+              if (userId === "leader") {
+                return { user_id: userId, name: "部门负责人", department: "销售部", account_kind: "directory" };
+              }
+              if (userId === "security") {
+                return { user_id: userId, name: "安全审批人", department: "安环部", account_kind: "directory" };
+              }
+              if (userId === "local-admin:admin") {
+                return { user_id: userId, name: "本地管理员 admin", department: "", account_kind: "local" };
+              }
+              return { user_id: userId, name: "" };
+            }),
+          });
+        }
         return jsonResponse({ data: [{ user_id: "local-admin:admin", name: "本地管理员 admin" }] });
       }
       if (url === "/console/api/v1/apps/demo/approval-rules" && init?.method === "POST") {
@@ -844,6 +862,10 @@ describe("ConsoleAppWorkspace", () => {
     expect(await screen.findByText("授权组：finance")).toBeInTheDocument();
     expect(screen.getByText("权限：invoice.approve")).toBeInTheDocument();
     expect(screen.getByText("阻塞")).toBeInTheDocument();
+    expect(await screen.findByText("部门负责人 · 销售部")).toBeInTheDocument();
+    expect(screen.getByText("安全审批人 · 安环部")).toBeInTheDocument();
+    expect(screen.queryByText("leader")).not.toBeInTheDocument();
+    expect(screen.queryByText("security")).not.toBeInTheDocument();
 
     expect(screen.getByRole("heading", { name: "审批规则" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "新建" }));
@@ -865,7 +887,7 @@ describe("ConsoleAppWorkspace", () => {
     dialog = await screen.findByRole("dialog", { name: "编辑审批规则" });
     await user.clear(within(dialog).getByLabelText("目标 Key"));
     await user.type(within(dialog).getByLabelText("目标 Key"), "invoice.approve.high");
-    await user.click(within(dialog).getByRole("button", { name: "移除 security" }));
+    await user.click(within(dialog).getByRole("button", { name: "移除 安全审批人" }));
     await user.type(within(dialog).getByLabelText("审批人 user_id"), "admin");
     await user.click(await screen.findByRole("option", { name: /本地管理员 admin/ }));
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
