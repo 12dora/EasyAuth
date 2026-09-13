@@ -238,7 +238,7 @@ def test_ops1_apps_api_superuser_creates_app_with_memberships_and_audit() -> Non
     assert owners == ["owner-a", "shared-user"]
     assert developers == ["dev-a"]
     assert response_app["app_key"] == app.app_key
-    assert response_app["owners"] == [_local_person(user_id) for user_id in owners]
+    assert response_app["owners"] == [_unresolved_person(user_id) for user_id in owners]
     assert response_app["developers"] == developers
     assert AuditLog.objects.filter(
         actor_id="ops1-app-create-admin",
@@ -749,7 +749,7 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
             "user_id": "ops1-membership-inactive",
             "user_name": "",
             "user_department": "",
-            "user_account_kind": "local",
+            "user_account_kind": "unresolved",
             "role": "developer",
             "is_active": False,
         },
@@ -758,7 +758,7 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
             "user_id": "ops1-membership-owner",
             "user_name": "",
             "user_department": "",
-            "user_account_kind": "local",
+            "user_account_kind": "unresolved",
             "role": "owner",
             "is_active": True,
         },
@@ -767,7 +767,7 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
             "user_id": "ops1-memberships-api-developer",
             "user_name": "",
             "user_department": "",
-            "user_account_kind": "local",
+            "user_account_kind": "unresolved",
             "role": "developer",
             "is_active": True,
         },
@@ -794,7 +794,7 @@ def test_ops1_memberships_api_superuser_creates_developer_membership() -> None:
         "user_id": "ops1-membership-new-dev",
         "user_name": "",
         "user_department": "",
-        "user_account_kind": "local",
+        "user_account_kind": "unresolved",
         "role": "developer",
         "is_active": True,
     }
@@ -853,7 +853,7 @@ def test_ops1_memberships_api_superuser_patches_role_and_active_state() -> None:
         "user_id": "ops1-membership-patch-target",
         "user_name": "",
         "user_department": "",
-        "user_account_kind": "local",
+        "user_account_kind": "unresolved",
         "role": "owner",
         "is_active": False,
     }
@@ -1020,7 +1020,7 @@ def _seed_list_query_app(index: int, owner_user_ids: tuple[str, ...]) -> list[di
     for user_id in owner_user_ids:
         _ = AppMembership.objects.create(app=app, user_id=user_id, role="owner")
     _ = AppCredentialService.create_static_token(app=app, name=f"token-{index}")
-    return [_local_person(user_id) for user_id in owner_user_ids]
+    return [_unresolved_person(user_id) for user_id in owner_user_ids]
 
 
 def _local_person(user_id: str, *, name: str = "", department: str = "") -> dict[str, str]:
@@ -1029,6 +1029,15 @@ def _local_person(user_id: str, *, name: str = "", department: str = "") -> dict
         "name": name,
         "department": department,
         "account_kind": "local",
+    }
+
+
+def _unresolved_person(user_id: str) -> dict[str, str]:
+    return {
+        "user_id": user_id,
+        "name": "",
+        "department": "",
+        "account_kind": "unresolved",
     }
 
 

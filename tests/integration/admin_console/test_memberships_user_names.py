@@ -55,7 +55,7 @@ def test_memberships_list_includes_user_names_from_mirrors() -> None:
     assert by_id[unnamed.id]["user_account_kind"] == "local"
     assert by_id[missing.id]["user_name"] == ""
     assert by_id[missing.id]["user_department"] == ""
-    assert by_id[missing.id]["user_account_kind"] == "local"
+    assert by_id[missing.id]["user_account_kind"] == "unresolved"
 
 
 def test_memberships_list_loads_user_names_in_one_query() -> None:

@@ -18,12 +18,15 @@ if TYPE_CHECKING:
 
 ACCOUNT_KIND_DIRECTORY: Final = "directory"
 ACCOUNT_KIND_LOCAL: Final = "local"
+ACCOUNT_KIND_UNRESOLVED: Final = "unresolved"
 
-type AccountKind = Literal["directory", "local"]
+type AccountKind = Literal["directory", "local", "unresolved"]
+type ResolvedAccountKind = Literal["directory", "local"]
 
 __all__ = [
     "ACCOUNT_KIND_DIRECTORY",
     "ACCOUNT_KIND_LOCAL",
+    "ACCOUNT_KIND_UNRESOLVED",
     "account_kind",
     "person_payload",
     "person_row_fields",
@@ -32,7 +35,8 @@ __all__ = [
 ]
 
 
-def account_kind(user: UserMirror) -> AccountKind:
+def account_kind(user: UserMirror) -> ResolvedAccountKind:
+    """已解析 UserMirror 的账号类型: 有钉钉绑定为 directory, 否则 local。"""
     # 目录用户的充分条件是钉钉绑定; 本地管理员与 Authentik 内建用户都没有 userid。
     if has_directory_identity(user):
         return ACCOUNT_KIND_DIRECTORY
@@ -59,13 +63,14 @@ def person_row_fields(
 def unresolved_person_payload(user_id: str) -> dict[str, JsonValue]:
     """成员关系等只存 authentik_user_id、尚无 UserMirror 时的人员形状。
 
-    没有钉钉绑定可观察, 按 `account_kind` 口径视为本地用户; 姓名与部门为空字符串。
+    无法观察钉钉绑定, `account_kind` 为 `unresolved`, 不得推断为 `local`。
+    姓名与部门为空字符串。
     """
     return {
         "user_id": user_id,
         "name": "",
         "department": "",
-        "account_kind": ACCOUNT_KIND_LOCAL,
+        "account_kind": ACCOUNT_KIND_UNRESOLVED,
     }
 
 

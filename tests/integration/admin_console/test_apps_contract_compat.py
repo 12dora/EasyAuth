@@ -64,7 +64,7 @@ def test_apps_list_includes_documented_contract_fields() -> None:
     assert item["alias"] == ""
     assert item["description"] == ""
     assert item["id"] == app.id
-    assert item["owners"] == [_local_person("apps-contract-owner")]
+    assert item["owners"] == [_unresolved_person("apps-contract-owner")]
     assert item["configuration_status"] == "blocking"
     assert _json_object(item["capabilities"])["can_toggle_active"] is True
     assert isinstance(item["updated_at"], str)
@@ -269,7 +269,7 @@ def test_apps_create_success_response_uses_detail_contract() -> None:
     assert item["app_key"] == "apps-contract-create-crm"
     assert item["alias"] == ""
     assert item["description"] == "客户管理"
-    assert item["owners"] == [_local_person("apps-contract-create-owner")]
+    assert item["owners"] == [_unresolved_person("apps-contract-create-owner")]
     assert item["developers"] == ["apps-contract-create-dev"]
 
 
@@ -436,6 +436,15 @@ def _local_person(user_id: str) -> dict[str, str]:
         "name": "",
         "department": "",
         "account_kind": "local",
+    }
+
+
+def _unresolved_person(user_id: str) -> dict[str, str]:
+    return {
+        "user_id": user_id,
+        "name": "",
+        "department": "",
+        "account_kind": "unresolved",
     }
 
 

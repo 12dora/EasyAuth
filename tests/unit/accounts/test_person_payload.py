@@ -6,6 +6,7 @@ from easyauth.accounts.models import UserMirror
 from easyauth.accounts.person_payload import (
     ACCOUNT_KIND_DIRECTORY,
     ACCOUNT_KIND_LOCAL,
+    ACCOUNT_KIND_UNRESOLVED,
     account_kind,
     person_payload,
     person_row_fields,
@@ -110,12 +111,12 @@ def test_person_row_fields_originator_prefix() -> None:
     }
 
 
-def test_unresolved_person_payload_is_local_with_empty_display_fields() -> None:
+def test_unresolved_person_payload_is_unresolved_with_empty_display_fields() -> None:
     assert unresolved_person_payload("missing-user") == {
         "user_id": "missing-user",
         "name": "",
         "department": "",
-        "account_kind": ACCOUNT_KIND_LOCAL,
+        "account_kind": ACCOUNT_KIND_UNRESOLVED,
     }
 
 
@@ -124,5 +125,35 @@ def test_unresolved_person_row_fields_uses_user_prefix() -> None:
         "user_id": "missing-user",
         "user_name": "",
         "user_department": "",
-        "user_account_kind": ACCOUNT_KIND_LOCAL,
+        "user_account_kind": ACCOUNT_KIND_UNRESOLVED,
     }
+
+
+def test_app_owner_with_dingtalk_binding_is_directory() -> None:
+    owner = UserMirror.objects.create(
+        authentik_user_id="ak-owner-directory",
+        name="目录负责人",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="dt-owner-1",
+    )
+
+    assert person_payload(owner, {})["account_kind"] == ACCOUNT_KIND_DIRECTORY
+
+
+def test_missing_mirror_owner_is_unresolved() -> None:
+    assert unresolved_person_payload("never-logged-in-owner") == {
+        "user_id": "never-logged-in-owner",
+        "name": "",
+        "department": "",
+        "account_kind": ACCOUNT_KIND_UNRESOLVED,
+    }
+
+
+def test_local_admin_owner_is_local() -> None:
+    owner = UserMirror.objects.create(
+        authentik_user_id="local-admin:break-glass",
+        name="本地管理员",
+    )
+
+    assert person_payload(owner, {})["account_kind"] == ACCOUNT_KIND_LOCAL

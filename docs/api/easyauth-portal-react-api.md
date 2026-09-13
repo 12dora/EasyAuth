@@ -40,6 +40,12 @@
 可选 `ordering=<field>` 或 `ordering=-<field>`（单字段；`-` 表示降序）。未知字段返回
 `400 VALIDATION_ERROR`。省略时保持各列表原默认顺序，并附加稳定并列键 `pk`/`id`。
 
+人员对象 `{ user_id, name, department, account_kind }` 的 `account_kind`：
+
+- `directory`：有钉钉绑定的目录用户。
+- `local`：已有 UserMirror 但无钉钉绑定（本地管理员、Authentik 内建用户）。
+- `unresolved`：只存用户 ID、尚无 UserMirror（例如从未登录）；不得推断为 `local`。
+
 ---
 
 ## GET /portal/api/v1/me/grants
@@ -240,7 +246,7 @@
 审批条目在 access_request 基础上额外包含：
 
 - `authorization_groups`（含提交时冻结的 grants 明细）
-- `applicant`：`{ user_id, name, email, department, account_kind }`；`account_kind` 为 `directory` 或 `local`
+- `applicant`：`{ user_id, name, email, department, account_kind }`；`account_kind` 为 `directory` / `local` / `unresolved`，口径见上文人员对象。本接口申请人必有 UserMirror，因此只有 `directory` 或 `local`。
 - `approver_user_ids`
 - `decided_by` / `decided_at`
 

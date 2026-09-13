@@ -24,6 +24,12 @@
 分页、状态和枚举筛选只有省略或空值时使用默认语义；出现非法值必须返回
 `422 VALIDATION_ERROR`，不得静默忽略、截断或返回不可信空列表。
 
+人员对象 `{ user_id, name, department, account_kind }` 的 `account_kind`：
+
+- `directory`：有钉钉绑定的目录用户。
+- `local`：已有 UserMirror 但无钉钉绑定（本地管理员、Authentik 内建用户）。
+- `unresolved`：只存用户 ID、尚无 UserMirror（例如从未登录）；不得推断为 `local`。
+
 ---
 
 ## 应用与配置
@@ -47,8 +53,8 @@
 
 应用列表和详情项的 `owners` 为人员对象数组（`user_id`、`name`、`department`、`account_kind`），
 按姓名再按 `user_id` 排序；整页 owner 成员关系、UserMirror 与部门路径一次性批量解析，不按 App
-回源。`developers` 仍为 Authentik 用户 ID 字符串数组。筛选参数 `owner_user_id` 不变，仍按成员
-关系的用户 ID 过滤。
+回源。尚无 UserMirror 的 owner 为 `account_kind: "unresolved"`。`developers` 仍为 Authentik 用户
+ID 字符串数组。筛选参数 `owner_user_id` 不变，仍按成员关系的用户 ID 过滤。
 
 应用列表和详情项返回同一份细粒度能力事实：
 
@@ -125,7 +131,7 @@
 | `user_id` | Authentik 用户 ID |
 | `user_name` | 对应用户 `UserMirror.name`；无镜像或镜像无姓名时为空字符串 |
 | `user_department` | 对应用户部门路径（与 `GET /user-options` 的 `department` 同口径）；无镜像时为空字符串 |
-| `user_account_kind` | `directory`（有钉钉绑定）或 `local`（本地管理员、Authentik 内建用户，或尚无 UserMirror） |
+| `user_account_kind` | `directory` / `local` / `unresolved`，口径见上文人员对象 `account_kind` |
 | `role` | `owner` / `developer` |
 | `is_active` | 是否有效 |
 
@@ -256,8 +262,8 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 
 **GET `/operations/access-requests`** 列表项在既有字段外提供展示名。`user_name` 为
 申请人 `UserMirror.name`（镜像无姓名时为空字符串）；`user_department` 为申请人部门路径
-（与 `GET /user-options` 的 `department` 同口径）；`user_account_kind` 为 `directory` 或
-`local`。`app_name` / `app_alias` 为应用名称与别名。`approvers` 为
+（与 `GET /user-options` 的 `department` 同口径）；`user_account_kind` 为 `directory`、
+`local` 或 `unresolved`。`app_name` / `app_alias` 为应用名称与别名。`approvers` 为
 `[{ "user_id", "name", "department", "account_kind" }]`，与既有 `approver_user_ids` 并列。
 `decided_by_name` 为决定人姓名；无决定人或镜像中无该用户时为空字符串。
 
@@ -304,7 +310,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | --- | --- |
 | `originator_name` | 发起人 `UserMirror.name`；镜像无姓名时为空字符串 |
 | `originator_department` | 发起人部门路径（与 `GET /user-options` 的 `department` 同口径）；镜像无部门时为空字符串 |
-| `originator_account_kind` | `directory` 或 `local`，口径与人员选项 `account_kind` 相同 |
+| `originator_account_kind` | `directory` / `local` / `unresolved`，口径见上文人员对象 `account_kind` |
 | `app_name` | 应用名称 |
 | `app_alias` | 应用别名；未设置时为空字符串 |
 
@@ -369,7 +375,8 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 **GET `/user-options`** 要求 **superuser**。成功信封 `{ "data": [...] }`，项形状固定为
 `{ "user_id", "name", "department", "account_kind", "avatar_url" }`。`department` 为部门路径（如「捷发-安环部」，
 多部门按钉钉顺序以 ` / ` 拼接）；人员列表 `GET /users` 的 `department` 同口径。
-`account_kind` 为 `directory`（`dingtalk_userid` 非空）或 `local`（本地管理员、Authentik 内建用户等无钉钉绑定账号）。
+`account_kind` 为 `directory` / `local` / `unresolved`，口径见上文人员对象；本接口只返回已有
+UserMirror 的人员，因此只有 `directory` 或 `local`。
 人员对象一律由 `accounts/person_payload.py` 生成。
 
 查询方式：
@@ -529,7 +536,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 目录不可用仍为 503。
 `user_name` 为 `UserMirror.name`，
 镜像无姓名时为空字符串。`user_department` 为被授权人部门路径，与人员选项同口径。
-`user_account_kind` 为 `directory` 或 `local`，与人员选项 `account_kind` 同口径。
+`user_account_kind` 为 `directory` / `local` / `unresolved`，口径见上文人员对象 `account_kind`。
 
 ### 组织授权
 
