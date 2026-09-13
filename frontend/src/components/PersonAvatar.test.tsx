@@ -1,0 +1,52 @@
+import { render, screen } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
+
+import { avatarInitials, PersonAvatar } from "./PersonAvatar";
+
+describe("avatarInitials", () => {
+  test("中日韩姓名取第一个字", () => {
+    expect(avatarInitials("张三")).toBe("张");
+    expect(avatarInitials("胡玉琴A")).toBe("胡");
+    expect(avatarInitials("田中")).toBe("田");
+  });
+
+  test("拉丁姓名取首字母, 多词取首尾", () => {
+    expect(avatarInitials("Alice")).toBe("A");
+    expect(avatarInitials("Alice Smith")).toBe("AS");
+    expect(avatarInitials("Jean Luc Picard")).toBe("JP");
+  });
+
+  test("空姓名不伪造字母", () => {
+    expect(avatarInitials("")).toBe("");
+    expect(avatarInitials("   ")).toBe("");
+  });
+});
+
+describe("PersonAvatar", () => {
+  test("https 与同源路径渲染照片", () => {
+    const { rerender } = render(
+      <PersonAvatar name="张三" avatarUrl="https://cdn.example.com/u.png" size={24} alt="张三 的头像" />,
+    );
+    expect(screen.getByRole("img", { name: "张三 的头像" })).toHaveAttribute("src", "https://cdn.example.com/u.png");
+    expect(screen.getByRole("img")).toHaveAttribute("width", "24");
+
+    rerender(<PersonAvatar name="张三" avatarUrl="/media/avatars/alice.png" size={32} alt="张三 的头像" />);
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/media/avatars/alice.png");
+    expect(screen.getByRole("img")).toHaveAttribute("width", "32");
+  });
+
+  test("data:/http:/javascript: 与空值回落为首字母, 中文取首字", () => {
+    const { rerender } = render(
+      <PersonAvatar name="张三" avatarUrl="data:image/svg+xml;base64,PHN2Zy8+" size={20} />,
+    );
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("张")).toBeVisible();
+
+    rerender(<PersonAvatar name="张三" avatarUrl="javascript:alert(1)" size={20} />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("张")).toBeVisible();
+
+    rerender(<PersonAvatar name="Alice Smith" avatarUrl="" size={20} />);
+    expect(screen.getByText("AS")).toBeVisible();
+  });
+});
