@@ -10,11 +10,14 @@ from easyauth.access_requests.approvals import (
     ApprovalActionError,
     ApprovalDecision,
     approve_access_request,
-    query_approver_user_ids,
     reassign_access_request,
     reject_access_request,
 )
-from easyauth.access_requests.models import DECISION_ACTOR_CONSOLE_ADMIN, AccessRequest
+from easyauth.access_requests.models import (
+    DECISION_ACTOR_CONSOLE_ADMIN,
+    AccessRequest,
+    AccessRequestApprover,
+)
 from easyauth.admin_console.api_responses import (
     error_response as _error_response,
 )
@@ -23,7 +26,7 @@ from easyauth.admin_console.api_responses import (
 )
 from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.authz import require_superuser
-from easyauth.api.datetime_json import datetime_value
+from easyauth.admin_console.operations_payloads import access_request_decision_fields
 from easyauth.api.errors import ErrorCode, JsonValue
 
 
@@ -106,25 +109,28 @@ def _admin_decide(request: HttpRequest, request_id: int, *, action: str) -> Json
 
 
 def _request_item(access_request: AccessRequest) -> dict[str, JsonValue]:
-    approver_ids: list[JsonValue] = []
-    approver_ids.extend(query_approver_user_ids(access_request))
+    _attach_loaded_approver_assignments(access_request)
     return {
         "id": access_request.id,
         "user_id": access_request.user.authentik_user_id,
         "app_key": access_request.app.app_key,
         "status": access_request.status,
-        "approver_user_ids": approver_ids,
         "approval_routing_state": getattr(
             access_request,
             "approval_routing_state",
             "normal",
         ),
         "routing_reason": getattr(access_request, "routing_reason", "") or "",
-        "decided_by": access_request.decided_by,
-        "decision_actor_type": access_request.decision_actor_type,
-        "decision_comment": access_request.decision_comment,
-        "decided_at": datetime_value(access_request.decided_at),
+        **access_request_decision_fields(access_request),
     }
+
+
+def _attach_loaded_approver_assignments(access_request: AccessRequest) -> None:
+    access_request.loaded_approver_assignments = list(
+        AccessRequestApprover.objects.select_related("approver").filter(
+            access_request=access_request,
+        ),
+    )
 
 
 def _approval_error_response(error: ApprovalActionError) -> JsonResponse:
