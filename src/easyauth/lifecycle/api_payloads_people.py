@@ -70,8 +70,7 @@ def handover_list_people(
     related: list[UserMirror] = []
     created_by_ids: list[str] = []
     for task in tasks:
-        if task.subject_user is not None:
-            related.append(task.subject_user)
+        related.append(task.subject_user)
         if task.assignee is not None:
             related.append(task.assignee)
         if task.created_by:
@@ -98,7 +97,7 @@ def _created_by_person(
             people=resolved,
             department_labels=department_path_labels(resolved.values()),
         )
-    labels = department_labels if department_labels is not None else {}
+    labels: Mapping[str, str] = department_labels if department_labels is not None else {}
     return _person_or_none(
         task.created_by,
         people=people,

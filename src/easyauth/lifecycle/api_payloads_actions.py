@@ -141,10 +141,12 @@ def action_item(
 def _asset_types_for_action(action: HandoverAppAction) -> list[HandoverAssetType]:
     cache = getattr(action, "_prefetched_objects_cache", None)
     if isinstance(cache, dict) and "asset_types" in cache:
+        cached_types = cast("list[object]", cache["asset_types"])
         return [
             asset_type
-            for asset_type in action.asset_types.all()
-            if asset_type.generation == action.generation
+            for asset_type in cached_types
+            if isinstance(asset_type, HandoverAssetType)
+            and asset_type.generation == action.generation
         ]
     return list(
         HandoverAssetType.objects.select_related("default_to_user")
