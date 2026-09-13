@@ -44,6 +44,7 @@ const APPROVAL_ORDERING_FIELDS = {
   term: "term",
   reason: "reason",
   decision_comment: "decision_comment",
+  request_type: "request_type",
 } as const;
 
 export interface PortalApprovalsController {

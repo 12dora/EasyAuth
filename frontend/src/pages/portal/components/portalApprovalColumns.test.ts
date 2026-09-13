@@ -29,7 +29,7 @@ describe("approvalColumns", () => {
     expect(columns.find((column) => column.key === "applicant")?.width).toBe(200);
     expect(columns.find((column) => column.key === "app")?.width).toBe(200);
     expect(columns.find((column) => column.key === "request_type")?.width).toBe(90);
-    expect(columns.find((column) => column.key === "request_type")?.sorter).toBeUndefined();
+    expect(columns.find((column) => column.key === "request_type")?.sorter).toBe(true);
     expect(columns.find((column) => column.key === "status")?.width).toBe(110);
     expect(columns.find((column) => column.key === "content")?.width).toBeUndefined();
     expect(columns.find((column) => column.key === "term")?.width).toBe(170);
@@ -40,7 +40,7 @@ describe("approvalColumns", () => {
     expect(PROCESSED_APPROVALS_MIN_WIDTH).toBe(1500);
   });
 
-  test("待办列宽: 申请人、应用 200, 类型 90 不可排序, 期限与提交 170, 内容与原因弹性, 无状态列", () => {
+  test("待办列宽: 申请人、应用 200, 类型 90 可服务端排序, 期限与提交 170, 内容与原因弹性, 无状态列", () => {
     const columns = approvalColumns(t, "pending", sort, false, vi.fn());
     expect(columns.map((column) => column.key)).toEqual([
       "applicant",
@@ -55,7 +55,7 @@ describe("approvalColumns", () => {
     expect(columns.find((column) => column.key === "applicant")?.width).toBe(200);
     expect(columns.find((column) => column.key === "app")?.width).toBe(200);
     expect(columns.find((column) => column.key === "request_type")?.width).toBe(90);
-    expect(columns.find((column) => column.key === "request_type")?.sorter).toBeUndefined();
+    expect(columns.find((column) => column.key === "request_type")?.sorter).toBe(true);
     expect(columns.find((column) => column.key === "content")?.width).toBeUndefined();
     expect(columns.find((column) => column.key === "term")?.width).toBe(170);
     expect(columns.find((column) => column.key === "submitted_at")?.width).toBe(170);

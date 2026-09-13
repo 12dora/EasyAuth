@@ -652,6 +652,40 @@ describe("PortalApprovalsSection", () => {
     expect(columnSortOrder("申请人")).toBe("descend");
   });
 
+  test("点击类型表头发送 ordering=request_type", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (!url.startsWith("/portal/api/v1/me/approvals?")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      return jsonResponse({
+        data: [pendingApproval],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSection();
+    expect(await screen.findByText("张三")).toBeVisible();
+
+    await sortByColumn(user, "类型");
+    await waitFor(() =>
+      expect(lastApprovalsUrl(fetchMock)).toBe(
+        "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20&ordering=request_type",
+      ),
+    );
+    expect(columnSortOrder("类型")).toBe("ascend");
+
+    await sortByColumn(user, "类型");
+    await waitFor(() =>
+      expect(lastApprovalsUrl(fetchMock)).toBe(
+        "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20&ordering=-request_type",
+      ),
+    );
+    expect(columnSortOrder("类型")).toBe("descend");
+  });
+
   test("切到已处理页签时清掉表头排序, 顺序交回后端默认序", async () => {
     const sortedPendingUrl = "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20&ordering=applicant";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
