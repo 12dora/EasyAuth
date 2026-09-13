@@ -83,6 +83,15 @@ ignore = [
 "sdk/**/*.py" = ["TRY003", "EM101", "EM102", "S101", "ANN401", "PLC0415"]
 "sdk/**/tests/*.py" = ["INP001", "PLR2004", "S106"]
 
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-branches = 12
+max-returns = 6
+max-statements = 50
+
 [tool.basedpyright]
 # BasedPyright 是生产运行时代码门禁；测试代码由 pytest 与 Ruff 负责。
 include = ["src/easyauth"]

@@ -1,0 +1,11 @@
+# src 下生产代码 C901/PLR09xx noqa 清单, 只允许变短。
+src/easyauth/accounts/local_admin_passkeys.py:generate_registration_options:PLR0913
+src/easyauth/accounts/local_admin_passkeys.py:register_passkey:PLR0913
+src/easyauth/accounts/local_admin_passkeys.py:verify_authentication_response:PLR0913
+src/easyauth/admin_console/connectors_api_reads.py:console_app_connector_external_groups:PLR0911
+src/easyauth/connectors/netbird/connector.py:_delete_matching_peers:PLR0913
+src/easyauth/grants/direct_grant.py:_record_direct_grant_applied:PLR0913
+src/easyauth/grants/lifecycle.py:revoke_current_grant:PLR0913
+src/easyauth/grants/operations.py:record_grant_event:PLR0913
+src/easyauth/grants/services.py:revoke_grant:PLR0913
+src/easyauth/grants/services.py:sync_department_memberships:PLR0913
