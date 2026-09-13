@@ -48,10 +48,11 @@ node scripts/check-build-budget.mjs
   之所以不整体调高 `synchronousChunk*`，是为了让 `vendor` 继续守住 360 KiB —— 否则
   antd 的体积会顺带把 vendor 的门禁一起放松掉；
 - 单个异步路由 chunk 原始体积不超过 `140 KiB`，gzip 不超过 `40 KiB`；
-- 全部 JavaScript 原始体积不超过 `1900 KiB`（Ant Design 表格地基落地后上调到 1700，2026-09-08 控制台
+- 全部 JavaScript 原始体积不超过 `1920 KiB`（Ant Design 表格地基落地后上调到 1700，2026-09-08 控制台
   「授予权限」`DirectGrantPage` 与「组织授权」`DepartmentGrantsPage` 两个异步路由落地后实测 1732 KiB，
   再上调到 1780；2026-09-13 运营日期范围控件引入 DatePicker + dayjs 后实测 1886.5 KiB，
   RangePicker 已拆到异步 `antd-picker`，同步 `antd` 仍守 760 / 240 KiB，总量按 20 KiB 上取整到 1900；
+  2026-09-13 晚人员头像 `PersonAvatar`、审批「类型」列与截断悬停提示落地后实测 1900.1 KiB，再上调到 1920；
   两个新路由均为独立异步 chunk，并已加入 `REQUIRED_DYNAMIC_ROUTE_KEYS`）；
 - `App.tsx` 中的全部页面级路由必须继续以 Vite manifest key 出现在入口 `dynamicImports` 中,且对应
   manifest 条目必须标记 `isDynamicEntry`。删除任一控制台、门户或生命周期路由 chunk 都会使预算检查失败。
