@@ -10,6 +10,7 @@ import { apiRequest, itemsFromPayload } from "../lib/api";
 import type { ListPayload } from "../lib/api";
 import { cn } from "../lib/cn";
 import type { Translator } from "../lib/status";
+import { TruncatedText } from "./TruncatedText";
 
 export interface UserOption {
   user_id: string;
@@ -277,7 +278,7 @@ function UserOptionRow({
         ) : null}
         <span>{userOptionDisplayName(option)}</span>
       </span>
-      {secondary ? <span className="text-xs text-ink-faint">{secondary}</span> : null}
+      {secondary ? <TruncatedText className="w-full text-xs text-ink-faint" text={secondary} /> : null}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import type { BadgeTone, Translator } from "../../lib/status";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { ButtonLink } from "../ButtonLink";
+import { TruncatedText } from "../TruncatedText";
 import { userSecondaryLabel } from "../UserCombobox";
 import { enumFilter, readField, textFilter, type ColumnType, type ServerSortState } from "./AppTable";
 
@@ -361,11 +362,11 @@ export function userColumn<T>({
         <div className="flex min-w-0 flex-col gap-1">
           <strong className="truncate">{displayName || secondary}</strong>
           {showSecondary ? (
-            secondaryIsMono ? (
-              <code className={cn(MONO_TEXT_CLASS, "truncate")}>{secondary}</code>
-            ) : (
-              <span className="truncate text-body leading-5 text-ink-soft">{secondary}</span>
-            )
+            <TruncatedText
+              as={secondaryIsMono ? "code" : "span"}
+              className={secondaryIsMono ? MONO_TEXT_CLASS : "text-body leading-5 text-ink-soft"}
+              text={secondary}
+            />
           ) : null}
         </div>
       );

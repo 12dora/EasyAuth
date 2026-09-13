@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { Button } from "../../../components/Button";
 import { SelectInput } from "../../../components/Field";
+import { TruncatedText } from "../../../components/TruncatedText";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { useToast } from "../../../components/ui/Toast";
 import { useUserOptionsByIds, userOptionName, userSecondaryLabel } from "../../../components/UserCombobox";
@@ -149,9 +150,9 @@ function SuccessorReadOnly({ userId, known }: { userId: string; known: HandoverU
   const name = userOptionName(option ?? undefined, userId);
   const secondary = option ? userSecondaryLabel(option, t) : "";
   return (
-    <span className="text-body text-ink-soft">
+    <span className="inline-flex min-w-0 items-baseline text-body text-ink-soft">
       {name}
-      {secondary ? <span className="ml-2 text-caption text-ink-faint">{secondary}</span> : null}
+      {secondary ? <TruncatedText className="ml-2 text-caption text-ink-faint" text={secondary} /> : null}
     </span>
   );
 }

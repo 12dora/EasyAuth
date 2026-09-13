@@ -114,8 +114,10 @@ textColumn<T>({ key, title, getValue?, filter? = false, sorter? = false,
                 ellipsis? = true, mono? = false, width? }): ColumnType<T>
 // filter -> textFilter 子串筛选；sorter -> localeCompare；mono -> 等宽 code 展示；空值 "-"
 
-userColumn<T>({ getName, getUserId?, key? = "user", title?, filter? = false, width? }): ColumnType<T>
-// 显示名(粗体) + 等宽 user id 两行, 沿用 ConsoleTeamMemberTable 的成员单元格排版
+userColumn<T>({ getName, getUserId?, getSecondary?, key? = "user", title?, filter? = false, width? }): ColumnType<T>
+// 显示名(粗体) + 次行两行, 沿用 ConsoleTeamMemberTable 的成员单元格排版
+// 次行超长时由 TruncatedText 在真正截断后用 Tooltip 展示全文
+// 人员部门请走 personColumn, 不要把 Authentik UUID 传到 getUserId 当次行
 // 仓库里没有表格内头像的先例, 因此不渲染头像
 
 actionsColumn<T>({ render, title?, width? = ACTIONS_COLUMN_DEFAULT_WIDTH, fixed? = "right", key? = "actions" }): ColumnType<T>
