@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from easyauth.accounts.avatar_url import safe_avatar_url
 from easyauth.accounts.models import (
     USER_STATUS_DEPARTED,
     DingTalkDepartmentMirror,
@@ -82,23 +83,23 @@ def _upsert_user(payload: DirectoryJson, *, generation: int) -> None:
             "departed_at": departed_at,
         },
     )
-    _backfill_user_mirror_avatar(payload)
+    _sync_user_mirror_avatar(payload)
 
 
-def _backfill_user_mirror_avatar(payload: DirectoryJson) -> None:
-    avatar = _string(payload.get("avatar"))
+def _sync_user_mirror_avatar(payload: DirectoryJson) -> None:
+    avatar = safe_avatar_url(_string(payload.get("avatar")))
     source_slug = _directory_source_slug(payload)
     corp_id = _string(payload.get("corp_id"))
     user_id = _string(payload.get("user_id"))
     if avatar == "" or source_slug == "" or corp_id == "" or user_id == "":
         return
-    # 只在 avatar_url 为空时回填目录头像, 不覆盖 OIDC 登录写入的值。
+    # 钉钉目录是照片的权威来源: 已绑定 UserMirror 上与目录不同的头像一律覆盖。
+    # 目录头像为空或不安全时不调用本函数, 保留镜像现有值。
     queryset = UserMirror.objects.filter(
         dingtalk_source_slug=source_slug,
         dingtalk_corp_id=corp_id,
         dingtalk_userid=user_id,
-        avatar_url="",
-    )
+    ).exclude(avatar_url=avatar)
     for user in queryset.select_for_update():
         user.avatar_url = avatar
         user.full_clean()

@@ -300,20 +300,20 @@ def test_directory_sync_user_mirror_updates_are_scoped_by_source() -> None:
     assert source_b.manager_userid == "source-b-manager"
 
 
-def test_directory_sync_keeps_existing_user_mirror_avatar_url() -> None:
-    # Given: 用户已有 OIDC 登录写入的头像, 目录侧下发了不同的头像 URL。
+def test_directory_sync_overwrites_user_mirror_avatar_url_from_directory() -> None:
+    # Given: 用户已有 OIDC 登录写入的头像, 目录侧下发了不同的钉钉 https 头像。
     _ = UserMirror.objects.create(
         authentik_user_id="ak-avatar-2",
         dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
-        dingtalk_userid="user-avatar-kept",
+        dingtalk_userid="user-avatar-overwrite",
         avatar_url="https://oidc.example.test/media/original.jpg",
     )
     client_stub = _stub_with_users(
         [
             {
                 "corp_id": "corp-1",
-                "user_id": "user-avatar-kept",
+                "user_id": "user-avatar-overwrite",
                 "name": "已有头像用户",
                 "avatar": "https://static-legacy.dingtalk.com/media/directory.jpg",
                 "department_ids": [],
@@ -326,9 +326,67 @@ def test_directory_sync_keeps_existing_user_mirror_avatar_url() -> None:
     # When: 执行目录同步。
     _ = sync_authentik_dingtalk_directory(client_stub)
 
-    # Then: 目录头像只做空值回填, 不覆盖 OIDC 登录写入的值。
+    # Then: 钉钉目录是照片权威来源, 覆盖 UserMirror 上不同的头像。
     user = UserMirror.objects.get(authentik_user_id="ak-avatar-2")
-    assert user.avatar_url == "https://oidc.example.test/media/original.jpg"
+    assert user.avatar_url == "https://static-legacy.dingtalk.com/media/directory.jpg"
+
+
+def test_directory_sync_keeps_user_mirror_avatar_url_when_directory_avatar_is_empty() -> None:
+    existing = "https://oidc.example.test/media/original.jpg"
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-avatar-empty-dir",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-avatar-empty-dir",
+        avatar_url=existing,
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-avatar-empty-dir",
+                "name": "目录无头像用户",
+                "avatar": "",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+        ],
+    )
+
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    user = UserMirror.objects.get(authentik_user_id="ak-avatar-empty-dir")
+    assert user.avatar_url == existing
+
+
+def test_directory_sync_keeps_user_mirror_avatar_url_when_directory_avatar_is_unsafe() -> None:
+    existing = "https://oidc.example.test/media/original.jpg"
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-avatar-unsafe-dir",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-avatar-unsafe-dir",
+        avatar_url=existing,
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-avatar-unsafe-dir",
+                "name": "目录不安全头像用户",
+                "avatar": "data:image/svg+xml;base64,PHN2Zy4uLg==",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+        ],
+    )
+
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    user = UserMirror.objects.get(authentik_user_id="ak-avatar-unsafe-dir")
+    assert user.avatar_url == existing
 
 
 def test_directory_job_number_reaches_mirror_and_public_api_without_user_mirror() -> None:
