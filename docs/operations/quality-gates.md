@@ -31,6 +31,35 @@ Cosign 签名并验证镜像（打 `v*.*.*` tag 时还会创建 GitHub Release�
 不得通过降低 `typeCheckingMode`、排除普通生产模块、加宽泛 `noqa` 或扩大 `per-file-ignores`
 制造绿色。静态检查失败时修根因。
 
+## 复杂度与体积棘轮
+
+Ruff `C901` / `PLR0911` / `PLR0912` / `PLR0913` / `PLR0915` 使用显式阈值
+complexity=10、returns=6、branches=12、args=5、statements=50。
+现网生产代码在这些阈值下为 0 违规（9 处 PLR0913 与 1 处 PLR0911 为例外,
+清单见 `scripts/ruff-noqa-baseline.txt`, 只允许变短）。
+
+文件/函数长度不走 Ruff：
+
+- 后端 `tests/unit/config/test_code_quality.py`：`src/easyauth` 文件 >600 行、
+  函数 >60 行必须出现在 baseline, 且实测值不得上升。
+- 前端 `src/codeQuality.test.ts`：文件 >500 行、函数/组件 >120 行、
+  hook 的 useState+useEffect >8、顶层 import >25 同上。
+
+禁止用加宽 `per-file-ignores`、全局 ignore C901、或删 baseline 行来制造绿色。
+新代码必须落在硬帽以内；旧债只许还、不许借。
+
+当前棘轮存量（2026-09-13 实测, 后端对照 git HEAD）：
+
+| 侧 | 帽 | 存量 |
+| --- | --- | --- |
+| 后端文件 | 600 | 2（最大 619 `grants/query.py`） |
+| 后端函数 | 60 | 8（最大 90 `Command.handle`） |
+| 后端 C901 | 10 | 0 超标 |
+| 前端文件 | 500 | 3（最大 807 `AppTable.tsx`） |
+| 前端函数 | 120 | 30（最大 274 `WebhookTab`） |
+| 前端 hook se | 8 | 2（最大 14） |
+| 前端 import | 25 | 0（最大 23） |
+
 ## 测试约定
 
 - 业务回归由 pytest 执行；测试代码的导入、临时路径和危险调用由 Ruff 检查。
@@ -48,8 +77,10 @@ pnpm --filter @easyauth/frontend build
 DJANGO_SETTINGS_MODULE=easyauth.config.settings.test .venv/bin/python manage.py check
 DJANGO_SETTINGS_MODULE=easyauth.config.settings.test .venv/bin/python manage.py makemigrations --check --dry-run
 .venv/bin/pytest
+.venv/bin/pytest tests/unit/config/test_code_quality.py tests/unit/config/test_ruff_noqa_baseline.py
 .venv/bin/ruff check .
 .venv/bin/basedpyright
 pnpm --filter @easyauth/frontend test
+pnpm --filter @easyauth/frontend test src/codeQuality.test.ts
 pnpm --filter @easyauth/frontend e2e:fullstack
 ```
