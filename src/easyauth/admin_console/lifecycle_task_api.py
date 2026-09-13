@@ -9,7 +9,6 @@ from django.db.models import Count, Q
 from django.http import HttpRequest, JsonResponse
 from pydantic import ValidationError
 
-from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.api_payloads import paginated_list_payload
@@ -34,7 +33,11 @@ from easyauth.admin_console.operation_filters import (
 from easyauth.api.errors import ErrorCode
 from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
-from easyauth.lifecycle.api_payloads import SURFACE_CONSOLE, console_task_list_item
+from easyauth.lifecycle.api_payloads import (
+    SURFACE_CONSOLE,
+    console_task_list_item,
+    handover_list_people,
+)
 from easyauth.lifecycle.api_payloads import task_detail as v2_task_detail
 from easyauth.lifecycle.errors import HandoverConflictError
 from easyauth.lifecycle.handover_actions import cancel_task, delete_task
@@ -102,14 +105,10 @@ def _list_handover_tasks(request: HttpRequest) -> JsonResponse:
         page = paginate_queryset(filtered_queryset, request.GET)
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
-    department_labels = department_path_labels(
-        user
-        for task in page.items
-        for user in (task.subject_user, task.assignee)
-        if user is not None
-    )
+    people, department_labels = handover_list_people(page.items)
     items: list[JsonValue] = [
-        console_task_list_item(task, department_labels=department_labels) for task in page.items
+        console_task_list_item(task, department_labels=department_labels, people=people)
+        for task in page.items
     ]
     return json_response(
         paginated_list_payload(

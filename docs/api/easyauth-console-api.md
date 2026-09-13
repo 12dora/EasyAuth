@@ -354,6 +354,11 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | POST | `/lifecycle/onboard` | 发起入职 |
 | GET/POST | `/teams`、`/teams/{id}`、`…/members` | 团队与成员 |
 
+交接任务列表与详情保留 `created_by` 原始 ID，并增加 `created_by_person`：能解析到
+`UserMirror` 时为人员对象，系统账号或未知 ID 为 `null`。详情里 `escalation.defer_history[]`
+保留 `actor_id`，并增加 `actor_person`，口径相同。人员对象由 `person_payload` 生成，
+部门路径按本响应一次批量解析。门户交接列表/详情使用同一套字段。
+
 团队详情 `members[]` 与列表 `leaders[]` 均为人员对象：`user_id`、`name`、`department`、
 `account_kind`（成员项另含 `email`、`status`、`role`、`added_at`）。部门路径与人员选项同口径。
 

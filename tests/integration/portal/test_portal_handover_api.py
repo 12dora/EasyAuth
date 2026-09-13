@@ -15,6 +15,7 @@ from easyauth.accounts.models import (
     DingTalkUserOrgContext,
     UserMirror,
 )
+from easyauth.accounts.person_payload import person_payload
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
 from easyauth.lifecycle.jurisdiction import JurisdictionResult
@@ -111,6 +112,29 @@ def test_me_handover_tasks_envelope() -> None:
     assert "handover_tasks" in body
     assert "as_assignee" in body["handover_tasks"]
     assert "as_subject" in body["handover_tasks"]
+
+
+def test_me_handover_tasks_include_created_by_person() -> None:
+    creator = _user("portal-created-by", dtuid="pcb")
+    subject = _user("portal-created-subject", dtuid="pcs")
+    task = HandoverTask.objects.create(
+        kind=HANDOVER_KIND_OFFBOARD,
+        subject_user=subject,
+        assignee=creator,
+        assignee_state=ASSIGNEE_STATE_MANAGER,
+        created_by=creator.authentik_user_id,
+    )
+    client = _login(Client(), creator)
+    resp = client.get("/portal/api/v1/me/handover-tasks")
+    detail = client.get(f"/portal/api/v1/handover-tasks/{task.id}")
+
+    assert resp.status_code == 200
+    items = resp.json()["handover_tasks"]["as_assignee"]
+    assert items[0]["created_by_person"] == person_payload(creator, {})
+    assert detail.status_code == 200
+    handover_task = detail.json()["handover_task"]
+    assert handover_task["created_by"] == creator.authentik_user_id
+    assert handover_task["created_by_person"] == person_payload(creator, {})
 
 
 def test_non_assignee_gets_404_on_detail() -> None:

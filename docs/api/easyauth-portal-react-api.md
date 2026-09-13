@@ -353,6 +353,16 @@
 
 ---
 
+## 交接任务人员对象
+
+门户交接列表 `GET /portal/api/v1/me/handover-tasks` 与详情
+`GET /portal/api/v1/handover-tasks/{task_id}` 与控制台共用同一套序列化：列表/详情项含
+`created_by_person`（`PersonRef | null`）；详情 `escalation.defer_history[]` 含 `actor_person`
+（`PersonRef | null`）。原始 `created_by` / `actor_id` 仍保留。人员对象由
+`person_payload` 生成，无法解析到 `UserMirror` 时为 `null`。
+
+---
+
 ## 兼容性
 
 - 公共权限查询契约不变：`GET /api/v1/apps/{app_key}/users/{user_id}/permissions`

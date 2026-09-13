@@ -8,6 +8,7 @@ from django.db.models import Count, Prefetch, Q, Sum
 from django.utils import timezone
 
 from easyauth.accounts.department_paths import department_path_labels
+from easyauth.accounts.models import UserMirror
 from easyauth.accounts.person_payload import person_payload
 from easyauth.api.datetime_json import datetime_value
 from easyauth.audit.models import AuditLog
@@ -34,9 +35,8 @@ from easyauth.lifecycle.models import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping, Sequence
 
-    from easyauth.accounts.models import UserMirror
     from easyauth.api.errors import JsonValue
 
 type JsonObject = dict[str, "JsonValue"]
@@ -80,6 +80,9 @@ def escalation_payload(
     task: HandoverTask,
     *,
     include_defer_history: bool = False,
+    defer_rows: tuple[AuditLog, ...] | None = None,
+    people: Mapping[str, UserMirror] | None = None,
+    department_labels: Mapping[str, str] | None = None,
 ) -> JsonObject:
     deadline = task.escalation_deadline
     days_left: int | None = None
@@ -88,7 +91,12 @@ def escalation_payload(
         days_left = max(0, int(delta.total_seconds() // 86400))
     history: list[JsonValue] = []
     if include_defer_history:
-        history = _defer_history_for_task(task)
+        history = _defer_history_for_task(
+            task,
+            rows=defer_rows,
+            people=people,
+            department_labels=department_labels,
+        )
     payload: JsonObject = {
         "deadline": datetime_value(deadline),
         "days_left": days_left,
@@ -99,15 +107,35 @@ def escalation_payload(
     return payload
 
 
-def _defer_history_for_task(task: HandoverTask) -> list[JsonValue]:
+def _defer_history_rows(task: HandoverTask) -> tuple[AuditLog, ...]:
+    return tuple(
+        AuditLog.objects.filter(
+            event_type="handover_task_deferred",
+            target_type="handover_task",
+            target_id=str(task.id),
+        ).order_by("created_at", "id"),
+    )
+
+
+def _defer_history_for_task(
+    task: HandoverTask,
+    *,
+    rows: tuple[AuditLog, ...] | None = None,
+    people: Mapping[str, UserMirror] | None = None,
+    department_labels: Mapping[str, str] | None = None,
+) -> list[JsonValue]:
     """从审计事件还原顺延责任链(01 §6.2 / §6.3)。"""
-    rows = AuditLog.objects.filter(
-        event_type="handover_task_deferred",
-        target_type="handover_task",
-        target_id=str(task.id),
-    ).order_by("created_at", "id")
+    history_rows = _defer_history_rows(task) if rows is None else rows
+    resolved_people = (
+        people if people is not None else _users_by_ids(row.actor_id for row in history_rows)
+    )
+    labels = (
+        department_labels
+        if department_labels is not None
+        else department_path_labels(resolved_people.values())
+    )
     history: list[JsonValue] = []
-    for row in rows:
+    for row in history_rows:
         meta = _validated_audit_metadata(row.metadata)
         level = meta.get("escalation_level", task.escalation_level)
         if not isinstance(level, int):
@@ -122,11 +150,58 @@ def _defer_history_for_task(task: HandoverTask) -> list[JsonValue]:
             {
                 "escalation_level": level,
                 "actor_id": row.actor_id,
+                "actor_person": _person_or_none(
+                    row.actor_id,
+                    people=resolved_people,
+                    department_labels=labels,
+                ),
                 "at": datetime_value(row.created_at),
                 "reason": str(meta.get("reason", "") or ""),
             },
         )
     return history
+
+
+def _users_by_ids(user_ids: Iterable[str]) -> dict[str, UserMirror]:
+    unique_ids = tuple(dict.fromkeys(user_id for user_id in user_ids if user_id))
+    if not unique_ids:
+        return {}
+    return {
+        user.authentik_user_id: user
+        for user in UserMirror.objects.filter(authentik_user_id__in=unique_ids)
+    }
+
+
+def _person_or_none(
+    user_id: str,
+    *,
+    people: Mapping[str, UserMirror],
+    department_labels: Mapping[str, str],
+) -> JsonObject | None:
+    user = people.get(user_id)
+    if user is None:
+        return None
+    return person_payload(user, department_labels)
+
+
+def handover_list_people(
+    tasks: Sequence[HandoverTask],
+) -> tuple[dict[str, UserMirror], dict[str, str]]:
+    """列表页一次解析 subject/assignee/created_by 的部门路径。"""
+    related: list[UserMirror] = []
+    created_by_ids: list[str] = []
+    for task in tasks:
+        if task.subject_user is not None:
+            related.append(task.subject_user)
+        if task.assignee is not None:
+            related.append(task.assignee)
+        if task.created_by:
+            created_by_ids.append(task.created_by)
+    people = {user.authentik_user_id: user for user in related}
+    missing = tuple(user_id for user_id in dict.fromkeys(created_by_ids) if user_id not in people)
+    if missing:
+        people.update(_users_by_ids(missing))
+    return people, department_path_labels(people.values())
 
 
 def _validated_audit_metadata(value: object) -> JsonObject:
@@ -140,6 +215,7 @@ def task_list_item(
     task: HandoverTask,
     *,
     department_labels: Mapping[str, str] | None = None,
+    people: Mapping[str, UserMirror] | None = None,
 ) -> JsonObject:
     actions = _task_actions(task)
     # 若未 prefetch, 再查一次聚合
@@ -176,12 +252,40 @@ def task_list_item(
         "escalation": escalation_payload(task),
         "reason": task.reason,
         "created_at": datetime_value(task.created_at),
+        "created_by_person": _created_by_person(
+            task,
+            people=people,
+            department_labels=department_labels,
+        ),
         "pending_app_count": pending,
         "blocked_app_count": blocked,
         "total_asset_count": total_asset if total_asset else int(asset_count),
         "allowed_actions": allowed,
     }
     return payload
+
+
+def _created_by_person(
+    task: HandoverTask,
+    *,
+    people: Mapping[str, UserMirror] | None,
+    department_labels: Mapping[str, str] | None,
+) -> JsonObject | None:
+    if not task.created_by:
+        return None
+    if people is None:
+        resolved = _users_by_ids((task.created_by,))
+        return _person_or_none(
+            task.created_by,
+            people=resolved,
+            department_labels=department_path_labels(resolved.values()),
+        )
+    labels = department_labels if department_labels is not None else {}
+    return _person_or_none(
+        task.created_by,
+        people=people,
+        department_labels=labels,
+    )
 
 
 def _task_actions(task: HandoverTask) -> list[HandoverAppAction]:
@@ -217,9 +321,18 @@ def task_detail(task: HandoverTask, *, surface: str = SURFACE_CONSOLE) -> JsonOb
     team_entries = list(
         HandoverTeamItem.objects.select_related("team", "to_user").filter(task=task),
     )
-    department_labels = department_path_labels(
-        _task_detail_users(task, actions, team_entries),
+    defer_rows = _defer_history_rows(task)
+    related_users = _task_detail_users(task, actions, team_entries)
+    people = {user.authentik_user_id: user for user in related_users}
+    extra_ids = (task.created_by, *(row.actor_id for row in defer_rows))
+    missing = tuple(
+        user_id
+        for user_id in dict.fromkeys(extra_ids)
+        if user_id and user_id not in people
     )
+    if missing:
+        people.update(_users_by_ids(missing))
+    department_labels = department_path_labels(people.values())
     transfer_plan = _transfer_plan_payload(task)
     return {
         "id": task.id,
@@ -234,7 +347,13 @@ def task_detail(task: HandoverTask, *, surface: str = SURFACE_CONSOLE) -> JsonOb
         "assignee": user_ref(task.assignee, department_labels=department_labels),
         "assignee_state": task.assignee_state,
         "escalation_level": task.escalation_level,
-        "escalation": escalation_payload(task, include_defer_history=True),
+        "escalation": escalation_payload(
+            task,
+            include_defer_history=True,
+            defer_rows=defer_rows,
+            people=people,
+            department_labels=department_labels,
+        ),
         "reason": task.reason,
         "created_at": datetime_value(task.created_at),
         "actions": [
@@ -247,6 +366,11 @@ def task_detail(task: HandoverTask, *, surface: str = SURFACE_CONSOLE) -> JsonOb
         ),
         "transfer_plan": transfer_plan,
         "created_by": task.created_by,
+        "created_by_person": _person_or_none(
+            task.created_by,
+            people=people,
+            department_labels=department_labels,
+        ),
         "updated_at": datetime_value(task.updated_at),
     }
 
@@ -550,8 +674,9 @@ def console_task_list_item(
     task: HandoverTask,
     *,
     department_labels: Mapping[str, str] | None = None,
+    people: Mapping[str, UserMirror] | None = None,
 ) -> JsonObject:
-    item = task_list_item(task, department_labels=department_labels)
+    item = task_list_item(task, department_labels=department_labels, people=people)
     # 控制台列表保留既有部分字段
     item["created_by"] = task.created_by
     item["updated_at"] = datetime_value(task.updated_at)

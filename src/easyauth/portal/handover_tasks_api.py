@@ -8,12 +8,16 @@ from typing import ClassVar, Final, cast
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import error_response, json_response
 from easyauth.lifecycle.api_errors import map_handover_exception, reason_error
-from easyauth.lifecycle.api_payloads import SURFACE_PORTAL, task_detail, task_list_item
+from easyauth.lifecycle.api_payloads import (
+    SURFACE_PORTAL,
+    handover_list_people,
+    task_detail,
+    task_list_item,
+)
 from easyauth.lifecycle.assignee import AssigneeResolution
 from easyauth.lifecycle.core import TASK_KIND_CONFLICT_MESSAGE
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
@@ -84,17 +88,14 @@ def portal_me_handover_tasks(request: HttpRequest) -> JsonResponse:
         .filter(subject_user=user)
         .order_by("-created_at", "-id"),
     )
-    department_labels = department_path_labels(
-        listed
-        for task in (*as_assignee_tasks, *as_subject_tasks)
-        for listed in (task.subject_user, task.assignee)
-        if listed is not None
-    )
+    people, department_labels = handover_list_people((*as_assignee_tasks, *as_subject_tasks))
     as_assignee = [
-        task_list_item(task, department_labels=department_labels) for task in as_assignee_tasks
+        task_list_item(task, department_labels=department_labels, people=people)
+        for task in as_assignee_tasks
     ]
     as_subject = [
-        task_list_item(task, department_labels=department_labels) for task in as_subject_tasks
+        task_list_item(task, department_labels=department_labels, people=people)
+        for task in as_subject_tasks
     ]
     payload = cast(
         "dict[str, JsonValue]",

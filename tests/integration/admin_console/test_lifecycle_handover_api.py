@@ -12,6 +12,7 @@ from django.test.utils import CaptureQueriesContext
 from pydantic import TypeAdapter
 
 from easyauth.accounts.models import DingTalkDepartmentMirror, DingTalkUserMirror, UserMirror
+from easyauth.accounts.person_payload import person_payload
 from easyauth.api.errors import JsonValue
 from easyauth.applications.models import (
     HANDOVER_CAPABILITY_DECLARED,
@@ -21,6 +22,7 @@ from easyauth.applications.models import (
     AuthorizationGroupGrant,
     Permission,
 )
+from easyauth.audit.models import AuditLog
 from easyauth.grants.inputs import AuthorizationGroupGrantInput
 from easyauth.grants.models import AccessGrant
 from easyauth.grants.services import GrantMutationInput, GrantService
@@ -54,6 +56,56 @@ JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 class HttpResponseLike(Protocol):
     content: bytes
+
+
+def test_handover_task_list_and_detail_include_created_by_person() -> None:
+    client = _logged_in_superuser("handover-created-by-admin")
+    creator = UserMirror.objects.create(
+        authentik_user_id="handover-created-by-user",
+        name="建单人",
+        department="安环部",
+    )
+    subject = UserMirror.objects.create(authentik_user_id="handover-created-by-subject")
+    task = HandoverTask.objects.create(
+        kind="offboard",
+        subject_user=subject,
+        created_by=creator.authentik_user_id,
+    )
+    system_subject = UserMirror.objects.create(
+        authentik_user_id="handover-created-by-system-subject",
+    )
+    system_task = HandoverTask.objects.create(
+        kind="offboard",
+        subject_user=system_subject,
+        created_by="directory_sync",
+    )
+    _ = AuditLog.objects.create(
+        actor_type="admin",
+        actor_id=creator.authentik_user_id,
+        event_type="handover_task_deferred",
+        target_type="handover_task",
+        target_id=str(task.id),
+        metadata={"reason": "延期", "escalation_level": 0},
+    )
+
+    listing = client.get(TASKS_URL)
+    detail = client.get(f"{TASKS_URL}/{task.id}")
+
+    listing_body = JSON_VALUE_ADAPTER.validate_json(listing.content)
+    assert isinstance(listing_body, dict)
+    by_id = {item["id"]: item for item in listing_body["data"] if isinstance(item, dict)}
+    assert listing.status_code == HTTPStatus.OK
+    assert by_id[task.id]["created_by"] == creator.authentik_user_id
+    assert by_id[task.id]["created_by_person"] == person_payload(creator, {})
+    assert by_id[system_task.id]["created_by"] == "directory_sync"
+    assert by_id[system_task.id]["created_by_person"] is None
+    assert detail.status_code == HTTPStatus.OK
+    handover_task = detail.json()["handover_task"]
+    assert handover_task["created_by"] == creator.authentik_user_id
+    assert handover_task["created_by_person"] == person_payload(creator, {})
+    history = handover_task["escalation"]["defer_history"]
+    assert history[0]["actor_id"] == creator.authentik_user_id
+    assert history[0]["actor_person"] == person_payload(creator, {})
 
 
 def test_handover_task_list_uses_standard_server_pagination() -> None:
