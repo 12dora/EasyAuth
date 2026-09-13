@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from tests.unit.config.src_head import REPO_ROOT, head_src_python_texts
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
 BASELINE_PATH = REPO_ROOT / "scripts" / "ruff-noqa-baseline.txt"
 NOQA_CODES = re.compile(r"\b(C901|PLR09\d+)\b")
 FUNCTION_DEF = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)\s*\(")
 NOQA_PREFIX = "# noqa:"
-GIT_MISSING_MESSAGE = "git executable is required to list tracked src files"
 
 
 def test_production_complexity_noqa_set_matches_baseline() -> None:
@@ -24,9 +25,8 @@ def test_production_complexity_noqa_set_matches_baseline() -> None:
 
 def _collect_complexity_noqa() -> set[str]:
     found: set[str] = set()
-    for path in _tracked_src_python_files():
-        relative = path.relative_to(REPO_ROOT).as_posix()
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for relative, content in head_src_python_texts():
+        for line_number, line in enumerate(content.splitlines(), start=1):
             marker_at = line.find(NOQA_PREFIX)
             if marker_at < 0:
                 continue
@@ -37,27 +37,6 @@ def _collect_complexity_noqa() -> set[str]:
             name = match.group(1) if match is not None else f"L{line_number}"
             found.update(f"{relative}:{name}:{code}" for code in codes)
     return found
-
-
-def _tracked_src_python_files() -> list[Path]:
-    git = shutil.which("git")
-    if git is None:
-        raise FileNotFoundError(GIT_MISSING_MESSAGE)
-    result = subprocess.run(
-        [git, "ls-files", "-z", "src"],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-    )
-    files: list[Path] = []
-    for raw in result.stdout.split(b"\0"):
-        if raw == b"":
-            continue
-        relative = Path(raw.decode())
-        if relative.suffix != ".py" or "migrations" in relative.parts:
-            continue
-        files.append(REPO_ROOT / relative)
-    return files
 
 
 def _load_baseline(path: Path) -> set[str]:
