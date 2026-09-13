@@ -114,6 +114,23 @@ describe("表格架构", () => {
     });
     expect(violations).toEqual([]);
   });
+
+  test("人员列 key 只匹配 owners/developers 与人员标识后缀, 不含 superuser/enduser_id", () => {
+    expect(PERSON_COLUMN_KEY.test("owners")).toBe(true);
+    expect(PERSON_COLUMN_KEY.test("developers")).toBe(true);
+    expect(PERSON_COLUMN_KEY.test("user_id")).toBe(true);
+    expect(PERSON_COLUMN_KEY.test("user_ids")).toBe(true);
+    expect(PERSON_COLUMN_KEY.test("owner_user_id")).toBe(true);
+    expect(PERSON_COLUMN_KEY.test("originator_user_id")).toBe(true);
+    expect(PERSON_COLUMN_KEY.test("current_approvers")).toBe(true);
+    expect(PERSON_COLUMN_KEY.test("to_assignee")).toBe(true);
+    expect(PERSON_COLUMN_KEY.test("task_subject")).toBe(true);
+    expect(PERSON_COLUMN_KEY.test("superuser")).toBe(false);
+    expect(PERSON_COLUMN_KEY.test("enduser_id")).toBe(false);
+    expect(PERSON_COLUMN_KEY.test("approver")).toBe(false);
+    expect(PERSON_COLUMN_KEY.test("subject")).toBe(false);
+    expect(PERSON_ARRAY_FIELD.test("enduser_ids")).toBe(false);
+  });
 });
 
 /**
@@ -121,10 +138,20 @@ describe("表格架构", () => {
  */
 const ALLOWED_PERSON_ID_DISPLAY: Record<string, string> = {};
 
+/**
+ * 人员字段名: 整段 token, 不允许 superuser / enduser_id 这种含 user 的标识符误伤。
+ * user_id(s)/userids 可单独出现或带前缀(owner_user_id); approver/originator/assignee/subject
+ * 必须带下划线前缀, 以免误伤配置问题的 subject、申请表的审批人姓名列。
+ */
+const PERSON_ID_TOKEN = "(?:user_ids?|userids)";
+const PERSON_ROLE_TOKEN = "(?:approvers?|originator|assignee|subject)";
+const PERSON_FIELD = new RegExp(
+  `^(?:owners|developers|(?:[A-Za-z0-9]+_)*${PERSON_ID_TOKEN}|(?:[A-Za-z0-9]+_)${PERSON_ROLE_TOKEN})$`,
+);
 /** 人员 ID 数组字段: 把它们 join 成单元格就是 UUID 回归。单数 user_id 常作姓名回退, 不在此列。 */
-const PERSON_ARRAY_FIELD = /^(?:owners|developers|[A-Za-z0-9_]*user_ids|[A-Za-z0-9_]*userids)$/;
+const PERSON_ARRAY_FIELD = /^(?:owners|developers|(?:[A-Za-z0-9]+_)*(?:user_ids|userids)|(?:[A-Za-z0-9]+_)approvers)$/;
 /** textColumn 的 key 若是人员标识(含单数 user_id), 同样禁止。 */
-const PERSON_COLUMN_KEY = /^(?:owners|developers|[A-Za-z0-9_]*user_ids?|[A-Za-z0-9_]*userids)$/;
+const PERSON_COLUMN_KEY = PERSON_FIELD;
 
 function personIdDisplayViolations(file: string): string[] {
   const content = stripComments(readFileSync(file, "utf8"));
