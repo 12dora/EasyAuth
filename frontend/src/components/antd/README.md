@@ -103,9 +103,10 @@ class 名与选择器必须成对存在，`AppTable.test.tsx` 会把那张样式
 所有预设都是泛型的，`title` 由调用方传**已本地化**的节点；预设自带的文案走 `table.*` i18n。
 
 ```ts
-statusColumn<T>({ key, title, options, getValue?, width?, filter? = true }): ColumnType<T>
+statusColumn<T>({ key, title, options, getValue?, width?, filter? = true, sorter? = false }): ColumnType<T>
 // options: { value: string; label: ReactNode; tone?: BadgeTone }[]
 // 渲染 <Badge tone>；内建 enumFilter；未知值按 neutral 原样显示；空值 "-"
+// sorter: 按 options 声明顺序比较, 未知值排最后
 
 dateTimeColumn<T>({ key, title, getValue?, width? = 170, sorter? = true }): ColumnType<T>
 // 走 useI18n().formatDateTime(跟随界面语言)；sorter 按时间戳比较
@@ -113,18 +114,24 @@ dateTimeColumn<T>({ key, title, getValue?, width? = 170, sorter? = true }): Colu
 textColumn<T>({ key, title, getValue?, filter? = false, sorter? = false,
                 ellipsis? = true, mono? = false, width? }): ColumnType<T>
 // filter -> textFilter 子串筛选；sorter -> localeCompare；mono -> 等宽 code 展示；空值 "-"
+// 客户端分页表给数据列传 sorter: true
 
-userColumn<T>({ getName, getUserId?, getSecondary?, key? = "user", title?, filter? = false, width? }): ColumnType<T>
+userColumn<T>({ getName, getUserId?, getSecondary?, key? = "user", title?,
+                filter? = false, sorter? = false, width? }): ColumnType<T>
 // 显示名(粗体) + 次行两行, 沿用 ConsoleTeamMemberTable 的成员单元格排版
 // 次行超长时由 TruncatedText 在真正截断后用 Tooltip 展示全文
 // 人员部门请走 personColumn, 不要把 Authentik UUID 传到 getUserId 当次行
 // 仓库里没有表格内头像的先例, 因此不渲染头像
+// sorter: 先姓名后次行, localeCompare("zh-Hans-CN")
 
-personColumn<T>({ getName, getUserId, getDepartment?, getAccountKind?, t, ... }): ColumnType<T>
+personColumn<T>({ getName, getUserId, getDepartment?, getAccountKind?, t, key? = "user", title?,
+                  filter? = false, sorter? = false, width? }): ColumnType<T>
 // 姓名 + 部门路径(或「本地用户」); getAccountKind 必须传入, 次行绝不出 UUID
+// sorter 同 userColumn
 
-peopleColumn<T>({ getPeople, t, key?, title?, filter?, width? }): ColumnType<T>
+peopleColumn<T>({ getPeople, t, key?, title?, filter?, sorter? = false, width? }): ColumnType<T>
 // 多名 PersonRef 纵向堆叠姓名/部门, 应用列表负责人列走这里, 禁止 textColumn + safeJoin
+// sorter: 按堆叠顺序逐人比较姓名然后次行
 
 actionsColumn<T>({ render, title?, width? = ACTIONS_COLUMN_DEFAULT_WIDTH, fixed? = "right", key? = "actions" }): ColumnType<T>
 // render: (record, index) => ReactNode, 右对齐 / 不换行 / 点击不冒泡到行
@@ -140,8 +147,11 @@ serverSortColumn<T>(column, sort: ServerSortState): ColumnType<T>
 ```
 
 `dateTimeColumn` 默认自带时间戳比较函数、`textColumn({ sorter: true })` 默认按
-localeCompare 比较 —— **这两个默认值只在客户端表格上成立**。服务端分页表上一律
-过 `serverSortColumn`(它会覆盖掉传进来的比较函数); 后端排不了的列干脆不给 sorter。
+localeCompare 比较、`statusColumn({ sorter: true })` 按 options 下标、
+`userColumn` / `personColumn` / `peopleColumn` 的 `sorter: true` 按姓名然后次行 ——
+**这些比较函数只在客户端表格上成立**。服务端分页表上一律过 `serverSortColumn`
+(它会覆盖掉传进来的比较函数)。产品口径是「每个数据列都能点表头排序」,
+操作列是唯一例外。
 
 操作列里的按钮/链接只能用本目录的这两个预设(分别是仓库自研 `components/Button`
 与 `components/ButtonLink` 的 `size="sm"` 版本):
@@ -261,11 +271,15 @@ serverSortColumn(
    参数的来源), 交给 antd 内部状态会让表头指示器和实际请求参数对不上; 而且别的列
    排序时本列必须显式回到 `null`, 否则会同时亮起两个指示器。
 
-后端**排不了**的列一律不给 sorter(而不是留一个只作用于当前页的客户端排序):
-应用列表的负责人、交接单的负责人与阻塞、审批实例的业务单号、清单版本的导入人……
+服务端分页表的每一个数据列都过 `serverSortColumn`, 映射表里列上每一个
+可点的表头。运营分区(待审批 / 授权明细 / 审计)不走 `useServerTable` 的内部状态,
+但排序仍然复用 `orderingSerializer` / `sortValueFromSorter` / `searchParamsWithOrdering`,
+把 `ordering` 写进 URL, 列上的 `sortOrder` 从同一份查询串回填。
 
 各页的「列 key -> 后端公开字段名」映射表就写在对应的 hook 里(常量名 `*_ORDERING_FIELDS`),
 和建表的 `useServerTable(...)` 挨着, 改后端允许的排序字段时一处就能对齐。
+列 key 就是后端 `ordering` 取值, 除非映射表里另有对应(保留已有映射, 例如
+`app` → `app_key`、`originator_user_id` → `originator`)。
 
 ## 服务端分页 — `useServerTable`
 

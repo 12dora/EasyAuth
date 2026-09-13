@@ -27,6 +27,47 @@ export const MONO_TEXT_CLASS = "font-mono text-body leading-5 text-ink-soft";
  */
 export const MONO_WRAP_TEXT_CLASS = cn(MONO_TEXT_CLASS, "whitespace-normal break-all");
 
+/** 人员列客户端排序的 locale: 姓名与次行都按中文排序。 */
+export const PERSON_SORT_LOCALE = "zh-Hans-CN";
+
+/**
+ * 状态列客户端比较: 按 `options` 声明顺序, 未出现在 options 里的值(含空值)排最后。
+ * 同位时再按取值本身比较, 保证未知值之间顺序稳定。
+ */
+export function compareStatusByOptionIndex(
+  left: string | undefined,
+  right: string | undefined,
+  options: readonly { value: string }[],
+): number {
+  const rank = (value: string | undefined): number => {
+    if (value === undefined || value === "") {
+      return options.length;
+    }
+    const index = options.findIndex((option) => option.value === value);
+    return index === -1 ? options.length : index;
+  };
+  const leftRank = rank(left);
+  const rightRank = rank(right);
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+  return String(left ?? "").localeCompare(String(right ?? ""), PERSON_SORT_LOCALE);
+}
+
+/**
+ * 人员 / 用户列客户端比较: 先姓名(主行)后次行, 都走 `zh-Hans-CN`。
+ */
+export function comparePersonLines(
+  left: { name: string; secondary: string },
+  right: { name: string; secondary: string },
+): number {
+  const nameCmp = left.name.localeCompare(right.name, PERSON_SORT_LOCALE);
+  if (nameCmp !== 0) {
+    return nameCmp;
+  }
+  return left.secondary.localeCompare(right.secondary, PERSON_SORT_LOCALE);
+}
+
 /**
  * 共享列预设。页面只声明「这列是什么语义」, 渲染、筛选、排序、宽度、
  * 对齐全部由这里决定; 以后要改表格里的状态徽章或时间格式, 只改这个文件。
@@ -126,6 +167,11 @@ export interface StatusColumnConfig<T> {
   width?: number;
   /** 关闭内建的枚举筛选(默认开启)。 */
   filter?: boolean;
+  /**
+   * 开启按 options 声明顺序的客户端排序; 未知值排在最后。
+   * 服务端分页表不要开, 改过 `serverSortColumn`(它会覆盖掉比较函数)。
+   */
+  sorter?: boolean;
 }
 
 /**
@@ -137,6 +183,7 @@ export function statusColumn<T>({
   getValue,
   key,
   options,
+  sorter = false,
   title,
   width,
 }: StatusColumnConfig<T>): ColumnType<T> {
@@ -164,6 +211,9 @@ export function statusColumn<T>({
           options.map((option) => ({ label: option.label, value: option.value })),
           { getValue: (record) => read(record) ?? null },
         )
+      : {}),
+    ...(sorter
+      ? { sorter: (a: T, b: T) => compareStatusByOptionIndex(read(a), read(b), options) }
       : {}),
   };
 }
@@ -302,6 +352,11 @@ export interface UserColumnConfig<T> {
   mono?: boolean;
   /** 开启文本筛选(同时匹配显示名与次行)。 */
   filter?: boolean;
+  /**
+   * 开启客户端排序: 先主行姓名, 再次行, 都走 `zh-Hans-CN`。
+   * 服务端分页表不要开, 改过 `serverSortColumn`。
+   */
+  sorter?: boolean;
   width?: number;
 }
 
@@ -317,6 +372,8 @@ export interface PersonColumnConfig<T> {
   /** 本地账号次行文案需要 t("user.localAccount")。 */
   t: Translator;
   filter?: boolean;
+  /** 开启客户端排序(姓名然后次行); 服务端表改过 `serverSortColumn`。 */
+  sorter?: boolean;
   width?: number;
 }
 
@@ -326,6 +383,8 @@ export interface PeopleColumnConfig<T> {
   getPeople: (record: T) => readonly PersonRef[] | null | undefined;
   t: Translator;
   filter?: boolean;
+  /** 开启客户端排序: 按堆叠顺序逐人比较姓名然后次行。服务端表改过 `serverSortColumn`。 */
+  sorter?: boolean;
   width?: number;
 }
 
@@ -343,6 +402,7 @@ export function userColumn<T>({
   getSecondary,
   mono,
   key = "user",
+  sorter = false,
   title,
   width,
 }: UserColumnConfig<T>): ColumnType<T> {
@@ -393,6 +453,18 @@ export function userColumn<T>({
           },
         })
       : {}),
+    ...(sorter
+      ? {
+          sorter: (a: T, b: T) => {
+            const left = read(a);
+            const right = read(b);
+            return comparePersonLines(
+              { name: left.name || left.userId, secondary: left.secondary },
+              { name: right.name || right.userId, secondary: right.secondary },
+            );
+          },
+        }
+      : {}),
   };
 }
 
@@ -407,6 +479,7 @@ export function personColumn<T>({
   getName,
   getUserId,
   key = "user",
+  sorter = false,
   t,
   title,
   width,
@@ -426,6 +499,7 @@ export function personColumn<T>({
       ),
     key,
     mono: false,
+    sorter,
     title,
     width,
   });
@@ -439,11 +513,16 @@ export function peopleColumn<T>({
   filter = false,
   getPeople,
   key = "people",
+  sorter = false,
   t,
   title,
   width,
 }: PeopleColumnConfig<T>): ColumnType<T> {
   const read = (record: T) => getPeople(record) ?? [];
+  const line = (person: PersonRef) => ({
+    name: person.name || person.user_id,
+    secondary: userSecondaryLabel(person, t),
+  });
 
   return {
     key,
@@ -469,6 +548,27 @@ export function peopleColumn<T>({
               .map((person) => `${person.name || person.user_id} ${userSecondaryLabel(person, t)}`)
               .join(" "),
         })
+      : {}),
+    ...(sorter
+      ? {
+          sorter: (a: T, b: T) => {
+            const left = read(a);
+            const right = read(b);
+            const n = Math.max(left.length, right.length);
+            for (let index = 0; index < n; index += 1) {
+              const leftPerson = left[index];
+              const rightPerson = right[index];
+              const cmp = comparePersonLines(
+                leftPerson ? line(leftPerson) : { name: "", secondary: "" },
+                rightPerson ? line(rightPerson) : { name: "", secondary: "" },
+              );
+              if (cmp !== 0) {
+                return cmp;
+              }
+            }
+            return 0;
+          },
+        }
       : {}),
   };
 }

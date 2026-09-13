@@ -13,6 +13,10 @@ import {
   AppTable,
   dateRangeFilter,
   orderingSerializer,
+  parseOrderingParam,
+  searchParamsWithOrdering,
+  sortStateFromOrdering,
+  sortValueFromSorter,
   decodeDateRange,
   encodeDateRange,
   enumFilter,
@@ -452,8 +456,8 @@ describe("orderingSerializer + serverSortColumn", () => {
     expect(serialize({ field: "submitted_at", order: "ascend" })).toEqual({ ordering: "created_at" });
     expect(serialize({ field: "submitted_at", order: "descend" })).toEqual({ ordering: "-created_at" });
     expect(serialize({ field: "app", order: "ascend" })).toEqual({ ordering: "app_key" });
-    // 后端排不了的列(页面也不该给它 sorter): 不带排序参数, 由后端用默认序。
-    expect(serialize({ field: "owners", order: "ascend" })).toEqual({});
+    // 映射表里没有的列不产生排序参数, 由后端用默认序。
+    expect(serialize({ field: "unknown", order: "ascend" })).toEqual({});
     // 参数名可改, 拼法只此一份。
     expect(orderingSerializer({ name: "name" }, "sort")({ field: "name", order: "descend" })).toEqual({
       sort: "-name",
@@ -502,6 +506,39 @@ describe("orderingSerializer + serverSortColumn", () => {
     await sortByColumn(user, "Name");
     await waitFor(() => expect(seen.at(-1)).toEqual({ page: 1, page_size: 10, ordering: "-name" }));
     expect(columnSortOrder("Name")).toBe("descend");
+  });
+
+  test("parseOrderingParam 按映射表反向还原列 key 与升降序", () => {
+    const map = { submitted_at: "created_at", app: "app_key", user_id: "user" } as const;
+    expect(parseOrderingParam("created_at", map)).toEqual({ field: "submitted_at", order: "ascend" });
+    expect(parseOrderingParam("-user", map)).toEqual({ field: "user_id", order: "descend" });
+    expect(parseOrderingParam("user_id", map)).toBeUndefined();
+    expect(parseOrderingParam("", map)).toBeUndefined();
+    expect(sortStateFromOrdering("-app_key", map)).toEqual({ sortField: "app", sortOrder: "descend" });
+  });
+
+  test("searchParamsWithOrdering 把 ordering 写进 URL 并回到第 1 页", () => {
+    const map = { user_id: "user", status: "status" } as const;
+    const current = new URLSearchParams("page=3&page_size=20&status=submitted");
+    const next = searchParamsWithOrdering(current, { field: "user_id", order: "descend" }, map);
+    expect(next.get("ordering")).toBe("-user");
+    expect(next.get("page")).toBe("1");
+    expect(next.get("status")).toBe("submitted");
+    const cleared = searchParamsWithOrdering(next, undefined, map);
+    expect(cleared.get("ordering")).toBeNull();
+    expect(cleared.get("page")).toBe("1");
+  });
+
+  test("sortValueFromSorter 收成单字段, 取消排序时返回 undefined", () => {
+    expect(sortValueFromSorter({ columnKey: "status", order: "ascend" })).toEqual({
+      field: "status",
+      order: "ascend",
+    });
+    expect(sortValueFromSorter({ columnKey: "status", order: undefined })).toBeUndefined();
+    expect(sortValueFromSorter([{ columnKey: "app", field: "app", order: "descend" }])).toEqual({
+      field: "app",
+      order: "descend",
+    });
   });
 });
 
