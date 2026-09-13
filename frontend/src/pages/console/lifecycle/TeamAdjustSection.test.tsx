@@ -58,6 +58,30 @@ describe("TeamAdjustSection", () => {
     });
   });
 
+  test("可编辑且未选人时 Field hint 是搜索提示", () => {
+    stubEmptyUserOptions();
+    renderSection([pendingItem({ to_user: null })], true);
+
+    expect(screen.getByText("输入姓名或用户 ID 搜索")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "待调整团队 接任负责人" })).toBeVisible();
+  });
+
+  test("可编辑接任人用 Field hint 展示部门, 不另画次行", () => {
+    stubEmptyUserOptions();
+    renderSection(
+      [
+        pendingItem({
+          to_user: { user_id: "u-8", name: "赵六", department: "客服部" },
+        }),
+      ],
+      true,
+    );
+
+    expect(screen.getByText("客服部")).toBeVisible();
+    expect(screen.queryByText("输入姓名或用户 ID 搜索")).not.toBeInTheDocument();
+    expect(screen.queryByText("u-8")).not.toBeInTheDocument();
+  });
+
   test("已指定接任人的完成态展示姓名与部门", () => {
     renderSection(
       [
@@ -119,6 +143,13 @@ function task(team_items: HandoverTeamItemRow[]): HandoverTaskDetail {
     actions: [],
     team_items,
   };
+}
+
+function stubEmptyUserOptions() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async () => jsonResponse({ data: [] })),
+  );
 }
 
 function jsonResponse(payload: unknown) {

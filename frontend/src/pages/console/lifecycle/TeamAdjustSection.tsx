@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Button } from "../../../components/Button";
-import { SelectInput } from "../../../components/Field";
+import { Field, SelectInput } from "../../../components/Field";
 import { TruncatedText } from "../../../components/TruncatedText";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { useToast } from "../../../components/ui/Toast";
@@ -13,7 +13,7 @@ import {
   userSecondaryLabel,
 } from "../../../components/UserCombobox";
 import type { UserOption } from "../../../components/UserCombobox";
-import { UserSearchInput } from "../../../components/UserSelect";
+import { UserSearchInput, userSearchFieldHint } from "../../../components/UserSelect";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import type { JsonObject } from "../../../lib/api";
@@ -66,6 +66,9 @@ function TeamAdjustRow({
     item.action === "deactivate" ? "deactivate" : "assign_leader",
   );
   const [successorId, setSuccessorId] = useState(item.to_user?.user_id ?? "");
+  const [resolvedSuccessor, setResolvedSuccessor] = useState<UserOption | null>(
+    item.to_user?.name ? toUserOption(item.to_user, item.to_user.user_id) : null,
+  );
   const applyMutation = useMutation({
     mutationFn: () =>
       apiRequest(`/console/api/v1/lifecycle/handover-tasks/${taskId}/team-items/${item.id}`, {
@@ -107,12 +110,23 @@ function TeamAdjustRow({
         {action === "assign_leader" ? (
           <div className="min-w-56 flex-1">
             {canOperate ? (
-              <UserSearchInput
-                value={successorId}
-                aria-label={`${item.team_name} ${t("handover.team.successor")}`}
-                selectedOption={item.to_user?.name ? toUserOption(item.to_user, successorId) : null}
-                onChange={setSuccessorId}
-              />
+              <Field
+                label={t("handover.team.successor")}
+                hint={userSearchFieldHint(resolvedSuccessor, t, t("userSelect.searchHint"))}
+                as="group"
+              >
+                <UserSearchInput
+                  value={successorId}
+                  aria-label={`${item.team_name} ${t("handover.team.successor")}`}
+                  selectedOption={resolvedSuccessor}
+                  onChange={(value) => {
+                    setSuccessorId(value);
+                    setResolvedSuccessor(null);
+                  }}
+                  onSelectOption={setResolvedSuccessor}
+                  onResolvedOptionChange={setResolvedSuccessor}
+                />
+              </Field>
             ) : (
               <SuccessorReadOnly userId={successorId} known={item.to_user} />
             )}
