@@ -31,6 +31,13 @@ Cosign 签名并验证镜像（打 `v*.*.*` tag 时还会创建 GitHub Release�
 不得通过降低 `typeCheckingMode`、排除普通生产模块、加宽泛 `noqa` 或扩大 `per-file-ignores`
 制造绿色。静态检查失败时修根因。
 
+前端体积棘轮由 `frontend/src/codeQuality.test.ts` 用 TypeScript 编译器 API 量
+`frontend/src` 生产文件（排除 `*.test.ts(x)` 与 `i18n/messages/**`）：文件 >500 行、
+函数/组件/hook 跨度 >120 行、hook 的 useState+useEffect >8、顶层 import >25
+必须出现在 `frontend/src/codeQuality.baseline.json`，且实测值不得上升。路径不在
+baseline 则必须落在硬帽以内；已还清（实测 ≤ 硬帽）或已消失的条目必须删行。
+禁止新增 baseline 行。旧债只许还、不许借。
+
 ## 复杂度与体积棘轮
 
 Ruff `C901` / `PLR0911` / `PLR0912` / `PLR0913` / `PLR0915` 使用显式阈值
@@ -55,7 +62,7 @@ complexity=10、returns=6、branches=12、args=5、statements=50。
 | 后端文件 | 600 | 2（最大 619 `grants/query.py`） |
 | 后端函数 | 60 | 8（最大 90 `Command.handle`） |
 | 后端 C901 | 10 | 0 超标 |
-| 前端文件 | 500 | 3（最大 807 `AppTable.tsx`） |
+| 前端文件 | 500 | 1（最大 503 `OrgTree.tsx`；`AppTable.tsx` / `columns.tsx` 已拆到硬帽内） |
 | 前端函数 | 120 | 30（最大 274 `WebhookTab`） |
 | 前端 hook se | 8 | 2（最大 14） |
 | 前端 import | 25 | 0（最大 23） |

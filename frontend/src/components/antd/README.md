@@ -3,6 +3,8 @@
 全站数据表格统一走 Ant Design `Table`，页面**只允许**消费本目录导出的封装。
 `src/components/tableArchitecture.antd.test.ts` 是护栏：页面里直接 `import { Table } from "antd"`、
 手写 `<table>`、用 `useReactTable`、或引入自研表格原语都会让测试失败。
+体积棘轮见 `src/codeQuality.test.ts`：本目录生产文件超过 500 行、函数/组件超过 120 行
+必须登记在 `src/codeQuality.baseline.json`，只许拆分变短，禁止继续膨胀或扩表。
 未迁移的页面登记在该测试的 `ALLOWED_LEGACY_TABLE_FILES` 里，迁一个删一行；
 现在只剩门户 `PermissionSelector` 一族（TanStack + 原生 table，定高滚动不分页，按设计保留），
 `components/ui/Table*` 自研原语已整体删除，它需要的表格 class 搬到了

@@ -1,0 +1,42 @@
+{
+  "files": {
+    "features/orgTree/OrgTree.tsx": 503
+  },
+  "functions": {
+    "components/shell/UserSummary.tsx:UserSummary": 161,
+    "components/ui/Toast.tsx:ToastProvider": 165,
+    "components/UserSelect.tsx:UserMultiSelect": 124,
+    "features/grantForm/DepartmentSourcedGrants.tsx:DepartmentSourcedGrants": 126,
+    "features/grantForm/GrantForm.tsx:GrantForm": 237,
+    "features/handover/useHandoverActionPanel.ts:useHandoverActionPanel": 201,
+    "features/orgTree/OrgTree.tsx:OrgTree": 186,
+    "pages/console/ApprovalTemplateEditorDialog.tsx:ApprovalTemplateEditorDialog": 136,
+    "pages/console/ConsoleTeamList.tsx:ConsoleTeamList": 188,
+    "pages/console/DepartmentGrantsPage.tsx:DepartmentGrantsPage": 175,
+    "pages/console/DirectGrantPage.tsx:DirectGrantPage": 218,
+    "pages/console/lifecycle/ConsoleReassignDialog.tsx:ConsoleReassignDialog": 136,
+    "pages/console/lifecycle/HandoverTaskTable.tsx:taskColumns": 136,
+    "pages/console/lifecycle/HandoverWizard.tsx:HandoverWizard": 130,
+    "pages/console/lifecycle/OnboardingTemplateItemComposer.tsx:TemplateItemComposer": 148,
+    "pages/console/lifecycle/useHandoverWizardExecution.ts:useHandoverWizardExecution": 121,
+    "pages/console/onboarding/AutoOnboardPanel.tsx:AutoOnboardPanel": 123,
+    "pages/console/operations/useOperationsSection.ts:useOperationsSection": 148,
+    "pages/console/useConsoleTeamDetail.ts:useConsoleTeamDetail": 142,
+    "pages/console/useDepartmentGrants.ts:useDepartmentGrants": 163,
+    "pages/console/workspace/connector/useConnectorMappings.ts:useConnectorMappings": 121,
+    "pages/console/workspace/integration/NotificationChannelForm.tsx:NotificationChannelForm": 143,
+    "pages/console/workspace/tabs/CredentialsTab.tsx:CredentialsTab": 220,
+    "pages/console/workspace/tabs/RulesTab.tsx:RulesTab": 224,
+    "pages/console/workspace/tabs/WebhookTab.tsx:WebhookTab": 274,
+    "pages/portal/components/PermissionSelector.tsx:PermissionSelector": 121,
+    "pages/portal/components/PortalRequestsSection.tsx:PortalRequestsSection": 142,
+    "pages/portal/components/RequestTargetPicker.tsx:RequestTargetPicker": 145,
+    "pages/portal/components/usePortalApprovals.ts:usePortalApprovals": 127,
+    "pages/portal/PortalReassignDialog.tsx:PortalReassignDialog": 128
+  },
+  "hooksStateEffect": {
+    "features/handover/useHandoverActionPanel.ts:useHandoverActionPanel": 12,
+    "pages/portal/hooks/useAccessRequestFields.ts:useAccessRequestFields": 14
+  },
+  "imports": {}
+}
