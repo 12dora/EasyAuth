@@ -1,4 +1,4 @@
-import { Button as AntdButton, Input, Table } from "antd";
+import { Button as AntdButton, DatePicker, Input, Table } from "antd";
 import type { TablePaginationConfig, TableProps } from "antd";
 import type {
   ColumnGroupType,
@@ -10,10 +10,12 @@ import type {
   SortOrder,
   TableCurrentDataSource,
 } from "antd/es/table/interface";
+import dayjs, { type Dayjs } from "dayjs";
 import { useCallback, useMemo, useState, type Key, type ReactNode } from "react";
 
 import { useI18n } from "../../i18n/I18nProvider";
 import { cn } from "../../lib/cn";
+import type { Translator } from "../../lib/status";
 import { EmptyState } from "../ui/EmptyState";
 
 export type { ColumnGroupType, ColumnType, ColumnsType, TablePaginationConfig, TableProps };
@@ -707,11 +709,14 @@ function toSelectedKeys(value: string): Key[] {
 /* 时间范围筛选                                                        */
 /* ------------------------------------------------------------------ */
 
-/** 起止时间; 空字符串表示这一端不限。值格式跟随 `inputType`(默认 datetime-local)。 */
+/** 起止时间; 空字符串表示这一端不限。写入 URL / 后端的是 ISO 8601 datetime。 */
 export interface DateRangeValue {
   from: string;
   to: string;
 }
+
+/** 工具栏与表头筛选共用的 RangePicker 宽度。 */
+export const DATE_RANGE_CONTROL_WIDTH_PX = 260;
 
 /** 起止两端编码进同一个筛选值时的分隔符。 */
 const DATE_RANGE_SEPARATOR = "~";
@@ -728,11 +733,102 @@ export function decodeDateRange(values: readonly unknown[] | null | undefined): 
 }
 
 export interface DateRangeFilterOptions {
-  /** 输入框类型; 默认 datetime-local, 只要日期时传 "date"。 */
-  inputType?: "datetime-local" | "date";
-  /** 覆盖两个输入框的 aria-label; 默认 `<paramKey>_from` / `<paramKey>_to`。 */
+  /** 覆盖两个输入框的占位; 默认走 i18n `table.dateRange.from` / `to`。 */
   fromLabel?: string;
   toLabel?: string;
+}
+
+export interface DateRangeControlProps {
+  value: DateRangeValue;
+  onChange: (value: DateRangeValue) => void;
+  /** 套在选择器外层的无障碍名。 */
+  ariaLabel?: string;
+  fromPlaceholder?: string;
+  toPlaceholder?: string;
+  allowClear?: boolean;
+  size?: "small" | "middle" | "large";
+  getPopupContainer?: (node: HTMLElement) => HTMLElement;
+}
+
+/**
+ * 全站唯一的日期范围控件: antd RangePicker, 预设近7天 / 近30天 / 本月。
+ * 授权明细工具栏与表头 `dateRangeFilter` 都走这里, 不要再各写一份。
+ *
+ * 展示按日; 写回 URL / 后端时 from 取当日 00:00:00、to 取当日 23:59:59,
+ * 以满足运营接口 `created_from` / `created_to` 的 ISO 8601 datetime 契约。
+ */
+export function DateRangeControl({
+  allowClear = true,
+  ariaLabel,
+  fromPlaceholder,
+  getPopupContainer,
+  onChange,
+  size = "middle",
+  toPlaceholder,
+  value,
+}: DateRangeControlProps) {
+  const { t } = useI18n();
+  const picker = (
+    <DatePicker.RangePicker
+      allowClear={allowClear}
+      allowEmpty={[true, true]}
+      format="YYYY-MM-DD"
+      getPopupContainer={getPopupContainer}
+      onChange={(dates) => onChange(fromPickerValue(dates))}
+      placeholder={[fromPlaceholder ?? t("table.dateRange.from"), toPlaceholder ?? t("table.dateRange.to")]}
+      presets={dateRangePresets(t)}
+      size={size}
+      style={{ width: DATE_RANGE_CONTROL_WIDTH_PX }}
+      value={toPickerValue(value)}
+    />
+  );
+  if (ariaLabel === undefined) {
+    return picker;
+  }
+  return (
+    <div aria-label={ariaLabel} role="group">
+      {picker}
+    </div>
+  );
+}
+
+function dateRangePresets(t: Translator): { label: string; value: [Dayjs, Dayjs] }[] {
+  const today = dayjs();
+  return [
+    { label: t("table.dateRange.preset.last7Days"), value: [today.subtract(6, "day"), today] },
+    { label: t("table.dateRange.preset.last30Days"), value: [today.subtract(29, "day"), today] },
+    { label: t("table.dateRange.preset.thisMonth"), value: [today.startOf("month"), today.endOf("month")] },
+  ];
+}
+
+function toPickerValue(range: DateRangeValue): [Dayjs | null, Dayjs | null] | null {
+  const from = parseDateRangeBound(range.from);
+  const to = parseDateRangeBound(range.to);
+  if (from === null && to === null) {
+    return null;
+  }
+  return [from, to];
+}
+
+function fromPickerValue(dates: [Dayjs | null, Dayjs | null] | null): DateRangeValue {
+  const [from, to] = dates ?? [null, null];
+  return {
+    from: from ? formatDateRangeBound(from, "from") : "",
+    to: to ? formatDateRangeBound(to, "to") : "",
+  };
+}
+
+function parseDateRangeBound(raw: string): Dayjs | null {
+  if (raw === "") {
+    return null;
+  }
+  const parsed = dayjs(raw);
+  return parsed.isValid() ? parsed : null;
+}
+
+function formatDateRangeBound(day: Dayjs, bound: "from" | "to"): string {
+  const date = day.format("YYYY-MM-DD");
+  return bound === "from" ? `${date}T00:00:00` : `${date}T23:59:59`;
 }
 
 /** dateRangeFilter 的返回值; 直接展开到列定义上(多出来的方法 antd 会忽略)。 */
@@ -746,11 +842,11 @@ export interface DateRangeFilterColumn<T> extends Required<Pick<ColumnType<T>, "
 }
 
 /**
- * 时间范围筛选。antd 只内建「文本 / 枚举」两种筛选, 时间范围要自定义下拉,
- * 这里沿用 textFilter 下拉的结构(输入区 + 重置/确定), 只把输入换成两个时间框。
+ * 时间范围筛选。antd 只内建「文本 / 枚举」两种筛选, 时间范围要自定义下拉;
+ * 输入区走全站共用的 `DateRangeControl`(RangePicker + 预设)。
  *
- * `paramKey` 决定后端参数名与输入框 aria-label(默认 "created" -> created_from /
- * created_to)。起止两端编码进同一个筛选值, 因此一列只占 antd 的一个筛选槽。
+ * `paramKey` 决定后端参数名(默认 "created" -> created_from / created_to)。
+ * 起止两端编码进同一个筛选值, 因此一列只占 antd 的一个筛选槽。
  *
  * ```tsx
  * const submittedRange = dateRangeFilter<Row>("submitted");
@@ -765,10 +861,10 @@ export function dateRangeFilter<T>(
   paramKey = "created",
   options: DateRangeFilterOptions = {},
 ): DateRangeFilterColumn<T> {
-  const { fromLabel = `${paramKey}_from`, inputType = "datetime-local", toLabel = `${paramKey}_to` } = options;
+  const { fromLabel, toLabel } = options;
   return {
     filterDropdown: (props: FilterDropdownProps) => (
-      <DateRangeFilterDropdown {...props} fromLabel={fromLabel} inputType={inputType} toLabel={toLabel} />
+      <DateRangeFilterDropdown {...props} fromLabel={fromLabel} toLabel={toLabel} />
     ),
     decode: decodeDateRange,
     encode: encodeDateRange,
@@ -789,30 +885,20 @@ function DateRangeFilterDropdown({
   clearFilters,
   confirm,
   fromLabel,
-  inputType,
   selectedKeys,
   setSelectedKeys,
   toLabel,
-}: FilterDropdownProps & { fromLabel: string; inputType: string; toLabel: string }) {
+}: FilterDropdownProps & { fromLabel?: string; toLabel?: string }) {
   const { t } = useI18n();
-  const { from, to } = decodeDateRange(selectedKeys);
 
   return (
     // 下拉内部的键盘事件不能冒泡到表头, 否则空格/回车会触发排序。
-    <div className="flex w-64 flex-col gap-2 p-2" onKeyDown={(event) => event.stopPropagation()}>
-      <Input
-        aria-label={fromLabel}
-        onChange={(event) => setSelectedKeys(encodeDateRange({ from: event.target.value, to }))}
-        size="small"
-        type={inputType}
-        value={from}
-      />
-      <Input
-        aria-label={toLabel}
-        onChange={(event) => setSelectedKeys(encodeDateRange({ from, to: event.target.value }))}
-        size="small"
-        type={inputType}
-        value={to}
+    <div className="flex flex-col gap-2 p-2" onKeyDown={(event) => event.stopPropagation()}>
+      <DateRangeControl
+        fromPlaceholder={fromLabel}
+        onChange={(range) => setSelectedKeys(encodeDateRange(range))}
+        toPlaceholder={toLabel}
+        value={decodeDateRange(selectedKeys)}
       />
       <div className="flex items-center justify-end gap-2">
         <AntdButton

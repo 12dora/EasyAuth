@@ -185,6 +185,7 @@ export function useOperationsSection(section: string, config: OperationSectionCo
     section,
     searchParams: params.searchParams,
     updateSearchParam: params.updateSearchParam,
+    updateSearchParams: params.updateSearchParams,
     query,
     rowCount,
     table,

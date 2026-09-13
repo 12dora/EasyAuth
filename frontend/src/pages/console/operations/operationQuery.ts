@@ -76,13 +76,18 @@ function positiveInteger(value: string | null, fallback: number): number {
 
 const SECTION_FILTER_KEYS: Record<string, string[]> = {
   "access-requests": ["app_key", "user_id", "status", "created_from", "created_to"],
-  "access-grants": ["app_key", "user_id", "status", "created_from", "created_to"],
+  "access-grants": ["app_key", "user_id", "user_query", "status", "created_from", "created_to"],
   audit: ["app_key", "actor_id", "created_from", "created_to"],
 };
+
+export const USER_QUERY_PARAM = "user_query";
 
 /**
  * 列 key -> 后端 `ordering` 字段。列 key 就是 ordering 取值, 除非合同另有映射:
  * 待审批 / 授权明细的用户列 key 是 `user_id`, 后端字段叫 `user`。
+ *
+ * 授权明细未传 ordering 时后端默认 user__name, app__app_key, -version, pk;
+ * 这是后端默认序, 表头不设排序指示器(表格一律不设默认排序)。
  */
 export const ACCESS_REQUEST_ORDERING_FIELDS = {
   id: "id",

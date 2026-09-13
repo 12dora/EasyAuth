@@ -4,13 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { useState } from "react";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { I18nProvider } from "../../i18n/I18nProvider";
 import { AppConfigProvider } from "./AppConfigProvider";
 import {
   APP_TABLE_PAGINATION_CLASS,
   AppTable,
+  DateRangeControl,
   dateRangeFilter,
   orderingSerializer,
   parseOrderingParam,
@@ -697,6 +698,10 @@ describe("serverColumn", () => {
 });
 
 describe("dateRangeFilter", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   test("起止编解码与后端参数名", () => {
     const range = dateRangeFilter<Row>("submitted");
 
@@ -718,7 +723,31 @@ describe("dateRangeFilter", () => {
     expect(decodeDateRange(encodeDateRange({ from: "a", to: "b" }))).toEqual({ from: "a", to: "b" });
   });
 
-  test("下拉里两个时间输入 + 确定, 把起止编码进同一个筛选值回传 onChange", async () => {
+  test("DateRangeControl 把 datetime 显示为日期, 清除后写回空区间", async () => {
+    const user = userEvent.setup({ delay: null });
+    const onChange = vi.fn();
+    renderWithAntd(
+      <DateRangeControl
+        ariaLabel="创建时间"
+        onChange={onChange}
+        value={{ from: "2026-07-01T08:30:00", to: "2026-07-10T18:00:00" }}
+      />,
+    );
+
+    const group = screen.getByRole("group", { name: "创建时间" });
+    const inputs = within(group).getAllByRole("textbox");
+    expect(inputs[0]).toHaveValue("2026-07-01");
+    expect(inputs[1]).toHaveValue("2026-07-10");
+
+    const picker = group.querySelector(".ant-picker");
+    expect(picker).toBeTruthy();
+    fireEvent.mouseEnter(picker as HTMLElement);
+    await user.click(group.querySelector(".ant-picker-clear") as HTMLElement);
+    expect(onChange).toHaveBeenCalledWith({ from: "", to: "" });
+  });
+
+  test("下拉里的 RangePicker 经确定把起止编码进同一个筛选值回传 onChange", async () => {
+    vi.useFakeTimers({ now: new Date("2026-09-13T12:00:00+08:00"), toFake: ["Date"] });
     const user = userEvent.setup({ delay: null });
     const onChange = vi.fn();
     const column: ColumnType<Row> = {
@@ -737,18 +766,21 @@ describe("dateRangeFilter", () => {
     );
 
     const dropdown = await openHeaderFilter(user, "时间");
-    // aria-label 默认按 `<paramKey>_from` / `<paramKey>_to` 生成。
-    fireEvent.change(within(dropdown).getByLabelText("created_from"), { target: { value: "2026-01-01T00:00" } });
-    fireEvent.change(within(dropdown).getByLabelText("created_to"), { target: { value: "2026-02-01T00:00" } });
+    await user.click(within(dropdown).getByPlaceholderText("开始日期"));
+    await user.click(await screen.findByText("近7天"));
     await user.click(within(dropdown).getByRole("button", { name: "确定" }));
 
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const filters = onChange.mock.calls.at(-1)?.[1] as Record<string, FilterValue | null>;
-    expect(filters.updated_at).toEqual(["2026-01-01T00:00~2026-02-01T00:00"]);
-    expect(decodeDateRange(filters.updated_at)).toEqual({ from: "2026-01-01T00:00", to: "2026-02-01T00:00" });
+    expect(decodeDateRange(filters.updated_at)).toEqual({
+      from: "2026-09-07T00:00:00",
+      to: "2026-09-13T23:59:59",
+    });
+    vi.useRealTimers();
   });
 
   test("重置清空两端并回传未筛选", async () => {
+    vi.useFakeTimers({ now: new Date("2026-09-13T12:00:00+08:00"), toFake: ["Date"] });
     const user = userEvent.setup({ delay: null });
     const onChange = vi.fn();
     const column: ColumnType<Row> = {
@@ -767,7 +799,8 @@ describe("dateRangeFilter", () => {
     );
 
     const dropdown = await openHeaderFilter(user, "时间");
-    fireEvent.change(within(dropdown).getByLabelText("created_from"), { target: { value: "2026-01-01T00:00" } });
+    await user.click(within(dropdown).getByPlaceholderText("开始日期"));
+    await user.click(await screen.findByText("近7天"));
     await user.click(within(dropdown).getByRole("button", { name: "确定" }));
     await waitFor(() => expect(onChange).toHaveBeenCalled());
 
@@ -778,6 +811,7 @@ describe("dateRangeFilter", () => {
       const filters = onChange.mock.calls.at(-1)?.[1] as Record<string, FilterValue | null>;
       expect(filters.updated_at ?? null).toBeNull();
     });
+    vi.useRealTimers();
   });
 });
 

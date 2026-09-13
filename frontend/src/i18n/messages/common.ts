@@ -205,6 +205,16 @@ export const zhCN = {
 
   "table.filter.inputLabel": "筛选关键字",
 
+  "table.dateRange.from": "开始日期",
+
+  "table.dateRange.to": "结束日期",
+
+  "table.dateRange.preset.last7Days": "近7天",
+
+  "table.dateRange.preset.last30Days": "近30天",
+
+  "table.dateRange.preset.thisMonth": "本月",
+
   "table.empty.title": "暂无数据",
 
   "table.column.user": "用户",
@@ -424,6 +434,16 @@ export const en: Record<keyof typeof zhCN, string> = {
   "table.filter.reset": "Reset",
 
   "table.filter.inputLabel": "Filter keyword",
+
+  "table.dateRange.from": "Start date",
+
+  "table.dateRange.to": "End date",
+
+  "table.dateRange.preset.last7Days": "Last 7 days",
+
+  "table.dateRange.preset.last30Days": "Last 30 days",
+
+  "table.dateRange.preset.thisMonth": "This month",
 
   "table.empty.title": "No data",
 

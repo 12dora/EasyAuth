@@ -38,6 +38,7 @@ export const zhCN = {
   "console.operations.grants.createdRange": "创建时间",
   "console.operations.grants.createdRangeStart": "起",
   "console.operations.grants.createdRangeEnd": "止",
+  "console.operations.userQueryPlaceholder": "搜索姓名 / 拼音 / 用户 ID",
 
   "console.rules.heading": "审批规则",
   "console.rules.column.target": "对象",
@@ -150,6 +151,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "console.operations.grants.createdRange": "Created between",
   "console.operations.grants.createdRangeStart": "start",
   "console.operations.grants.createdRangeEnd": "end",
+  "console.operations.userQueryPlaceholder": "Search name, pinyin, or user ID",
 
   "console.rules.heading": "Approval rules",
   "console.rules.column.target": "Target",

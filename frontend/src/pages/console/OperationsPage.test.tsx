@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -21,6 +21,7 @@ vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 describe("OperationsPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
     document.body.dataset.currentUserRole = "";
     document.documentElement.dataset.currentUserRole = "";
   });
@@ -75,17 +76,7 @@ describe("OperationsPage", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       if (String(input) === "/console/api/v1/audit-logs?page=1&page_size=20") {
         return jsonResponse({
-          data: [
-            {
-              actor_type: "user",
-              actor_id: "admin-1",
-              event_type: "grant.approved",
-              target_type: "access_request",
-              target_id: "req-9",
-              metadata: { app_key: "crm" },
-              created_at: "2026-07-02T00:00:00Z",
-            },
-          ],
+          data: [auditLogRow()],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
       }
@@ -104,6 +95,56 @@ describe("OperationsPage", () => {
     });
     // 审计行无 user_id/status 列语义, 不应出现访问申请列。
     expect(screen.queryByRole("columnheader", { name: "提交时间" })).not.toBeInTheDocument();
+  });
+
+  test("审计操作者有 actor_person 时按姓名与部门展示, 不暴露裸 ID", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      if (String(input) === "/console/api/v1/audit-logs?page=1&page_size=20") {
+        return jsonResponse({
+          data: [
+            auditLogRow({
+              actor_person: {
+                user_id: "admin-1",
+                name: "李管理员",
+                department: "捷发-信息部",
+                account_kind: "directory",
+              },
+            }),
+          ],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderOperationsPage("audit");
+
+    expect(await screen.findByText("李管理员")).toBeInTheDocument();
+    expect(screen.getByText("捷发-信息部")).toBeInTheDocument();
+    expect(screen.queryByText("user:admin-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("admin-1")).not.toBeInTheDocument();
+  });
+
+  test("审计行缺少 actor_person 时整页报加载失败, 不静默丢字段", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      if (String(input) === "/console/api/v1/audit-logs?page=1&page_size=20") {
+        const { actor_person: _dropped, ...rowWithoutActorPerson } = auditLogRow();
+        return jsonResponse({
+          data: [rowWithoutActorPerson],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderOperationsPage("audit");
+
+    expect(await screen.findByText("运营数据加载失败")).toBeInTheDocument();
+    expect(screen.getByText(/actor_person/)).toBeInTheDocument();
   });
 
   test("未知运营分区显示 404 且不回退访问申请列表", async () => {
@@ -286,21 +327,14 @@ describe("OperationsPage", () => {
       const url = String(input);
       if (url.startsWith("/console/api/v1/audit-logs?")) {
         return jsonResponse({
-          data: [{
-            actor_type: "user",
-            actor_id: "admin-1",
-            event_type: "grant.approved",
-            target_type: "access_request",
-            target_id: "req-9",
-            metadata: { app_key: "crm" },
-            created_at: "2026-07-02T00:00:00Z",
-          }],
+          data: [auditLogRow()],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers({ now: new Date("2026-09-13T12:00:00+08:00"), toFake: ["Date"] });
     const user = userEvent.setup({ delay: null });
 
     renderOperationsPage("audit");
@@ -308,17 +342,17 @@ describe("OperationsPage", () => {
     await screen.findByText("grant.approved");
 
     const timeFilter = await openHeaderFilter(user, "时间");
-    await user.type(within(timeFilter).getByLabelText("created_from"), "2026-07-01T08:30");
-    await user.type(within(timeFilter).getByLabelText("created_to"), "2026-07-10T18:00");
+    await user.click(within(timeFilter).getByPlaceholderText("开始日期"));
+    await user.click(await screen.findByText("近7天"));
     await user.click(within(timeFilter).getByRole("button", { name: "确定" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(
-        "/console/api/v1/audit-logs?page=1&page_size=20&created_from=2026-07-01T08%3A30&created_to=2026-07-10T18%3A00",
+        "/console/api/v1/audit-logs?page=1&page_size=20&created_from=2026-09-07T00%3A00%3A00&created_to=2026-09-13T23%3A59%3A59",
         expect.objectContaining({ credentials: "include" }),
       );
     });
-    expect(screen.getByTestId("location-search")).toHaveTextContent("created_from=2026-07-01T08%3A30");
+    expect(screen.getByTestId("location-search")).toHaveTextContent("created_from=2026-09-07T00%3A00%3A00");
   });
 
   test("展示失败原因并通过带原因确认框重试授权(FF-21)", async () => {
@@ -454,6 +488,8 @@ describe("OperationsPage", () => {
     // 版本不再单独占列: 列表默认只给当前版本。
     expect(screen.queryByRole("columnheader", { name: /授权版本/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: /当前版本/ })).not.toBeInTheDocument();
+    // 表格一律不设默认排序: 后端默认按用户姓名排, 表头不带指示器, 请求不带 ordering。
+    expect(columnSortOrder("用户")).toBeNull();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/console/api/v1/operations/access-grants?page=1&page_size=20&current_only=true",
@@ -623,7 +659,7 @@ describe("OperationsPage", () => {
     expect(screen.queryByText("暂无运营数据")).not.toBeInTheDocument();
   });
 
-  test("授权列表的创建时间范围仍由表格上方控件承载并写回 URL", async () => {
+  test("授权列表的创建时间范围由 RangePicker 承载并与 URL 往返", async () => {
     // 授权列表载荷里没有 created_at 字段, 没有时间列可以挂表头筛选,
     // 因此这是全站唯一保留在表格上方的筛选控件。
     document.body.dataset.currentUserRole = "admin";
@@ -635,27 +671,34 @@ describe("OperationsPage", () => {
       throw new Error(`Unexpected fetch: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers({ now: new Date("2026-09-13T12:00:00+08:00"), toFake: ["Date"] });
     const user = userEvent.setup({ delay: null });
 
-    renderOperationsPage("access-grants", "?created_from=2026-07-01T08%3A30");
+    renderOperationsPage(
+      "access-grants",
+      "?created_from=2026-07-01T00%3A00%3A00&created_to=2026-07-10T23%3A59%3A59",
+    );
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/operations/access-grants?page=1&page_size=20&created_from=2026-07-01T08%3A30&current_only=true",
+        "/console/api/v1/operations/access-grants?page=1&page_size=20&created_from=2026-07-01T00%3A00%3A00&created_to=2026-07-10T23%3A59%3A59&current_only=true",
         expect.objectContaining({ credentials: "include" }),
       );
     });
-    expect(screen.getByText("创建时间")).toBeVisible();
-    expect(screen.getByLabelText("创建时间 起")).toHaveValue("2026-07-01T08:30");
+    const range = screen.getByRole("group", { name: "创建时间" });
+    const inputs = within(range).getAllByRole("textbox");
+    expect(inputs[0]).toHaveValue("2026-07-01");
+    expect(inputs[1]).toHaveValue("2026-07-10");
 
-    await user.type(screen.getByLabelText("创建时间 止"), "2026-07-10T18:00");
-
+    await user.click(inputs[0]);
+    await user.click(await screen.findByText("本月"));
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(
-        expect.stringContaining("created_to=2026-07-10T18%3A00"),
+        expect.stringContaining("created_from=2026-09-01T00%3A00%3A00"),
         expect.objectContaining({ credentials: "include" }),
       );
     });
+    expect(screen.getByTestId("location-search")).toHaveTextContent("created_to=2026-09-30T23%3A59%3A59");
   });
 
   test("授权列表的创建时间范围可一键清除, 且没有值时不显示清除按钮", async () => {
@@ -671,23 +714,82 @@ describe("OperationsPage", () => {
     const user = userEvent.setup({ delay: null });
 
     const { unmount } = renderOperationsPage("access-grants");
-    expect(await screen.findByLabelText("创建时间 起")).toHaveValue("");
-    expect(screen.queryByRole("button", { name: "清除" })).not.toBeInTheDocument();
+    const emptyRange = await screen.findByRole("group", { name: "创建时间" });
+    expect(emptyRange.querySelector(".ant-picker-clear")).not.toBeInTheDocument();
     unmount();
 
     renderOperationsPage(
       "access-grants",
-      "?created_from=2026-07-01T08%3A30&created_to=2026-07-10T18%3A00",
+      "?created_from=2026-07-01T00%3A00%3A00&created_to=2026-07-10T23%3A59%3A59",
     );
 
-    await user.click(await screen.findByRole("button", { name: "清除" }));
+    const range = await screen.findByRole("group", { name: "创建时间" });
+    const picker = range.querySelector(".ant-picker");
+    expect(picker).toBeTruthy();
+    fireEvent.mouseEnter(picker as HTMLElement);
+    await user.click(range.querySelector(".ant-picker-clear") as HTMLElement);
 
     await waitFor(() => {
       expect(screen.getByTestId("location-search")).not.toHaveTextContent("created_from");
     });
     expect(screen.getByTestId("location-search")).not.toHaveTextContent("created_to");
-    expect(screen.getByLabelText("创建时间 起")).toHaveValue("");
-    expect(screen.queryByRole("button", { name: "清除" })).not.toBeInTheDocument();
+    expect(within(range).getAllByRole("textbox")[0]).toHaveValue("");
+    expect(range.querySelector(".ant-picker-clear")).not.toBeInTheDocument();
+  });
+
+  test("授权明细用户模糊搜索去抖后写入 user_query, 并与 user_id 精确筛选共存", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        return jsonResponse({ data: [], pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 1 } });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage("access-grants", "?user_id=user-a");
+    const search = await screen.findByPlaceholderText("搜索姓名 / 拼音 / 用户 ID");
+    expect(search).toHaveValue("");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/operations/access-grants?page=1&page_size=20&user_id=user-a&current_only=true",
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+
+    await user.type(search, "张三");
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).toHaveTextContent("user_query");
+      expect(screen.getByTestId("location-search")).toHaveTextContent("user_id=user-a");
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        expect.stringMatching(/user_id=user-a.*user_query=|user_query=.*user_id=user-a/),
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+  });
+
+  test("授权明细从 URL 回填 user_query", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        return jsonResponse({ data: [], pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 1 } });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderOperationsPage("access-grants", "?user_query=%E5%BC%A0%E4%B8%89");
+
+    expect(await screen.findByPlaceholderText("搜索姓名 / 拼音 / 用户 ID")).toHaveValue("张三");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/operations/access-grants?page=1&page_size=20&user_query=%E5%BC%A0%E4%B8%89&current_only=true",
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
   });
 
   test("撤销目标不存在时显示冲突并刷新授权列表", async () => {
@@ -827,6 +929,21 @@ function accessRequestsFetchMock() {
 function selectedFilterOption(dropdown: HTMLElement): string {
   const selected = dropdown.querySelector(".ant-dropdown-menu-item-selected");
   return selected?.textContent?.trim() ?? "";
+}
+
+/** 审计日志行: actor_person 必填, 缺省 null 表示系统/未解析到 UserMirror。 */
+function auditLogRow(overrides: Record<string, unknown> = {}) {
+  return {
+    actor_type: "user",
+    actor_id: "admin-1",
+    event_type: "grant.approved",
+    target_type: "access_request",
+    target_id: "req-9",
+    metadata: { app_key: "crm" },
+    created_at: "2026-07-02T00:00:00Z",
+    actor_person: null,
+    ...overrides,
+  };
 }
 
 /** 访问申请行(A3: 姓名 / 应用名 / 审批人姓名随行下发)。 */

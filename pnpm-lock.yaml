@@ -23,6 +23,9 @@ importers:
       antd:
         specifier: ^5.29.3
         version: 5.29.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      dayjs:
+        specifier: ^1.11.23
+        version: 1.11.23
       lucide-react:
         specifier: ^0.554.0
         version: 0.554.0(react@19.2.7)

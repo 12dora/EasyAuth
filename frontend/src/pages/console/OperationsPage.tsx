@@ -1,7 +1,8 @@
 import { Activity, RefreshCcw } from "lucide-react";
-import { useId } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 
+import { DateRangeControl } from "../../components/antd/AppTable";
 import { Button } from "../../components/Button";
 import { TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
@@ -14,6 +15,7 @@ import { OperationsTable } from "./operations/OperationsTable";
 import {
   ENDPOINTS,
   INCLUDE_HISTORY_PARAM,
+  USER_QUERY_PARAM,
   includeHistoryFromSearchParams,
   type OperationSectionConfig,
 } from "./operations/operationQuery";
@@ -60,7 +62,11 @@ function OperationsSectionPage({
         actions={<OperationsHeaderActions controller={controller} />}
       />
       {section === "access-grants" ? (
-        <GrantFilters searchParams={controller.searchParams} onChange={controller.updateSearchParam} />
+        <GrantFilters
+          searchParams={controller.searchParams}
+          onChange={controller.updateSearchParam}
+          onChangeParams={controller.updateSearchParams}
+        />
       ) : null}
       <OperationsNotices controller={controller} />
       <OperationsResult controller={controller} />
@@ -164,69 +170,55 @@ function OperationsHeaderActions({
 /**
  * 授权明细表格上方的筛选条。
  *
- * 两个条件都没有列可以挂表头筛选, 因此是全站仅有的留在表格上方的筛选控件:
+ * 用户模糊搜索与创建时间都没有列可以挂表头筛选(用户列仍是 user_id 精确筛选):
  * 后端支持 created_from/created_to, 但授权载荷里没有 created_at 字段;
  * 「包含历史版本」控制的是列表口径本身(`current_only`), 不是某一列的取值。
+ * 日期范围控件与表头 `dateRangeFilter` 共用 `DateRangeControl`。
  */
 function GrantFilters({
-  searchParams,
   onChange,
+  onChangeParams,
+  searchParams,
 }: {
   searchParams: URLSearchParams;
   onChange: (key: string, value: string) => void;
+  onChangeParams: (updates: Record<string, string>) => void;
 }) {
   const { t } = useI18n();
-  const [, setSearchParams] = useSearchParams();
-  const labelId = useId();
-  const startLabelId = useId();
-  const endLabelId = useId();
-  const createdFrom = searchParams.get("created_from") ?? "";
-  const createdTo = searchParams.get("created_to") ?? "";
+  const urlQuery = searchParams.get(USER_QUERY_PARAM) ?? "";
+  const [userQuery, setUserQuery] = useState(urlQuery);
 
-  // 清空必须一次写回: onChange 逐个调用会各自基于同一份旧 searchParams, 后一次会把前一次的删除覆盖掉。
-  const clearRange = () => {
-    setSearchParams((previous) => {
-      const next = new URLSearchParams(previous);
-      next.delete("created_from");
-      next.delete("created_to");
-      next.set("page", "1");
-      return next;
-    });
-  };
+  useEffect(() => {
+    setUserQuery(urlQuery);
+  }, [urlQuery]);
+
+  useEffect(() => {
+    const trimmed = userQuery.trim();
+    if (trimmed === urlQuery) {
+      return;
+    }
+    const timer = window.setTimeout(() => onChange(USER_QUERY_PARAM, trimmed), 250);
+    return () => window.clearTimeout(timer);
+  }, [onChange, urlQuery, userQuery]);
 
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-2 sm:flex-nowrap">
-      <span id={labelId} className="shrink-0 text-label uppercase tracking-caps-wide text-ink-soft font-medium">
-        {t("console.operations.grants.createdRange")}
-      </span>
-      <span id={startLabelId} className="sr-only">
-        {t("console.operations.grants.createdRangeStart")}
-      </span>
+    <div className="mb-3 flex flex-wrap items-center gap-2">
       <TextInput
-        aria-labelledby={`${labelId} ${startLabelId}`}
-        className="w-52"
-        type="datetime-local"
-        value={createdFrom}
-        onChange={(event) => onChange("created_from", event.currentTarget.value)}
+        aria-label={t("console.operations.userQueryPlaceholder")}
+        autoComplete="off"
+        className="w-64"
+        placeholder={t("console.operations.userQueryPlaceholder")}
+        value={userQuery}
+        onChange={(event) => setUserQuery(event.currentTarget.value)}
       />
-      <span aria-hidden="true" className="shrink-0 text-ink-faint">
-        &mdash;
-      </span>
-      <span id={endLabelId} className="sr-only">
-        {t("console.operations.grants.createdRangeEnd")}
-      </span>
-      <TextInput
-        aria-labelledby={`${labelId} ${endLabelId}`}
-        className="w-52"
-        type="datetime-local"
-        value={createdTo}
-        onChange={(event) => onChange("created_to", event.currentTarget.value)}
+      <DateRangeControl
+        ariaLabel={t("console.operations.grants.createdRange")}
+        value={{
+          from: searchParams.get("created_from") ?? "",
+          to: searchParams.get("created_to") ?? "",
+        }}
+        onChange={(range) => onChangeParams({ created_from: range.from, created_to: range.to })}
       />
-      {createdFrom || createdTo ? (
-        <Button size="sm" variant="ghost" onClick={clearRange}>
-          {t("common.clear")}
-        </Button>
-      ) : null}
       <label className="ml-auto inline-flex shrink-0 items-center gap-2 text-body text-ink">
         <input
           type="checkbox"
