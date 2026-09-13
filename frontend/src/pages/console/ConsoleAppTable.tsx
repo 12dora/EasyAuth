@@ -22,7 +22,7 @@ import {
 import { useI18n } from "../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
 import type { AppSummary } from "../../lib/domain";
-import { readinessLabel, readinessTone } from "../../lib/status";
+import { readinessLabel } from "../../lib/status";
 import type { Translator } from "../../lib/status";
 
 export interface AppRowActions {
@@ -115,7 +115,6 @@ function appColumns(
         options: READINESS_VALUES.map((status) => ({
           value: status,
           label: readinessLabel(t, status),
-          tone: readinessTone(status),
         })),
         width: 130,
       }),

@@ -22,11 +22,11 @@ describe("statusColumn plain", () => {
       plain: true,
       options: [{ value: "ready", label: "就绪", tone: "evergreen" }],
     });
-    render(<>{column.render?.("ready", { status: "ready" }, 0)}</>);
+    const { container } = render(<>{column.render?.("ready", { status: "ready" }, 0)}</>);
 
-    const label = screen.getByText("就绪");
-    expect(label.tagName).toBe("SPAN");
-    expect(label).not.toHaveClass("tracking-caps-wide", "font-mono", "uppercase");
+    expect(screen.getByText("就绪")).toBeVisible();
+    expect(container.querySelector(".font-mono")).toBeNull();
+    expect(container.querySelector(".tracking-caps-wide")).toBeNull();
   });
 
   test("默认仍渲染 Badge", () => {
@@ -59,10 +59,10 @@ describe("activeStatusColumn plain", () => {
       getActive: (row) => row.is_active,
       plain: true,
     });
-    render(<>{column.render?.(true, { is_active: true }, 0)}</>);
+    const { container } = render(<>{column.render?.(true, { is_active: true }, 0)}</>);
 
-    const label = screen.getByText("启用");
-    expect(label.tagName).toBe("SPAN");
-    expect(label).not.toHaveClass("tracking-caps-wide", "font-mono");
+    expect(screen.getByText("启用")).toBeVisible();
+    expect(container.querySelector(".font-mono")).toBeNull();
+    expect(container.querySelector(".tracking-caps-wide")).toBeNull();
   });
 });

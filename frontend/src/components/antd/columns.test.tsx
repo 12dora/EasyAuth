@@ -57,6 +57,7 @@ describe("personColumn", () => {
       id: string;
       name: string;
       department: string;
+      // 故意留着带头像的行数据, 证明列预设根本不读它。
       avatar_url: string;
     }
     const columns: ColumnsType<Person> = [

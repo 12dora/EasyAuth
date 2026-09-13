@@ -167,7 +167,6 @@ export function userColumn<T>({
 /**
  * 人员列: 姓名 + 部门路径(或「本地用户」)两行, 次行绝不出 UUID。
  * 姓名缺失时主行仍回退到 user_id, 与 `userOptionName` 同一条规则。
- * 表格内不渲染头像; 头像只出现在顶栏用户摘要。
  */
 export function personColumn<T>({
   filter = false,
@@ -206,7 +205,6 @@ export function personColumn<T>({
  * 多人列: 姓名以 `, ` 写在同一行, 超长由 TruncatedText 截断;
  * 悬停单个姓名才出部门(或「本地用户」)。溢出 Tooltip 只在指针落在姓名 span 以外时打开,
  * 内容是每人一行「姓名 · 部门」, 避免与单人部门 Tooltip 叠开。次行绝不出 UUID。
- * 表格内不渲染头像; 头像只出现在顶栏用户摘要。
  */
 export function peopleColumn<T>({
   filter = false,

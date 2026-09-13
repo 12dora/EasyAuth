@@ -350,6 +350,8 @@ credential capability；App owner 必须对每条 credential 显式授予所需 
 每条用户记录含 `manager`：直接主管摘要，形状与详情接口的 `manager` 字段相同
 （不含 `departments` / `avatar_url`）；`manager_userid` 为空或主管镜像行不存在时为
 `null`。消费方刷新目录缓存时不必再对每人调用 `/manager`。
+`avatar_url` 除 `https://…` 与空串外，也可以是 Authentik 生成的首字母图（白名单内联图
+`data:image/<svg+xml|png|jpeg|webp>;base64,…`），不得假定它始终是可抓取的 URL。
 
 **成功响应（200）：**
 
@@ -509,6 +511,7 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
 ### `GET /api/v1/apps/{app_key}/directory/users/{user_ref}/manager`
 
 直接主管，响应为完整 D1 条目形状（含 `departments`、`avatar_url` 以及该主管自己的 `manager` 摘要）。
+`avatar_url` 口径同上：`https://…`、空串，或白名单内联图 `data:image/<svg+xml|png|jpeg|webp>;base64,…`。
 
 | 情形 | 响应 |
 | --- | --- |

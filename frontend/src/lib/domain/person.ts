@@ -11,8 +11,8 @@ export interface PersonRef {
   account_kind: AccountKind;
   /**
    * 头像 URL。无照片时为空串。
-   * Authentik 在没有钉钉照片时会下发 `data:image/svg+xml` 首字母图; EasyAuth 视其为缺失,
-   * 不得当照片渲染。渲染层再走 `safeAvatarUrl`, 只接受 https 与同源相对路径。
+   * Authentik 在没有钉钉照片时会下发 `data:image/svg+xml;base64,...` 首字母图; EasyAuth 按照片渲染。
+   * 渲染层再走 `safeAvatarUrl`, 只接受 https、同源相对路径与白名单内联 base64 图。
    */
   avatar_url: string;
 }

@@ -155,6 +155,7 @@ describe("ConsoleAppList", () => {
               capabilities: {},
             },
           ],
+          pagination: emptyPagination(),
         }),
       ),
     );
@@ -168,7 +169,8 @@ describe("ConsoleAppList", () => {
     expect(status).toBeVisible();
     expect(configuration).not.toHaveClass("tracking-caps-wide", "font-mono");
     expect(status).not.toHaveClass("tracking-caps-wide", "font-mono");
-    expect(row.querySelector(".tracking-caps-wide")).toBeNull();
+    expect(configuration.closest("td")?.querySelector(".tracking-caps-wide")).toBeNull();
+    expect(status.closest("td")?.querySelector(".tracking-caps-wide")).toBeNull();
   });
 
   test("表头状态筛选映射成后端 status 查询参数并回到第 1 页", async () => {

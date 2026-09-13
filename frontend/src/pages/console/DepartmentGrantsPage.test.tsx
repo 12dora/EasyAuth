@@ -292,7 +292,7 @@ describe("DepartmentGrantsPage", () => {
     await user.click(screen.getByText("销售部"));
 
     // 销售部本部门策略有 5 项权限: 平铺 3 项, 其余进 +2。
-    const moreButton = await screen.findByRole("button", { name: "查看其余 2 个授权组" });
+    const moreButton = await screen.findByRole("button", { name: "查看其余 2 项" });
     expect(moreButton).toHaveTextContent("+2");
 
     moreButton.focus();
