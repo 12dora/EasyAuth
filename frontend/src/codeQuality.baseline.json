@@ -22,7 +22,6 @@
     "pages/console/workspace/connector/useConnectorMappings.ts:useConnectorMappings": 121,
     "pages/console/workspace/integration/NotificationChannelForm.tsx:NotificationChannelForm": 143,
     "pages/console/workspace/tabs/CredentialsTab.tsx:CredentialsTab": 220,
-    "pages/console/workspace/tabs/RulesTab.tsx:RulesTab": 224,
     "pages/portal/components/PermissionSelector.tsx:PermissionSelector": 121,
     "pages/portal/components/PortalRequestsSection.tsx:PortalRequestsSection": 142,
     "pages/portal/components/RequestTargetPicker.tsx:RequestTargetPicker": 145,

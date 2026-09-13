@@ -63,7 +63,7 @@ complexity=10、returns=6、branches=12、args=5、statements=50。
 | 后端函数 | 60 | 8（最大 90 `Command.handle`） |
 | 后端 C901 | 10 | 0 超标 |
 | 前端文件 | 500 | 0（`AppTable.tsx` / `columns.tsx` / `OrgTree.tsx` 已拆到硬帽内） |
-| 前端函数 | 120 | 27（最大 224 `RulesTab`） |
+| 前端函数 | 120 | 26（最大 220 `CredentialsTab`） |
 | 前端 hook se | 8 | 2（最大 14） |
 | 前端 import | 25 | 0（最大 23） |
 
