@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Plus, RefreshCcw } from "lucide-react";
-import type { FormEvent } from "react";
+import { Plus, RefreshCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -10,36 +9,25 @@ import {
   orderingSerializer,
   serverTableQuery,
   useServerTable,
-  type ColumnsType,
   type ServerSortState,
 } from "../../components/antd/AppTable";
-import {
-  RowActionButton,
-  RowActionLink,
-  actionsColumn,
-  activeStatusColumn,
-  dateTimeColumn,
-  serverSortColumn,
-  textColumn,
-} from "../../components/antd/columns";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { PageState } from "../../components/ui/PageState";
 import { useToast } from "../../components/ui/Toast";
-
 import { Button } from "../../components/Button";
-import { Dialog } from "../../components/Dialog";
-import { Field, TextArea, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
-import { userOptionName } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
-import { joinLabels } from "../../lib/joinLabels";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject, ListPayload } from "../../lib/api";
 import type { TeamPayload, TeamSummary } from "../../lib/domain";
+import { buildTeamColumns, teamLeadersLabel } from "./consoleTeamColumns";
+import { TeamCreateDialog, type TeamCreateFormPayload } from "./TeamCreateDialog";
 
 /** 团队列表查询键前缀; 详情页失效列表时也用它。 */
 export const TEAMS_LIST_QUERY_KEY = ["console", "teams", "list"];
+
+export { teamLeadersLabel };
 
 /**
  * 列 key -> 后端 `ordering` 字段。
@@ -52,15 +40,9 @@ const TEAM_ORDERING_FIELDS = {
   member_count: "member_count",
 } as const;
 
-export function teamLeadersLabel(leaders: TeamSummary["leaders"] | undefined): string {
-  return joinLabels((leaders ?? []).map((leader) => userOptionName(leader)));
-}
-
 export function ConsoleTeamList() {
   const { t } = useI18n();
-  const toast = useToast();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TeamSummary | null>(null);
   // 团队接口没有过滤参数(因此列上不给表头筛选), 但支持单字段 ordering。
@@ -79,102 +61,15 @@ export function ConsoleTeamList() {
   });
   const teams = itemsFromPayload<TeamSummary>(teamsQuery.data);
   serverTable.setTotal(teamsQuery.data?.pagination?.total_items);
-  const deleteMutation = useMutation({
-    mutationFn: (team: TeamSummary) =>
-      apiRequest(`/console/api/v1/teams/${team.id}`, { method: "DELETE" }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: TEAMS_LIST_QUERY_KEY });
-      setDeleteTarget(null);
-      toast.success(t("console.teams.deleteSuccess"));
-    },
-    onError: (error: Error) => {
-      toast.error(t("console.teams.deleteFailed"), error.message);
-    },
-  });
-  const createMutation = useMutation({
-    mutationFn: (payload: TeamCreateFormPayload) =>
-      apiRequest<TeamPayload>("/console/api/v1/teams", {
-        method: "POST",
-        body: { ...payload } satisfies JsonObject,
-      }),
-    onSuccess: (payload) => {
-      void queryClient.invalidateQueries({ queryKey: TEAMS_LIST_QUERY_KEY });
-      setCreateDialogOpen(false);
-      const teamId = payload.team?.id;
-      if (teamId) {
-        void navigate(`/console/teams/${teamId}`);
-      }
-    },
+  const { createMutation, deleteMutation } = useConsoleTeamMutations({
+    navigate,
+    onCreated: () => setCreateDialogOpen(false),
+    onDeleted: () => setDeleteTarget(null),
   });
 
   // 排序在后端做: 每一个数据列都过 serverSortColumn(sorter 只当开关、指示器受控)。
-  const columns = useMemo<ColumnsType<TeamSummary>>(
-    () => [
-      serverSortColumn(
-        {
-          key: "name",
-          dataIndex: "name",
-          title: t("console.teams.column.name"),
-          ellipsis: true,
-          render: (_value: unknown, team: TeamSummary) => <strong>{team.name}</strong>,
-        },
-        sort,
-      ),
-      serverSortColumn(
-        textColumn<TeamSummary>({
-          key: "leaders",
-          title: t("console.teams.column.leaders"),
-          getValue: (team) => teamLeadersLabel(team.leaders),
-          width: 220,
-        }),
-        sort,
-      ),
-      serverSortColumn(
-        textColumn<TeamSummary>({
-          key: "member_count",
-          title: t("console.teams.column.memberCount"),
-          getValue: (team) => String(team.member_count ?? 0),
-          width: 110,
-        }),
-        sort,
-      ),
-      serverSortColumn(
-        activeStatusColumn<TeamSummary>({
-          t,
-          getActive: (team) => team.is_active,
-          filter: false,
-          width: 110,
-        }),
-        sort,
-      ),
-      serverSortColumn(
-        dateTimeColumn<TeamSummary>({
-          key: "created_at",
-          title: t("console.teams.column.createdAt"),
-          sorter: false,
-        }),
-        sort,
-      ),
-      actionsColumn<TeamSummary>({
-        render: (team) => (
-          <>
-            <RowActionLink
-              href={`/console/teams/${team.id}`}
-              icon={<ArrowRight size={15} />}
-              onClick={(event) => {
-                event.preventDefault();
-                void navigate(`/console/teams/${team.id}`);
-              }}
-            >
-              {t("console.teams.view")}
-            </RowActionLink>
-            <RowActionButton type="button" variant="ghost-danger" onClick={() => setDeleteTarget(team)}>
-              {t("common.delete")}
-            </RowActionButton>
-          </>
-        ),
-      }),
-    ],
+  const columns = useMemo(
+    () => buildTeamColumns({ navigate, sort, t, onDelete: setDeleteTarget }),
     [navigate, sort, t],
   );
 
@@ -245,59 +140,44 @@ export function ConsoleTeamList() {
   );
 }
 
-interface TeamCreateFormPayload {
-  name: string;
-  description: string;
-}
-
-function TeamCreateDialog({
-  errorMessage,
-  isSubmitting,
-  onClose,
-  onSubmit,
+function useConsoleTeamMutations({
+  navigate,
+  onCreated,
+  onDeleted,
 }: {
-  errorMessage: string;
-  isSubmitting: boolean;
-  onClose: () => void;
-  onSubmit: (payload: TeamCreateFormPayload) => void;
+  navigate: ReturnType<typeof useNavigate>;
+  onCreated: () => void;
+  onDeleted: () => void;
 }) {
   const { t } = useI18n();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const normalizedName = name.trim();
-    if (!normalizedName) {
-      return;
-    }
-    onSubmit({ name: normalizedName, description: description.trim() });
-  };
-
-  return (
-    <Dialog
-      title={t("console.teams.create")}
-      onClose={onClose}
-      footer={
-        <>
-          <Button type="button" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button form="create-team-form" type="submit" variant="primary" loading={isSubmitting} disabled={isSubmitting}>
-            {t("common.create")}
-          </Button>
-        </>
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const deleteMutation = useMutation({
+    mutationFn: (team: TeamSummary) =>
+      apiRequest(`/console/api/v1/teams/${team.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: TEAMS_LIST_QUERY_KEY });
+      onDeleted();
+      toast.success(t("console.teams.deleteSuccess"));
+    },
+    onError: (error: Error) => {
+      toast.error(t("console.teams.deleteFailed"), error.message);
+    },
+  });
+  const createMutation = useMutation({
+    mutationFn: (payload: TeamCreateFormPayload) =>
+      apiRequest<TeamPayload>("/console/api/v1/teams", {
+        method: "POST",
+        body: { ...payload } satisfies JsonObject,
+      }),
+    onSuccess: (payload) => {
+      void queryClient.invalidateQueries({ queryKey: TEAMS_LIST_QUERY_KEY });
+      onCreated();
+      const teamId = payload.team?.id;
+      if (teamId) {
+        void navigate(`/console/teams/${teamId}`);
       }
-    >
-      <form id="create-team-form" className="grid gap-4" onSubmit={submit}>
-        <Field label={t("common.name")}>
-          <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} required />
-        </Field>
-        <Field label={t("common.description")}>
-          <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
-        </Field>
-        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("console.teams.createFailed")} message={errorMessage} /> : null}
-      </form>
-    </Dialog>
-  );
+    },
+  });
+  return { createMutation, deleteMutation };
 }
