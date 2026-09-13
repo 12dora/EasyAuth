@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import type { CurrentUser } from "../../App";
 import { useI18n } from "../../i18n/I18nProvider";
 import { readCsrfToken } from "../../lib/api";
+import { PersonAvatar } from "../PersonAvatar";
 
 const DEFAULT_LOGOUT_URL = "/auth/logout/";
 /** 壳层模式在 main.tsx 启动时定死, 门户↔控制台只能整页跳转, 不能走 react-router。 */
@@ -32,8 +33,6 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
   // role 是后端下发的 code, 展示名只在 i18n 里; 顶栏不得直接印 code。
   const userRole = currentUser.role === "admin" ? t("shell.user.role.admin") : t("shell.user.role.member");
   const logoutUrl = localLogoutUrl(currentUser.logoutUrl);
-  const avatarUrl = safeAvatarUrl(currentUser.avatarUrl);
-  const avatarLabel = userName.slice(0, 1).toUpperCase();
   const csrfToken = readCsrfToken();
   // 控制台壳层回门户的入口收在头像菜单里, 与门户的「管理后台」镜像对称。
   const showEmployeePortalEntry = mode === "console";
@@ -112,13 +111,12 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
           <strong>{userName}</strong>
           <span>{userRole}</span>
         </span>
-        {avatarUrl ? (
-          <img className="avatar avatar-image" src={avatarUrl} alt={t("shell.user.avatarAlt", { name: userName })} />
-        ) : (
-          <span className="avatar" aria-hidden="true">
-            {avatarLabel}
-          </span>
-        )}
+        <PersonAvatar
+          name={userName}
+          avatarUrl={currentUser.avatarUrl}
+          size={32}
+          alt={t("shell.user.avatarAlt", { name: userName })}
+        />
       </button>
       {open ? (
         <div className="user-menu-popover topbar-popover" id={menuId} data-open="true" role="menu" onKeyDown={onMenuKeyDown}>
@@ -194,30 +192,6 @@ function localLogoutUrl(value: string | undefined): string {
     return normalizedValue;
   }
   return DEFAULT_LOGOUT_URL;
-}
-
-/**
- * 头像 URL 硬化, 与 localLogoutUrl 保持同一处理口径(正本清源):
- * 仅接受同源相对路径(以 / 开头, 但非 //、不含反斜杠)或 https 绝对地址;
- * data:/javascript:/http: 等一律回退为首字母头像(返回 undefined)。
- */
-function safeAvatarUrl(value: string | undefined): string | undefined {
-  const normalizedValue = value?.trim();
-  if (!normalizedValue) {
-    return undefined;
-  }
-  if (normalizedValue.includes("\\")) {
-    return undefined;
-  }
-  if (normalizedValue.startsWith("/") && !normalizedValue.startsWith("//")) {
-    return normalizedValue;
-  }
-  try {
-    const parsed = new URL(normalizedValue);
-    return parsed.protocol === "https:" ? normalizedValue : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function firstPresent(...values: Array<string | undefined>): string {
