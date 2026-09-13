@@ -208,10 +208,10 @@ def test_s14_portal_status_list_distinguishes_request_statuses() -> None:
     # Then: API 状态列表用业务文案区分所有状态。
     body = response.content.decode()
     assert "等待审批" in body
-    assert "审批已通过, 等待授权落库" in body
-    assert "授权已落库, 权限已生效" in body
+    assert "已通过" in body
+    assert "已生效" in body
     assert "已拒绝" in body
-    assert "授权落库失败" in body
+    assert "落库失败" in body
 
 
 def test_s14_portal_request_items_load_group_names_in_bulk() -> None:

@@ -160,6 +160,19 @@
 
 **状态枚举：** `submitted` / `approved` / `rejected` / `grant_applied` / `grant_failed` / `grant_conflict` / `grant_expired` / `withdrawn`。
 
+`status_label` 由后端 `portal/status_text.py` 下发，只表示当前状态，不含解释。前端不得硬编码这些文案。
+
+| status | status_label |
+| --- | --- |
+| `submitted` | 等待审批 |
+| `approved` | 已通过 |
+| `grant_applied` | 已生效 |
+| `rejected` | 已拒绝 |
+| `grant_failed` | 落库失败 |
+| `grant_conflict` | 已冲突 |
+| `grant_expired` | 已过期 |
+| `withdrawn` | 已撤回 |
+
 `grant_conflict` 表示生命周期申请基于的基础授权修订已经变化。该状态不是可重试落库失败，前端必须提示申请人重新提交申请。
 
 ---

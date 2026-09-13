@@ -17,12 +17,12 @@ type StatusTone = Literal["primary", "secondary", "success", "danger"]
 
 _STATUS_LABELS: Final[dict[str, str]] = {
     REQUEST_STATUS_SUBMITTED: "等待审批",
-    REQUEST_STATUS_APPROVED: "审批已通过, 等待授权落库",
-    REQUEST_STATUS_GRANT_APPLIED: "授权已落库, 权限已生效",
+    REQUEST_STATUS_APPROVED: "已通过",
+    REQUEST_STATUS_GRANT_APPLIED: "已生效",
     REQUEST_STATUS_REJECTED: "已拒绝",
-    REQUEST_STATUS_GRANT_FAILED: "授权落库失败",
-    REQUEST_STATUS_GRANT_CONFLICT: "基础授权已变化, 请重新提交",
-    REQUEST_STATUS_GRANT_EXPIRED: "授权期限已过, 未应用",
+    REQUEST_STATUS_GRANT_FAILED: "落库失败",
+    REQUEST_STATUS_GRANT_CONFLICT: "已冲突",
+    REQUEST_STATUS_GRANT_EXPIRED: "已过期",
     REQUEST_STATUS_WITHDRAWN: "已撤回",
 }
 

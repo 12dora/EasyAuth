@@ -250,9 +250,9 @@ def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None
     # Then: API 状态文案明确区分审批通过和授权生效。
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert "审批已通过, 等待授权落库" in body
-    assert "授权已落库, 权限已生效" in body
-    assert "授权落库失败" in body
+    assert "已通过" in body
+    assert "已生效" in body
+    assert "落库失败" in body
 
 
 def _create_grant(

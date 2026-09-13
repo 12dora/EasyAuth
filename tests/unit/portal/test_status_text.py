@@ -9,11 +9,13 @@ from easyauth.portal.status_text import status_label, status_tone
     ("status", "expected_label", "expected_tone"),
     [
         ("submitted", "等待审批", "primary"),
-        ("approved", "审批已通过, 等待授权落库", "secondary"),
-        ("grant_applied", "授权已落库, 权限已生效", "success"),
+        ("approved", "已通过", "secondary"),
+        ("grant_applied", "已生效", "success"),
         ("rejected", "已拒绝", "danger"),
-        ("grant_failed", "授权落库失败", "danger"),
-        ("grant_expired", "授权期限已过, 未应用", "danger"),
+        ("grant_failed", "落库失败", "danger"),
+        ("grant_conflict", "已冲突", "danger"),
+        ("grant_expired", "已过期", "danger"),
+        ("withdrawn", "已撤回", "secondary"),
         ("unexpected", "未知", "secondary"),
     ],
 )
