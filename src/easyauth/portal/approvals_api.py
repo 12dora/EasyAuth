@@ -57,6 +57,7 @@ PORTAL_APPROVAL_ORDERING: Final[dict[str, str]] = {
     "term": "grant_expires_at",
     "reason": "reason",
     "decision_comment": "decision_comment",
+    "request_type": "request_type",
 }
 PORTAL_APPROVAL_PENDING_DEFAULT_ORDER: Final[tuple[str, ...]] = ("submitted_at", "id")
 PORTAL_APPROVAL_PROCESSED_DEFAULT_ORDER: Final[tuple[str, ...]] = ("-decided_at", "id")

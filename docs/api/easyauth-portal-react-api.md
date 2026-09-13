@@ -258,7 +258,7 @@
 | --- | --- |
 | `status` | `pending`（默认，`submitted` 且本人是审批人）或 `processed`（本人已决定） |
 | `page` / `page_size` | 分页 |
-| `ordering` | 单字段排序：`created_at` / `decided_at` / `app_key` / `applicant`。`pending` 默认 `submitted_at, id`；`processed` 默认 `-decided_at, id` |
+| `ordering` | 单字段排序：`created_at` / `decided_at` / `app_key` / `applicant` / `status` / `content` / `term` / `reason` / `decision_comment` / `request_type`。`pending` 默认 `submitted_at, id`；`processed` 默认 `-decided_at, id` |
 
 审批条目在 access_request 基础上额外包含：
 

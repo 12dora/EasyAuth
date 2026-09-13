@@ -14,6 +14,9 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_REJECTED,
+    REQUEST_TYPE_CHANGE,
+    REQUEST_TYPE_GRANT,
+    REQUEST_TYPE_REVOKE,
     AccessRequest,
     AccessRequestApprover,
     AccessRequestGroup,
@@ -21,6 +24,7 @@ from easyauth.access_requests.models import (
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AuthorizationGroup
+from easyauth.grants.models import AccessGrant
 from tests.integration.portal.helpers import logged_in_client
 
 if TYPE_CHECKING:
@@ -93,6 +97,45 @@ def test_portal_pending_approvals_order_by_app_applicant_content_term_reason() -
     assert _ids(client, "-created_at") == [cara_req.id, ben_req.id, ada_req.id]
 
 
+def test_portal_pending_approvals_order_by_request_type() -> None:
+    client, approver = logged_in_client("portal-appr-type")
+    ada = UserMirror.objects.create(authentik_user_id="portal-appr-type-ada", name="Ada")
+    ben = UserMirror.objects.create(authentik_user_id="portal-appr-type-ben", name="Ben")
+    cara = UserMirror.objects.create(authentik_user_id="portal-appr-type-cara", name="Cara")
+    app = App.objects.create(app_key="portal-appr-type-app", name="Type")
+    grant_ada = AccessGrant.objects.create(user=ada, app=app)
+    grant_cara = AccessGrant.objects.create(user=cara, app=app)
+    revoke_req = _pending(
+        ada,
+        app,
+        approver,
+        reason="revoke",
+        key="portal-appr-type-revoke",
+        request_type=REQUEST_TYPE_REVOKE,
+        base_grant=grant_ada,
+    )
+    grant_req = _pending(
+        ben,
+        app,
+        approver,
+        reason="grant",
+        key="portal-appr-type-grant",
+        request_type=REQUEST_TYPE_GRANT,
+    )
+    change_req = _pending(
+        cara,
+        app,
+        approver,
+        reason="change",
+        key="portal-appr-type-change",
+        request_type=REQUEST_TYPE_CHANGE,
+        base_grant=grant_cara,
+    )
+
+    assert _ids(client, "request_type") == [change_req.id, grant_req.id, revoke_req.id]
+    assert _ids(client, "-request_type") == [revoke_req.id, grant_req.id, change_req.id]
+
+
 def test_portal_processed_approvals_order_by_status_comment_and_decided_at() -> None:
     client, actor = logged_in_client("portal-appr-processed")
     now = timezone.now()
@@ -159,6 +202,8 @@ def _pending(  # noqa: PLR0913 - 测试夹具按待审批排序字段铺开。
     submitted_at: datetime | None = None,
     grant_type: str = GRANT_TYPE_PERMANENT,
     expires_in_days: int | None = None,
+    request_type: str = REQUEST_TYPE_GRANT,
+    base_grant: AccessGrant | None = None,
 ) -> AccessRequest:
     expires_at = (
         timezone.now() + timedelta(days=expires_in_days) if expires_in_days is not None else None
@@ -171,6 +216,9 @@ def _pending(  # noqa: PLR0913 - 测试夹具按待审批排序字段铺开。
         payload_digest=_digest(key),
         grant_type=grant_type,
         grant_expires_at=expires_at,
+        request_type=request_type,
+        base_grant=base_grant,
+        base_grant_revision=None if base_grant is None else base_grant.version,
     )
     _ = AccessRequestApprover.objects.create(access_request=access_request, approver=approver)
     if group_name is not None:
