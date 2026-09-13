@@ -14,8 +14,10 @@ const DEFAULT_BUDGETS = {
   asyncChunkRawBytes: 140 * 1024,
   asyncChunkGzipBytes: 40 * 1024,
   // Ant Design 表格地基落地后总量上调；2026-09-08 控制台「授予权限」「组织授权」两个异步路由落地后
-  // 实测 1732 KiB，上调到 1780 KiB；见 docs/operations/frontend-build-budget.md
-  totalJavaScriptRawBytes: 1780 * 1024,
+  // 实测 1732 KiB，上调到 1780 KiB；2026-09-13 运营日期范围控件引入 DatePicker + dayjs 后实测
+  // 1886.5 KiB，选择器已拆到异步 antd-picker、同步 antd 未调额，总量上调到 1900 KiB；
+  // 见 docs/operations/frontend-build-budget.md
+  totalJavaScriptRawBytes: 1900 * 1024,
 };
 
 /**
