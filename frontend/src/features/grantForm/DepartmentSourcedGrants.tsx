@@ -16,7 +16,8 @@ const EXIT_TRANSITION_MS = 200;
 /** transitionend 缺席时(reduced-motion、零时长、jsdom)的卸挂兜底。 */
 const EXIT_UNMOUNT_FALLBACK_MS = EXIT_TRANSITION_MS + 50;
 
-const EXIT_TRANSITION_PROPERTIES = new Set(["grid-template-rows", "opacity"]);
+// 只认高度过渡结束: opacity 与行高同时开始、同时长, 但事件顺序无契约; 以行高为准, 超时兜底。
+const EXIT_TRANSITION_PROPERTIES = new Set(["grid-template-rows"]);
 
 export type DepartmentSourcedNoticeStatus = "idle" | "pending" | "success" | "error";
 
