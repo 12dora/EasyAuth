@@ -52,9 +52,10 @@ describe("UserSelect", () => {
     expect(avatar).toHaveAttribute("src", "https://cdn.example.com/u-1.png");
     expect(avatar).toHaveAttribute("width", "20");
 
-    // 没有部门与头像的候选只画姓名, 不塞首字母占位, 也没有空次行。
+    // 没有照片的候选走姓名首字母, 不渲染 img, 也没有空次行。
     const plainOption = screen.getByRole("option", { name: /李四/ });
     expect(within(plainOption).getByText("李四")).toBeVisible();
+    expect(within(plainOption).getByText("李")).toBeVisible();
     expect(plainOption.querySelector("img")).toBeNull();
     expect(plainOption.querySelector("code")).toBeNull();
   });

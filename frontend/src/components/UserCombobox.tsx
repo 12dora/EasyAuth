@@ -12,6 +12,7 @@ import { cn } from "../lib/cn";
 import type { AccountKind } from "../lib/domain/person";
 import { joinLabels } from "../lib/joinLabels";
 import type { Translator } from "../lib/status";
+import { PersonAvatar } from "./PersonAvatar";
 import { TruncatedText } from "./TruncatedText";
 
 export interface UserOption {
@@ -20,7 +21,7 @@ export interface UserOption {
   /** 部门名; 后端目录未同步到部门时为空串。 */
   department?: string;
   account_kind?: AccountKind;
-  /** 头像地址; 为空表示没有头像, 此时不渲染任何占位图形。 */
+  /** 头像地址; 为空或不安全时 PersonAvatar 走姓名首字母。 */
   avatar_url?: string;
 }
 
@@ -314,16 +315,7 @@ export function UserOptionRow({
       }}
     >
       <span className="flex items-center gap-2 text-body font-medium">
-        {/* 没有头像就不画任何占位图形: 首字母占位会让"未同步头像"和"头像是这个字"看起来一样。 */}
-        {option.avatar_url ? (
-          <img
-            src={option.avatar_url}
-            alt=""
-            width={20}
-            height={20}
-            className="h-5 w-5 shrink-0 rounded-full object-cover"
-          />
-        ) : null}
+        <PersonAvatar name={userOptionDisplayName(option)} avatarUrl={option.avatar_url} size={20} />
         <span>{userOptionDisplayName(option)}</span>
       </span>
       {secondary ? <TruncatedText className="w-full text-xs text-ink-faint" text={secondary} /> : null}
