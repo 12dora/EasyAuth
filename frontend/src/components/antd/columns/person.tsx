@@ -68,6 +68,11 @@ export interface PersonColumnConfig<T> {
   getAccountKind?: (record: T) => AccountKind | undefined;
   /** 头像 URL; 缺省或空串时 PersonAvatar 走姓名首字母。 */
   getAvatarUrl?: (record: T) => string | null | undefined;
+  /**
+   * 这一行是否是人。返回 false 时不画头像(例如审计操作者是应用或系统, 只有 `actor_type:actor_id`),
+   * 否则会给「app:easytrade」这种标识拼出一个假的首字母头像。默认 true。
+   */
+  isPerson?: (record: T) => boolean;
   /** 本地账号次行文案需要 t("user.localAccount")。 */
   t: Translator;
   filter?: boolean;
@@ -179,6 +184,7 @@ export function personColumn<T>({
   getDepartment,
   getName,
   getUserId,
+  isPerson,
   key = "user",
   sorter = false,
   t,
@@ -216,6 +222,9 @@ export function personColumn<T>({
         user_id: String(getUserId(record) ?? ""),
         name: getName(record) ?? "",
       });
+      if (isPerson && !isPerson(record)) {
+        return inner as ReactNode;
+      }
       return (
         <div className="flex min-w-0 items-center gap-2">
           <PersonAvatar name={displayName} avatarUrl={getAvatarUrl?.(record) ?? ""} size={24} />

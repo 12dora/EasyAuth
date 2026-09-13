@@ -116,6 +116,8 @@ function auditColumns(
           getDepartment: (row) => row.actor_person?.department,
           getAccountKind: (row) => row.actor_person?.account_kind,
           getAvatarUrl: (row) => row.actor_person?.avatar_url,
+          // 应用 / 系统操作者没有人员对象, 只展示 actor_type:actor_id, 不画头像。
+          isPerson: (row) => row.actor_person !== null,
           filter: true,
           width: 200,
         }),

@@ -38,6 +38,7 @@ export function PersonAvatar({
   if (src && src !== failedSrc) {
     return (
       <img
+        data-person-avatar="photo"
         src={src}
         alt={alt}
         width={size}
@@ -49,6 +50,7 @@ export function PersonAvatar({
   }
   return (
     <span
+      data-person-avatar="initials"
       className={cn(
         "inline-flex items-center justify-center border border-accent/20 bg-accent/8 font-semibold text-accent",
         boxClass,

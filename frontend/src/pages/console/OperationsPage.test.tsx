@@ -130,6 +130,26 @@ describe("OperationsPage", () => {
     expect(screen.queryByText("admin-1")).not.toBeInTheDocument();
   });
 
+  test("审计操作者是应用(actor_person 为 null)时只显示标识, 不画头像", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      if (String(input) === "/console/api/v1/audit-logs?page=1&page_size=20") {
+        return jsonResponse({
+          data: [auditLogRow({ actor_type: "app", actor_id: "easytrade", actor_person: null })],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderOperationsPage("audit");
+
+    const cell = (await screen.findByText("app:easytrade")).closest("td");
+    expect(cell).not.toBeNull();
+    expect(cell?.querySelector("[data-person-avatar]")).toBeNull();
+  });
+
   test("审计行缺少 actor_person 时整页报加载失败, 不静默丢字段", async () => {
     document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
