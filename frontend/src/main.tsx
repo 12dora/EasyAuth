@@ -9,6 +9,7 @@ import { UnsupportedBrowserPage } from "./components/UnsupportedBrowserPage";
 import { AppConfigProvider } from "./components/antd/AppConfigProvider";
 import { ToastProvider } from "./components/ui/Toast";
 import { I18nProvider } from "./i18n/I18nProvider";
+import { safeAvatarUrl } from "./lib/avatarUrl";
 import { checkBrowserSupport } from "./lib/browserSupport";
 import { queryClient } from "./lib/query";
 import "./styles/index.css";
@@ -67,7 +68,7 @@ function readCurrentUser(root: HTMLElement, currentUserId: string): CurrentUser 
   }
   const dataset = { ...document.body.dataset, ...root.dataset };
   return {
-    avatarUrl: dataset.currentUserAvatarUrl ?? "",
+    avatarUrl: safeAvatarUrl(dataset.currentUserAvatarUrl),
     displayName: dataset.currentUserDisplayName ?? "",
     id: currentUserId,
     logoutUrl: dataset.logoutUrl ?? "/auth/logout/",
