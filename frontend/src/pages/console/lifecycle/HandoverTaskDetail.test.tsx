@@ -24,12 +24,13 @@ function detailPayload(assigneeState: "manager" | "superuser_pool" = "manager", 
         level: 0,
         deferred_at: deferredAt,
         defer_history: deferredAt
-          ? [{ escalation_level: 0, actor_id: "su-1", at: deferredAt, reason: "业务高峰顺延一次" }]
+          ? [{ escalation_level: 0, actor_id: "su-1", actor_person: null, at: deferredAt, reason: "业务高峰顺延一次" }]
           : [],
       },
       reason: "离职",
       created_at: "2026-07-01T09:00:00Z",
       created_by: "admin",
+      created_by_person: null,
       actions: [
         {
           app_key: "easytrade",

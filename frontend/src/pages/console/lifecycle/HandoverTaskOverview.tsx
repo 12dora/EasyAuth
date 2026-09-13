@@ -8,6 +8,7 @@ import { userOptionName } from "../../../components/UserCombobox";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { HandoverTaskDetail } from "../../../lib/domain";
 import { formatDateTime } from "../../../lib/status";
+import { createdByDisplay, deferActorDisplay } from "./handoverTaskDetailModel";
 import {
   handoverAssigneeStateLabel,
   handoverKindLabel,
@@ -51,7 +52,7 @@ export function SubjectPanel({ task, subjectName }: { task: HandoverTaskDetail; 
         <OverviewItem label={t("people.column.department")} value={task.subject.department || "-"} />
         <OverviewItem label={t("people.column.email")} value={task.subject.email || "-"} />
         <OverviewItem label={t("handover.detail.createdAt")} value={formatDateTime(task.created_at)} />
-        <OverviewItem label={t("handover.detail.createdBy")} value={task.created_by || "-"} />
+        <OverviewItem label={t("handover.detail.createdBy")} value={createdByDisplay(task, t)} />
       </dl>
       {task.reason ? (
         <p className="max-w-3xl text-body leading-5 text-ink-soft">
@@ -126,7 +127,7 @@ export function AssigneePanel({ task, isLocalAdmin, claimPending, onDefer, onCla
           <ul className="grid gap-1 text-caption text-ink-faint">
             {task.escalation.defer_history.map((entry, index) => (
               <li key={`${entry.at}-${index}`}>
-                L{entry.escalation_level} · {entry.actor_id} · {formatDateTime(entry.at)} · {entry.reason}
+                L{entry.escalation_level} · {deferActorDisplay(entry, t)} · {formatDateTime(entry.at)} · {entry.reason}
               </li>
             ))}
           </ul>

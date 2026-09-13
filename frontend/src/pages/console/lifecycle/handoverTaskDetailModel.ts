@@ -1,4 +1,5 @@
 import type {
+  HandoverDeferRecord,
   HandoverGrantItemRow,
   HandoverTaskDetail,
   OnboardingTemplateRow,
@@ -6,7 +7,7 @@ import type {
   TransferPlanItem,
 } from "../../../lib/domain";
 import type { AppShellOutletContext } from "../../../components/AppShell";
-import { userOptionName } from "../../../components/UserCombobox";
+import { personNameWithDepartment, userOptionName } from "../../../components/UserCombobox";
 import type { Translator } from "../../../lib/status";
 import { handoverKindLabel, type ParsedGrantKey } from "./lifecycleLabels";
 
@@ -80,6 +81,22 @@ export function transferDiffEntries(plan: TransferPlanItem): {
 
 export function taskSubjectName(task: HandoverTaskDetail | undefined): string {
   return task ? userOptionName(task.subject) : "";
+}
+
+/** 创建人: 有 PersonRef 时走姓名·部门, 否则诚实回落原始 created_by。 */
+export function createdByDisplay(task: HandoverTaskDetail, t: Translator): string {
+  if (task.created_by_person) {
+    return personNameWithDepartment(task.created_by_person, t);
+  }
+  return task.created_by || "-";
+}
+
+/** 顺延记录操作人: 有 PersonRef 时走姓名·部门, 否则诚实回落原始 actor_id。 */
+export function deferActorDisplay(entry: HandoverDeferRecord, t: Translator): string {
+  if (entry.actor_person) {
+    return personNameWithDepartment(entry.actor_person, t);
+  }
+  return entry.actor_id;
 }
 
 export function taskDetailTitle(t: Translator, task: HandoverTaskDetail | undefined, subjectName: string): string {

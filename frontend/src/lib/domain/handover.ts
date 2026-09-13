@@ -1,6 +1,7 @@
 /** 本模块定义 Lifecycle、Handover 与 Onboarding 领域契约。 */
 
-import type { AccountKind } from "./person";
+import type { JsonObject, JsonValue } from "./common";
+import { isAccountKind, type AccountKind, type PersonRef } from "./person";
 
 /** M4 生命周期: 人员列表行, 对齐后端 users_api._person_item 序列化字段。 */
 export interface PersonRow {
@@ -115,6 +116,8 @@ export interface HandoverAction {
 export interface HandoverDeferRecord {
   escalation_level: number;
   actor_id: string;
+  /** UserMirror 解析结果; 系统/未知 actor 为 null。原始 actor_id 仍保留。 */
+  actor_person: PersonRef | null;
   at: string;
   reason: string;
 }
@@ -200,6 +203,8 @@ export interface HandoverTaskListItem {
   blocked_app_count: number;
   total_asset_count: number;
   created_by?: string;
+  /** UserMirror 解析结果; 系统/未知创建人为 null。原始 created_by 仍保留。 */
+  created_by_person: PersonRef | null;
   allowed_actions?: string[];
   updated_at?: string;
 }
@@ -263,6 +268,8 @@ export interface HandoverTaskDetail {
   team_items: HandoverTeamItemRow[];
   transfer_plan?: TransferPlanItem | null;
   created_by?: string;
+  /** UserMirror 解析结果; 系统/未知创建人为 null。原始 created_by 仍保留。 */
+  created_by_person: PersonRef | null;
   allowed_actions?: string[];
   updated_at?: string;
 }
@@ -331,5 +338,96 @@ export interface OnboardResult {
   user_id: string;
   template: string;
   granted_app_count: number;
+}
+
+export class HandoverContractError extends Error {
+  constructor(field: string) {
+    super(`交接契约违约: ${field}`);
+    this.name = "HandoverContractError";
+  }
+}
+
+/** PersonRef: 四字段必填; account_kind 必须是三值之一。 */
+export function parseHandoverPersonRef(raw: JsonValue, field = "person"): PersonRef {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new HandoverContractError(field);
+  }
+  const source = raw as JsonObject;
+  if (typeof source.user_id !== "string") {
+    throw new HandoverContractError(`${field}.user_id`);
+  }
+  if (typeof source.name !== "string") {
+    throw new HandoverContractError(`${field}.name`);
+  }
+  if (typeof source.department !== "string") {
+    throw new HandoverContractError(`${field}.department`);
+  }
+  if (!isAccountKind(source.account_kind)) {
+    throw new HandoverContractError(`${field}.account_kind`);
+  }
+  return {
+    user_id: source.user_id,
+    name: source.name,
+    department: source.department,
+    account_kind: source.account_kind,
+  };
+}
+
+/** 字段必须存在; 系统/未知身份为 null, 缺失立即失败。 */
+export function parseNullableHandoverPersonRef(raw: JsonValue, field: string): PersonRef | null {
+  if (raw === undefined) {
+    throw new HandoverContractError(field);
+  }
+  if (raw === null) {
+    return null;
+  }
+  return parseHandoverPersonRef(raw, field);
+}
+
+export function parseHandoverDeferRecord(raw: JsonValue, field = "defer_history[]"): HandoverDeferRecord {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new HandoverContractError(field);
+  }
+  const source = raw as JsonObject;
+  if (typeof source.actor_id !== "string") {
+    throw new HandoverContractError(`${field}.actor_id`);
+  }
+  return {
+    ...(source as unknown as HandoverDeferRecord),
+    actor_id: source.actor_id,
+    actor_person: parseNullableHandoverPersonRef(source.actor_person, `${field}.actor_person`),
+  };
+}
+
+/**
+ * 交接单 list/detail 上的人员契约: created_by_person 必填(可为 null);
+ * escalation.defer_history 每条都要求 actor_person(可为 null)。
+ */
+export function parseHandoverTaskPersonContract(
+  raw: JsonValue,
+  field = "task",
+): {
+  created_by_person: PersonRef | null;
+  defer_history: HandoverDeferRecord[];
+} {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new HandoverContractError(field);
+  }
+  const source = raw as JsonObject;
+  const createdByPerson = parseNullableHandoverPersonRef(source.created_by_person, `${field}.created_by_person`);
+  const escalation = source.escalation;
+  if (escalation === null || typeof escalation !== "object" || Array.isArray(escalation)) {
+    throw new HandoverContractError(`${field}.escalation`);
+  }
+  const history = (escalation as JsonObject).defer_history;
+  if (!Array.isArray(history)) {
+    throw new HandoverContractError(`${field}.escalation.defer_history`);
+  }
+  return {
+    created_by_person: createdByPerson,
+    defer_history: history.map((entry, index) =>
+      parseHandoverDeferRecord(entry, `${field}.escalation.defer_history[${index}]`),
+    ),
+  };
 }
 

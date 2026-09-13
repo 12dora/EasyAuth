@@ -140,6 +140,7 @@ function task(team_items: HandoverTeamItemRow[]): HandoverTaskDetail {
     escalation: { deadline: null, days_left: null, level: 0, deferred_at: null, defer_history: [] },
     reason: "",
     created_at: "2026-07-01T09:00:00Z",
+    created_by_person: null,
     actions: [],
     team_items,
   };

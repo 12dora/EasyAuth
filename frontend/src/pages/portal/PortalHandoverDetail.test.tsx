@@ -105,6 +105,7 @@ function taskWithActions(actions: HandoverAction[]): HandoverTaskDetail {
     },
     reason: "离职",
     created_at: "2026-08-10T00:00:00Z",
+    created_by_person: null,
     actions,
     team_items: [],
   };
