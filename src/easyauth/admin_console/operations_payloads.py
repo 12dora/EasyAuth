@@ -4,10 +4,13 @@ from typing import TYPE_CHECKING
 
 from easyauth.access_requests.approvals import loaded_approver_user_ids
 from easyauth.accounts.models import UserMirror
+from easyauth.accounts.person_payload import person_payload
 from easyauth.api.datetime_json import datetime_value
 from easyauth.applications import health_models
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from easyauth.access_requests.models import AccessRequest
     from easyauth.api.errors import JsonValue
     from easyauth.applications.dependency_health import DependencyHealthItem
@@ -28,17 +31,17 @@ def access_request_decision_fields(access_request: AccessRequest) -> JsonObject:
     }
 
 
-def access_request_approvers(access_request: AccessRequest) -> list[JsonValue]:
+def access_request_approvers(
+    access_request: AccessRequest,
+    *,
+    department_labels: Mapping[str, str],
+) -> list[JsonValue]:
     assignments = sorted(
         access_request.loaded_approver_assignments,
         key=lambda assignment: assignment.id,
     )
     items: list[JsonValue] = [
-        {
-            "user_id": assignment.approver.authentik_user_id,
-            "name": assignment.approver.name,
-        }
-        for assignment in assignments
+        person_payload(assignment.approver, department_labels) for assignment in assignments
     ]
     return items
 

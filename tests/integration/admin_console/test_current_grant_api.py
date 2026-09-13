@@ -127,6 +127,7 @@ def test_current_grant_includes_department_and_user_sources() -> None:
     assert row["id"] == grant.id
     assert row["user_name"] == "混合用户"
     assert row["user_department"] == "安环部"
+    assert row["user_account_kind"] == "local"
     assert {(item["key"], item["source"]) for item in row["authorization_groups"]} == {
         (group.key, MEMBERSHIP_SOURCE_USER),
         (group.key, MEMBERSHIP_SOURCE_DEPARTMENT),

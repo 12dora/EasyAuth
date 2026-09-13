@@ -7,8 +7,10 @@ from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.person_payload import person_payload
 from easyauth.admin_console.api_responses import error_response
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
@@ -177,7 +179,7 @@ def team_item(entry: HandoverTeamItem) -> JsonObject:
         "action": entry.action,
         "status": entry.status,
         "to_user": (
-            {"user_id": to_user.authentik_user_id, "name": to_user.name}
+            person_payload(to_user, department_path_labels((to_user,)))
             if to_user is not None
             else None
         ),

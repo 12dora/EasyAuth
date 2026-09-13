@@ -211,7 +211,7 @@
 审批条目在 access_request 基础上额外包含：
 
 - `authorization_groups`（含提交时冻结的 grants 明细）
-- `applicant`：`{ user_id, name, email, department }`
+- `applicant`：`{ user_id, name, email, department, account_kind }`；`account_kind` 为 `directory` 或 `local`
 - `approver_user_ids`
 - `decided_by` / `decided_at`
 

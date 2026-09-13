@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from easyauth.access_requests.models import AccessRequest, AccessRequestApprover
 from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import UserMirror
+from easyauth.accounts.person_payload import person_row_fields
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
 from easyauth.admin_console.api_responses import (
     error_response as _error_response,
@@ -346,9 +347,7 @@ def _access_request_item(
     user = access_request.user
     item: dict[str, JsonValue] = {
         "id": access_request.id,
-        "user_id": user.authentik_user_id,
-        "user_name": user.name,
-        "user_department": department_labels.get(user.authentik_user_id, user.department),
+        **person_row_fields(user, department_labels),
         "app_key": access_request.app.app_key,
         "app_name": access_request.app.name,
         "app_alias": access_request.app.alias,
@@ -363,7 +362,10 @@ def _access_request_item(
             "normal",
         ),
         "routing_reason": getattr(access_request, "routing_reason", "") or "",
-        "approvers": access_request_approvers(access_request),
+        "approvers": access_request_approvers(
+            access_request,
+            department_labels=department_labels,
+        ),
         **access_request_decision_fields(access_request),
         "decided_by_name": decided_by_name,
     }
@@ -417,7 +419,14 @@ def _record_emergency_revoke(
 def _access_request_page_response(page: Page[AccessRequest]) -> JsonResponse:
     failure_reasons = _access_request_failure_reasons(page.items)
     names = decided_by_names(page.items)
-    department_labels = department_path_labels(access_request.user for access_request in page.items)
+    department_labels = department_path_labels(
+        user
+        for access_request in page.items
+        for user in (
+            access_request.user,
+            *(assignment.approver for assignment in access_request.loaded_approver_assignments),
+        )
+    )
     result: list[JsonValue] = [
         _access_request_item(
             access_request,

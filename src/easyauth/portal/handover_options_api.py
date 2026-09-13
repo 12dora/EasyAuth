@@ -9,6 +9,7 @@ from django.http import HttpRequest, JsonResponse
 
 from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.person_payload import person_payload
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import error_response, json_response
 from easyauth.applications.models import App
@@ -96,11 +97,4 @@ def portal_handover_candidates(request: HttpRequest) -> JsonResponse:
 
 def _handover_candidate_items(users: list[UserMirror]) -> list[JsonValue]:
     labels = department_path_labels(users)
-    return [
-        {
-            "user_id": user.authentik_user_id,
-            "name": user.name,
-            "department": labels.get(user.authentik_user_id, user.department),
-        }
-        for user in users
-    ]
+    return [person_payload(user, labels) for user in users]

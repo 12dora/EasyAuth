@@ -8,6 +8,8 @@ from typing import ClassVar, Protocol, cast
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.accounts.department_paths import department_path_labels
+from easyauth.accounts.person_payload import person_payload
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
@@ -51,6 +53,8 @@ def console_approval_rule_replacements(request: HttpRequest) -> JsonResponse:
     elif resolved_raw in {"true", "1"}:
         qs = qs.filter(resolved_at__isnull=False)
     total = qs.count()
+    rows = tuple(qs.order_by("-created_at", "-id")[:200])
+    department_labels = department_path_labels(row.departed_user for row in rows)
     items: list[JsonValue] = [
         {
             "id": row.id,
@@ -61,14 +65,11 @@ def console_approval_rule_replacements(request: HttpRequest) -> JsonResponse:
                     cast("object", row.approval_rule),
                 ).app_id,
             },
-            "departed_user": {
-                "user_id": row.departed_user.authentik_user_id,
-                "name": row.departed_user.name,
-            },
+            "departed_user": person_payload(row.departed_user, department_labels),
             "reason": row.reason,
             "created_at": datetime_value(row.created_at),
         }
-        for row in qs.order_by("-created_at", "-id")[:200]
+        for row in rows
     ]
     response_payload: dict[str, JsonValue] = {"items": items, "total": total}
     return json_response(response_payload)

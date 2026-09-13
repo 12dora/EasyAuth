@@ -8,6 +8,7 @@ from django.db.models import Count, Prefetch, Q, Sum
 from django.utils import timezone
 
 from easyauth.accounts.department_paths import department_path_labels
+from easyauth.accounts.person_payload import person_payload
 from easyauth.api.datetime_json import datetime_value
 from easyauth.audit.models import AuditLog
 from easyauth.lifecycle.lease import action_execution_in_flight
@@ -68,11 +69,7 @@ def user_ref(
     if user is None:
         return None
     labels = department_labels if department_labels is not None else department_path_labels((user,))
-    payload: JsonObject = {
-        "user_id": user.authentik_user_id,
-        "name": user.name,
-        "department": labels.get(user.authentik_user_id, user.department),
-    }
+    payload: JsonObject = person_payload(user, labels)
     if include_status:
         payload["status"] = user.status
         payload["email"] = user.email

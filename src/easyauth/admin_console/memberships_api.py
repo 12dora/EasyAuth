@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import UserMirror
+from easyauth.accounts.person_payload import person_row_fields, unresolved_person_row_fields
 from easyauth.admin_console.api_payloads import list_payload
 from easyauth.admin_console.api_responses import (
     error_response as _error_response,
@@ -221,19 +222,15 @@ def _membership_item(
     department_labels: Mapping[str, str] | None = None,
 ) -> dict[str, JsonValue]:
     if user is None:
-        user_name = ""
-        user_department = ""
+        person_fields = unresolved_person_row_fields(membership.user_id)
     else:
         labels = (
             department_labels if department_labels is not None else department_path_labels((user,))
         )
-        user_name = user.name
-        user_department = labels.get(user.authentik_user_id, user.department)
+        person_fields = person_row_fields(user, labels)
     return {
         "id": membership.id,
-        "user_id": membership.user_id,
-        "user_name": user_name,
-        "user_department": user_department,
+        **person_fields,
         "role": membership.role,
         "is_active": membership.is_active,
     }

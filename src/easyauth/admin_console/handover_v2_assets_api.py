@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import UserMirror
+from easyauth.accounts.person_payload import person_payload
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
@@ -170,14 +171,7 @@ def console_handover_candidates(request: HttpRequest, task_id: int) -> JsonRespo
     labels = department_path_labels(users)
     return json_response(
         {
-            "items": [
-                {
-                    "user_id": user.authentik_user_id,
-                    "name": user.name,
-                    "department": labels.get(user.authentik_user_id, user.department),
-                }
-                for user in users
-            ],
+            "items": [person_payload(user, labels) for user in users],
         },
     )
 

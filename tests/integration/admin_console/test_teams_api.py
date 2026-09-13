@@ -77,7 +77,14 @@ def test_superuser_creates_team_and_manages_members() -> None:
     first_team = teams_data[0]
     assert isinstance(first_team, dict)
     assert first_team["member_count"] == EXPECTED_MEMBER_COUNT
-    assert first_team["leaders"] == [{"user_id": "teams-leader", "name": "张三"}]
+    assert first_team["leaders"] == [
+        {
+            "user_id": "teams-leader",
+            "name": "张三",
+            "department": "销售一部",
+            "account_kind": "local",
+        },
+    ]
     member_added_body = _response_json(member_added)
     team_payload = member_added_body["team"]
     assert isinstance(team_payload, dict)

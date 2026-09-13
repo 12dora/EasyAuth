@@ -92,6 +92,7 @@ def test_serialize_access_grant_row_includes_names_sources_and_expansion() -> No
     assert row["user_id"] == "grant-row-user"
     assert row["user_name"] == "胡玉琴A"
     assert row["user_department"] == "安环部"
+    assert row["user_account_kind"] == "local"
     assert row["app_key"] == "easylearning"
     assert row["app_name"] == "EasyLearning"
     assert row["app_alias"] == "学习工作台"

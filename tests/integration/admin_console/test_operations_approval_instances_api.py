@@ -71,10 +71,12 @@ def test_approval_instances_list_includes_originator_and_app_display_names() -> 
     assert response.status_code == HTTPStatus.OK
     assert named_item["originator_name"] == "胡玉琴A"
     assert named_item["originator_department"] == "安环部"
+    assert named_item["originator_account_kind"] == "local"
     assert named_item["app_name"] == "EasyLearning"
     assert named_item["app_alias"] == "学习工作台"
     assert unnamed_item["originator_name"] == ""
     assert unnamed_item["originator_department"] == ""
+    assert unnamed_item["originator_account_kind"] == "local"
     assert unnamed_item["app_name"] == "EasyLearning"
     assert unnamed_item["app_alias"] == "学习工作台"
 

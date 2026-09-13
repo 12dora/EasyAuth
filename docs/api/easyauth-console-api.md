@@ -120,11 +120,12 @@
 | `user_id` | Authentik 用户 ID |
 | `user_name` | 对应用户 `UserMirror.name`；无镜像或镜像无姓名时为空字符串 |
 | `user_department` | 对应用户部门路径（与 `GET /user-options` 的 `department` 同口径）；无镜像时为空字符串 |
+| `user_account_kind` | `directory`（有钉钉绑定）或 `local`（本地管理员、Authentik 内建用户，或尚无 UserMirror） |
 | `role` | `owner` / `developer` |
 | `is_active` | 是否有效 |
 
-`user_name` / `user_department` 按当前列表一次性批量查询 `UserMirror`，不按行回源。创建与 PATCH 成功体中的
-`membership` 使用同一项形状。
+`user_name` / `user_department` / `user_account_kind` 按当前列表一次性批量查询 `UserMirror`，不按行回源。创建与 PATCH 成功体中的
+`membership` 使用同一项形状。人员展示字段一律来自 `person_payload` / `person_row_fields`。
 
 App capability 与 credential capability 必须同时开启；manifest 声明只供展示，
 不会自动开通 App 能力或授权凭据。
@@ -250,8 +251,9 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 
 **GET `/operations/access-requests`** 列表项在既有字段外提供展示名。`user_name` 为
 申请人 `UserMirror.name`（镜像无姓名时为空字符串）；`user_department` 为申请人部门路径
-（与 `GET /user-options` 的 `department` 同口径）；`app_name` / `app_alias` 为应用
-名称与别名。`approvers` 为 `[{ "user_id", "name" }]`，与既有 `approver_user_ids` 并列。
+（与 `GET /user-options` 的 `department` 同口径）；`user_account_kind` 为 `directory` 或
+`local`。`app_name` / `app_alias` 为应用名称与别名。`approvers` 为
+`[{ "user_id", "name", "department", "account_kind" }]`，与既有 `approver_user_ids` 并列。
 `decided_by_name` 为决定人姓名；无决定人或镜像中无该用户时为空字符串。
 
 ### 授权运营列表
@@ -297,10 +299,12 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | --- | --- |
 | `originator_name` | 发起人 `UserMirror.name`；镜像无姓名时为空字符串 |
 | `originator_department` | 发起人部门路径（与 `GET /user-options` 的 `department` 同口径）；镜像无部门时为空字符串 |
+| `originator_account_kind` | `directory` 或 `local`，口径与人员选项 `account_kind` 相同 |
 | `app_name` | 应用名称 |
 | `app_alias` | 应用别名；未设置时为空字符串 |
 
 `originator_user_id` 仍为 Authentik 用户 ID。前端有姓名时展示姓名，无姓名时再回退到 ID。
+发起人四字段来自同一 `person_payload`。
 `POST /operations/approval-instances/{instance_id}/redeliver` 成功体中的
 `approval_instance` 使用同一项形状。
 
@@ -332,7 +336,8 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | POST | `/lifecycle/onboard` | 发起入职 |
 | GET/POST | `/teams`、`/teams/{id}`、`…/members` | 团队与成员 |
 
-团队详情 `members[]` 含 `department`（部门路径，与人员选项同口径）。
+团队详情 `members[]` 与列表 `leaders[]` 均为人员对象：`user_id`、`name`、`department`、
+`account_kind`（成员项另含 `email`、`status`、`role`、`added_at`）。部门路径与人员选项同口径。
 
 ---
 
@@ -345,7 +350,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | 方法 | 路径 | URL name | 说明 |
 | --- | --- | --- | --- |
 | GET | `/grant-catalog` | `console-grant-catalog` | 管理员授权目录（全量 active 应用/授权组/权限） |
-| GET | `/user-options` | `console-user-options` | 被授权人联想或按 ID 回填；项含 `user_id`、`name`、`department`、`avatar_url` |
+| GET | `/user-options` | `console-user-options` | 被授权人联想或按 ID 回填；项含 `user_id`、`name`、`department`、`account_kind`、`avatar_url` |
 | POST | `/direct-grants` | `console-direct-grants` | 管理员直接授予，立即合并进用户当前授权 |
 | GET | `/users/{user_id}/apps/{app_key}/current-grant` | `console-user-app-current-grant` | 读取该用户在该应用的当前授权行 |
 | GET | `/departments/tree` | `console-departments-tree` | 钉钉组织树 |
@@ -357,8 +362,10 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 ### 用户选项
 
 **GET `/user-options`** 要求 **superuser**。成功信封 `{ "data": [...] }`，项形状固定为
-`{ "user_id", "name", "department", "avatar_url" }`。`department` 为部门路径（如「捷发-安环部」，
+`{ "user_id", "name", "department", "account_kind", "avatar_url" }`。`department` 为部门路径（如「捷发-安环部」，
 多部门按钉钉顺序以 ` / ` 拼接）；人员列表 `GET /users` 的 `department` 同口径。
+`account_kind` 为 `directory`（`dingtalk_userid` 非空）或 `local`（本地管理员、Authentik 内建用户等无钉钉绑定账号）。
+人员对象一律由 `accounts/person_payload.py` 生成。
 
 查询方式：
 
@@ -462,6 +469,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
   "user_id": "<authentik uuid>",
   "user_name": "胡玉琴A",
   "user_department": "捷发-安环部",
+  "user_account_kind": "directory",
   "app_key": "easylearning",
   "app_name": "EasyLearning",
   "app_alias": "学习工作台",
@@ -516,6 +524,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 目录不可用仍为 503。
 `user_name` 为 `UserMirror.name`，
 镜像无姓名时为空字符串。`user_department` 为被授权人部门路径，与人员选项同口径。
+`user_account_kind` 为 `directory` 或 `local`，与人员选项 `account_kind` 同口径。
 
 ### 组织授权
 

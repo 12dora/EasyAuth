@@ -190,11 +190,17 @@ def test_ops3_access_requests_include_user_app_and_approver_names() -> None:
     assert submitted_response.status_code == HTTPStatus.OK
     assert submitted_item["user_name"] == "胡玉琴A"
     assert submitted_item["user_department"] == "安环部"
+    assert submitted_item["user_account_kind"] == "local"
     assert submitted_item["app_name"] == "EasyLearning"
     assert submitted_item["app_alias"] == "学习工作台"
     assert submitted_item["approver_user_ids"] == [approver.authentik_user_id]
     assert submitted_item["approvers"] == [
-        {"user_id": approver.authentik_user_id, "name": "审批人甲"},
+        {
+            "user_id": approver.authentik_user_id,
+            "name": "审批人甲",
+            "department": "",
+            "account_kind": "local",
+        },
     ]
     assert submitted_item["decided_by_name"] == ""
     assert failed_response.status_code == HTTPStatus.OK

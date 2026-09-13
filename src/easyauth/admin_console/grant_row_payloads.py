@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final, cast
 from django.db.models import Prefetch, QuerySet
 
 from easyauth.accounts.department_paths import department_path_labels
+from easyauth.accounts.person_payload import person_row_fields
 from easyauth.api.datetime_json import datetime_value
 from easyauth.applications.models import AuthorizationGroupGrant
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
@@ -94,9 +95,7 @@ def serialize_access_grant_row(
         "version": grant.version,
         "is_current": grant.is_current,
         "status": grant.status,
-        "user_id": user.authentik_user_id,
-        "user_name": user.name,
-        "user_department": labels.get(user.authentik_user_id, user.department),
+        **person_row_fields(user, labels),
         "app_key": grant.app.app_key,
         "app_name": grant.app.name,
         "app_alias": grant.app.alias,

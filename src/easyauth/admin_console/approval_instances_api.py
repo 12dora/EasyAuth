@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final
 from django.http import HttpRequest, JsonResponse
 
 from easyauth.accounts.department_paths import department_path_labels
+from easyauth.accounts.person_payload import person_payload
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
@@ -152,6 +153,7 @@ def _instance_item(
         if department_labels is not None
         else department_path_labels((originator,))
     )
+    originator_person = person_payload(originator, labels)
     return {
         "instance_id": str(instance.id),
         "app_key": app.app_key,
@@ -160,9 +162,10 @@ def _instance_item(
         "template_key": instance.template.key,
         "biz_key": instance.biz_key,
         "status": instance.status,
-        "originator_user_id": originator.authentik_user_id,
-        "originator_name": originator.name,
-        "originator_department": labels.get(originator.authentik_user_id, originator.department),
+        "originator_user_id": originator_person["user_id"],
+        "originator_name": originator_person["name"],
+        "originator_department": originator_person["department"],
+        "originator_account_kind": originator_person["account_kind"],
         "dingtalk_process_instance_id": instance.dingtalk_process_instance_id,
         "delivery_state": instance.delivery_state(),
         "delivery_attempts": delivery.attempts if delivery is not None else 0,

@@ -50,7 +50,8 @@ def test_user_search_matches_name_email_and_id() -> None:
     assert items[0]["name"] == "销售运行用户"
     assert items[0]["department"] == "销售部"
     assert items[0]["avatar_url"] == "https://avatar.example.test/sales.png"
-    assert set(items[0]) == {"user_id", "name", "department", "avatar_url"}
+    assert items[0]["account_kind"] == "local"
+    assert set(items[0]) == {"user_id", "name", "department", "avatar_url", "account_kind"}
 
     response_by_name = client.get(USER_OPTIONS_API_URL, {"q": "运维"})
     payload_by_name = cast("dict[str, JsonValue]", response_by_name.json())
@@ -127,9 +128,10 @@ def test_user_options_lookup_by_ids_ignores_q_and_keeps_item_shape() -> None:
         "user_id": "ak_uid_lookup_sales",
         "name": "销售运行用户",
         "department": "销售部",
+        "account_kind": "local",
         "avatar_url": "https://avatar.example.test/lookup-sales.png",
     }
-    assert set(items[0]) == {"user_id", "name", "department", "avatar_url"}
+    assert set(items[0]) == {"user_id", "name", "department", "avatar_url", "account_kind"}
 
 
 def test_user_options_lookup_by_ids_uses_same_active_and_purpose_semantics() -> None:

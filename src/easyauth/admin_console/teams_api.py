@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.person_payload import person_payload
 from easyauth.admin_console.api_payloads import paginated_list_payload
 from easyauth.admin_console.api_responses import (
     error_response,
@@ -136,10 +137,19 @@ def console_teams(request: HttpRequest) -> JsonResponse:
         members_by_team: dict[int, list[TeamMember]] = {}
         for member in TeamMember.objects.select_related("user").filter(team__in=teams):
             members_by_team.setdefault(member.team_id, []).append(member)
+        department_labels = department_path_labels(
+            member.user
+            for members in members_by_team.values()
+            for member in members
+        )
         return json_response(
             paginated_list_payload(
                 items=[
-                    _team_item_from_members(team, members_by_team.get(team.id, []))
+                    _team_item_from_members(
+                        team,
+                        members_by_team.get(team.id, []),
+                        department_labels=department_labels,
+                    )
                     for team in teams
                 ],
                 pagination=pagination_item(page),
@@ -356,8 +366,8 @@ def _team_detail_payload(team: Team) -> dict[str, JsonValue]:
         .filter(team=team)
         .order_by("role", "user__name", "user__authentik_user_id"),
     )
-    item = _team_item_from_members(team, members)
     department_labels = department_path_labels(member.user for member in members)
+    item = _team_item_from_members(team, members, department_labels=department_labels)
     members_payload: list[JsonValue] = [
         _member_item(member, department_labels=department_labels) for member in members
     ]
@@ -365,9 +375,16 @@ def _team_detail_payload(team: Team) -> dict[str, JsonValue]:
     return {"team": item}
 
 
-def _team_item_from_members(team: Team, members: list[TeamMember]) -> dict[str, JsonValue]:
+def _team_item_from_members(
+    team: Team,
+    members: list[TeamMember],
+    *,
+    department_labels: Mapping[str, str],
+) -> dict[str, JsonValue]:
     leaders: list[JsonValue] = [
-        _member_user_summary(member) for member in members if member.role == TEAM_MEMBER_ROLE_LEADER
+        _member_user_summary(member, department_labels=department_labels)
+        for member in members
+        if member.role == TEAM_MEMBER_ROLE_LEADER
     ]
     return {
         "id": team.id,
@@ -390,21 +407,20 @@ def _member_item(
     labels = department_labels if department_labels is not None else department_path_labels((user,))
     return {
         "id": member.id,
-        "user_id": user.authentik_user_id,
-        "name": user.name,
+        **person_payload(user, labels),
         "email": user.email,
-        "department": labels.get(user.authentik_user_id, user.department),
         "status": user.status,
         "role": member.role,
         "added_at": member.added_at.isoformat(),
     }
 
 
-def _member_user_summary(member: TeamMember) -> dict[str, JsonValue]:
-    return {
-        "user_id": member.user.authentik_user_id,
-        "name": member.user.name,
-    }
+def _member_user_summary(
+    member: TeamMember,
+    *,
+    department_labels: Mapping[str, str],
+) -> dict[str, JsonValue]:
+    return person_payload(member.user, department_labels)
 
 
 def _validation_error(

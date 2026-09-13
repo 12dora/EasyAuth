@@ -25,6 +25,7 @@ from easyauth.access_requests.models import (
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.person_payload import person_payload
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.ordering import parse_ordering
@@ -292,10 +293,8 @@ def _approval_item_from_serialized(
         department_labels if department_labels is not None else department_path_labels((applicant,))
     )
     item["applicant"] = {
-        "user_id": applicant.authentik_user_id,
-        "name": applicant.name,
+        **person_payload(applicant, labels),
         "email": applicant.email,
-        "department": labels.get(applicant.authentik_user_id, applicant.department),
     }
     approver_ids: list[JsonValue] = []
     approver_ids.extend(loaded_approver_user_ids(access_request))

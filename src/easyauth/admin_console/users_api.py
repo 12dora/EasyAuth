@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.person_payload import person_payload
 from easyauth.accounts.pinyin import pinyin_query_filter
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
 from easyauth.admin_console.api_responses import error_response, json_response
@@ -250,9 +251,7 @@ def _user_item(
 ) -> dict[str, JsonValue]:
     labels = department_labels if department_labels is not None else department_path_labels((user,))
     return {
-        "user_id": user.authentik_user_id,
-        "name": user.name,
-        "department": labels.get(user.authentik_user_id, user.department),
+        **person_payload(user, labels),
         "avatar_url": user.avatar_url,
     }
 
