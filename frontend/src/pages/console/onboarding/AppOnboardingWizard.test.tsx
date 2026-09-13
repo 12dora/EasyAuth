@@ -22,7 +22,15 @@ describe("AppOnboardingWizard", () => {
         return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } }, 201);
       }
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "", owners: ["owner-a"] } });
+        return jsonResponse({
+          app: {
+            id: 9,
+            app_key: "billing",
+            name: "Billing",
+            alias: "",
+            owners: [{ user_id: "owner-a", name: "owner-a", department: "", account_kind: "directory" }],
+          },
+        });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });

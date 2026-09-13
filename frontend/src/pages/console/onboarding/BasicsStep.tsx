@@ -6,13 +6,15 @@ import { AppKeyInput } from "../../../components/AppKeyInput";
 import { Button } from "../../../components/Button";
 import { Field, TextArea, TextInput } from "../../../components/Field";
 import { StatusBanner } from "../../../components/StatusBanner";
+import { userSecondaryLabel } from "../../../components/UserCombobox";
 import { UserMultiSelect } from "../../../components/UserSelect";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import type { JsonObject } from "../../../lib/api";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import { generateAppKey } from "../../../lib/appKey";
-import type { AppListPayload } from "../../../lib/domain";
+import type { AppListPayload, PersonRef } from "../../../lib/domain";
+import type { Translator } from "../../../lib/status";
 import { AutoOnboardPanel } from "./AutoOnboardPanel";
 import { StepFooter, StepPanel } from "./StepLayout";
 import type { AppSummaryLike } from "./types";
@@ -52,7 +54,7 @@ function ExistingAppSummary({
         <SummaryItem label="app_key" value={<code>{app?.app_key ?? appKey}</code>} />
         <SummaryItem label={t("common.name")} value={app ? formatAppDisplayName(app) : "-"} />
         <SummaryItem label={t("common.description")} value={app?.description || "-"} />
-        <SummaryItem label={t("appList.column.owners")} value={(app?.owners ?? []).join(", ") || "-"} />
+        <SummaryItem label={t("appList.column.owners")} value={formatOwnerList(app?.owners, t)} />
       </dl>
       <StepFooter>
         <Button variant="primary" onClick={() => onContinue(appKey)}>
@@ -61,6 +63,19 @@ function ExistingAppSummary({
       </StepFooter>
     </StepPanel>
   );
+}
+
+function formatOwnerList(owners: PersonRef[] | undefined, t: Translator): string {
+  if (!owners || owners.length === 0) {
+    return "-";
+  }
+  return owners
+    .map((owner) => {
+      const name = owner.name || owner.user_id;
+      const secondary = userSecondaryLabel(owner, t);
+      return secondary ? `${name} (${secondary})` : name;
+    })
+    .join("、");
 }
 
 function CreateAppForm({

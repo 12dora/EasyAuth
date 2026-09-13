@@ -1,4 +1,5 @@
 import type { MessageKey } from "../../../i18n/messages";
+import type { PersonRef } from "../../../lib/domain";
 
 export type WizardStep = "basics" | "catalog" | "authz" | "credential" | "verify" | "done";
 export type CreatedCredentialKind = "static_token" | "oauth_client";
@@ -18,7 +19,7 @@ export interface AppSummaryLike {
   name: string;
   alias: string;
   description?: string;
-  owners?: string[];
+  owners?: PersonRef[];
 }
 
 export interface AutoOnboardingResult {

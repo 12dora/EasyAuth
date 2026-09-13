@@ -101,7 +101,6 @@ describe("表格架构", () => {
  */
 const ALLOWED_PERSON_ID_DISPLAY: Record<string, string> = {
   "pages/console/workspace/tabs/RulesTab.tsx": "审批规则 approver_userids 本批次仍为 string[]",
-  "pages/console/onboarding/BasicsStep.tsx": "接入向导 AppSummaryLike.owners 仍为 string[]",
   "pages/console/workspace/overview/AppBasicInfoPanel.tsx": "developers 本批次仍为 string[]",
 };
 
