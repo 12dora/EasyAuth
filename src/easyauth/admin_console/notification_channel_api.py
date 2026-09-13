@@ -15,7 +15,8 @@ from easyauth.admin_console.api_responses import (
     json_response,
     method_not_allowed_response,
 )
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.request_guards import require_console_actor, require_method
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AppNotificationChannel
 from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
@@ -105,8 +106,8 @@ def console_app_notification_channel_test(request: HttpRequest, app_key: str) ->
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     if not can_manage_app(actor, app):
         return _write_denied()
     channel = _active_channel(app)
@@ -215,7 +216,7 @@ def _channel_payload(channel: AppNotificationChannel | None) -> dict[str, JsonVa
         "version": channel.version,
         "is_active": channel.is_active,
         "created_by": channel.created_by,
-        "created_at": channel.created_at.isoformat(),
+        "created_at": datetime_value(channel.created_at),
     }
 
 

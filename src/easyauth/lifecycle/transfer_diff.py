@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from easyauth.api.datetime_json import datetime_value
 from easyauth.applications.models import App, AuthorizationGroup, Permission
 from easyauth.lifecycle.core import TEMPLATE_TERM_INVALID_MESSAGE
 from easyauth.lifecycle.errors import HandoverError
@@ -89,9 +90,7 @@ def grant_diff_entry(item: HandoverGrantItem) -> dict[str, JsonValue]:
         "name": item.target_name_snapshot,
         "scope_key": item.scope_key,
         "grant_type": item.grant_type,
-        "grant_expires_at": item.grant_expires_at.isoformat()
-        if item.grant_expires_at is not None
-        else None,
+        "grant_expires_at": datetime_value(item.grant_expires_at),
         "selected": True,
     }
 

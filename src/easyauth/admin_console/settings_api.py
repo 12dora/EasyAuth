@@ -11,6 +11,7 @@ from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
     method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.api.datetime_json import datetime_value
@@ -168,8 +169,8 @@ def console_dingtalk_connectivity_test(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     try:
         _ = DingTalkApiClient.from_settings().get_access_token(force_refresh=True)
     except DingTalkApiError as error:

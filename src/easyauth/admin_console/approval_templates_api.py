@@ -14,8 +14,10 @@ from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
     method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App
 from easyauth.audit.services import AuditRecord, AuditService
@@ -113,8 +115,8 @@ def console_approval_template_test(request: HttpRequest, template_id: int) -> Js
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     return _run_template_test(request, template_id=template_id, actor_id=actor_id)
 
 
@@ -267,8 +269,8 @@ def _template_item(template: ApprovalTemplate) -> JsonObject:
         "form_schema": template.form_schema,
         "form_mapping": template.form_mapping,
         "is_active": template.is_active,
-        "created_at": template.created_at.isoformat(),
-        "updated_at": template.updated_at.isoformat(),
+        "created_at": datetime_value(template.created_at),
+        "updated_at": datetime_value(template.updated_at),
     }
 
 

@@ -20,10 +20,10 @@ from easyauth.access_requests.services import (
 )
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.api.pagination import pagination_item
+from easyauth.api.pagination import paginated_list_payload, pagination_item
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
-from easyauth.api.responses import method_not_allowed_response
+from easyauth.api.responses import method_not_allowed_response, require_method
 from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.portal.access_request_payloads import (
     AccessRequestPayload,
@@ -133,8 +133,8 @@ def portal_request_catalog(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
 
     return _json_response(request_catalog_payload(user))
 
@@ -146,8 +146,8 @@ def portal_access_request_withdraw(request: HttpRequest, request_id: int) -> Jso
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     try:
         access_request = withdraw_access_request(
             request_id=request_id,
@@ -297,7 +297,10 @@ def _page_response(page: PortalPage | JsonResponse) -> JsonResponse:
     if isinstance(page, JsonResponse):
         return page
     return _json_response(
-        {"data": _json_objects(page.items), "pagination": pagination_item(_pagination(page))},
+        paginated_list_payload(
+            items=_json_objects(page.items),
+            pagination=pagination_item(_pagination(page)),
+        ),
     )
 
 

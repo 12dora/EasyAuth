@@ -16,7 +16,7 @@ from easyauth.admin_console.api_payloads import list_payload, paginated_list_pay
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
-    method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.operation_filters import (
@@ -66,8 +66,8 @@ class _ConsoleAdminPayload(BaseModel):
 
 
 def console_users(request: HttpRequest) -> JsonResponse:
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     match require_superuser(request):
         case JsonResponse() as response:
             return response
@@ -77,8 +77,8 @@ def console_users(request: HttpRequest) -> JsonResponse:
 
 
 def console_user_options(request: HttpRequest) -> JsonResponse:
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     match require_superuser(request):
         case JsonResponse() as response:
             return response
@@ -97,8 +97,8 @@ def _user_options_payload(request: HttpRequest) -> JsonResponse:
 
 
 def console_user_console_admin(request: HttpRequest, user_id: str) -> JsonResponse:
-    if request.method != "PUT":
-        return method_not_allowed_response()
+    if response := require_method(request, "PUT"):
+        return response
     match require_superuser(request):
         case str() as actor_id:
             pass

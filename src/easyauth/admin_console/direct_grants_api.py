@@ -12,7 +12,7 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
-    method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.grant_row_payloads import (
@@ -70,8 +70,8 @@ def console_direct_grants(request: HttpRequest) -> JsonResponse:
             return response
         case str() as actor_id:
             pass
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     return _create_direct_grant(request, actor_id=actor_id)
 
 
@@ -268,8 +268,8 @@ def console_user_app_current_grant(
             return response
         case str():
             pass
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     user = UserMirror.objects.filter(authentik_user_id=user_id).first()
     if user is None:
         return error_response(

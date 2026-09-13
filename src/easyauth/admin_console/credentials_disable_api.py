@@ -12,7 +12,9 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
-from easyauth.admin_console.api_responses import method_not_allowed_response
+from easyauth.admin_console.api_responses import (
+    require_method,
+)
 from easyauth.admin_console.credentials import (
     CredentialActor,
     CredentialOperationError,
@@ -49,8 +51,8 @@ def console_credential_disable(
     credential_type: str,
     credential_id: int,
 ) -> JsonResponse:
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
 
     match credential_write_context(request, app_key):
         case (App() as app, ConsoleActor() as actor):

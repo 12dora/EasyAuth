@@ -197,7 +197,7 @@ def _access_request_item(
         "grant_type": access_request.grant_type,
         "grant_expires_at": datetime_value(access_request.grant_expires_at),
         "reason": access_request.reason,
-        "submitted_at": access_request.submitted_at.isoformat(),
+        "submitted_at": datetime_value(access_request.submitted_at),
         "authorization_groups": _json_objects(group_items),
         "direct_grants": _json_objects(direct_grant_items),
         "current_approvers": _json_objects(_current_approver_items(access_request)),

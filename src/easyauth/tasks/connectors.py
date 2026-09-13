@@ -8,6 +8,7 @@ from celery import shared_task
 from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.api.datetime_json import datetime_value
 from easyauth.connectors.base import ConnectorError
 from easyauth.connectors.dispatch import (
     OFFBOARD_TASK_NAME,
@@ -65,7 +66,7 @@ def refresh_connector_external_groups_task(instance_id: int) -> dict[str, int | 
     return {
         "active_count": result.active_count,
         "deactivated_count": result.deactivated_count,
-        "refreshed_at": result.refreshed_at.isoformat(),
+        "refreshed_at": datetime_value(result.refreshed_at),
         "status": "" if instance is None else instance.external_groups_refresh_status,
         "cursor": "" if instance is None else instance.external_groups_refresh_cursor,
     }

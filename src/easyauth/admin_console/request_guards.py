@@ -3,14 +3,17 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import TYPE_CHECKING
 
-from easyauth.admin_console.api_responses import error_response, method_not_allowed_response
+from easyauth.admin_console.api_responses import error_response
 from easyauth.admin_console.identity import actor_from_request
 from easyauth.api.errors import ErrorCode
+from easyauth.api.responses import require_method
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, JsonResponse
 
     from easyauth.applications.ownership import ConsoleActor
+
+__all__ = ["require_console_actor", "require_method", "require_post"]
 
 
 def require_console_actor(request: HttpRequest) -> ConsoleActor | JsonResponse:
@@ -25,6 +28,4 @@ def require_console_actor(request: HttpRequest) -> ConsoleActor | JsonResponse:
 
 
 def require_post(request: HttpRequest) -> JsonResponse | None:
-    if request.method == "POST":
-        return None
-    return method_not_allowed_response()
+    return require_method(request, "POST")

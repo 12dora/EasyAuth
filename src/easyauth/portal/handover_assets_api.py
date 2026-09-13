@@ -12,7 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.api.responses import error_response, json_response
+from easyauth.api.responses import (
+    error_response,
+    json_response,
+    method_not_allowed_response,
+    require_method,
+)
 from easyauth.lifecycle.api_errors import map_handover_exception, reason_error
 from easyauth.lifecycle.api_payloads import asset_type_item
 from easyauth.lifecycle.assignments import (
@@ -25,7 +30,6 @@ from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover_validation import FetchActionItemsSpec, fetch_action_items
 from easyauth.portal.handover_api import (
     action_for_user,
-    method_not_allowed,
     parse_int,
     parse_page,
     portal_user,
@@ -86,8 +90,8 @@ def portal_handover_items(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed()
+    if response := require_method(request, "GET"):
+        return response
     action = action_for_user(user, task_id, app_key, require_assignee=False)
     if isinstance(action, JsonResponse):
         return action
@@ -135,7 +139,7 @@ def portal_handover_overrides(
         return _get_portal_overrides(override_request)
     if request.method == "PUT":
         return _put_portal_overrides(request, override_request)
-    return method_not_allowed()
+    return method_not_allowed_response()
 
 
 def portal_handover_asset_type(
@@ -149,8 +153,8 @@ def portal_handover_asset_type(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "PATCH":
-        return method_not_allowed()
+    if response := require_method(request, "PATCH"):
+        return response
     try:
         payload = AssetTypePatchPayload.model_validate_json(request.body)
     except ValidationError as exc:

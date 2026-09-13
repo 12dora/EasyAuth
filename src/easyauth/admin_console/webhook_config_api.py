@@ -13,7 +13,8 @@ from easyauth.admin_console.api_responses import (
     json_response,
     method_not_allowed_response,
 )
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.request_guards import require_console_actor, require_method
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
@@ -81,8 +82,8 @@ def console_app_webhook_test(request: HttpRequest, app_key: str) -> JsonResponse
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     try:
         payload = WebhookTestPayload.model_validate_json(request.body or b"{}")
     except ValidationError as exc:
@@ -193,7 +194,7 @@ def _config_payload(config: AppWebhookConfig) -> JsonObject:
         "onboard_url": config.onboard_url,
         "events_url": config.events_url,
         "updated_by": config.updated_by,
-        "updated_at": config.updated_at.isoformat(),
+        "updated_at": datetime_value(config.updated_at),
     }
 
 

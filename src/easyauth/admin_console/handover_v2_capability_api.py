@@ -12,6 +12,7 @@ from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
     method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.auto_onboarding_api import (
@@ -89,8 +90,8 @@ def console_handover_capability_sync(request: HttpRequest, app_key: str) -> Json
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     return _sync_handover_capability(app_key, actor_id=actor_id)
 
 

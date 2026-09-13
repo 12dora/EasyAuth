@@ -5,6 +5,7 @@ import json
 
 from django.utils import timezone
 
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import JsonValue
 from easyauth.connectors.base import BaseConnector, secret_field_names
 from easyauth.connectors.models import (
@@ -44,9 +45,7 @@ def instance_item(instance: ConnectorInstance) -> JsonObject:
         "config_error": config_error,
         "configured_secrets": configured_secrets,
         "reconcile_interval_seconds": instance.reconcile_interval_seconds,
-        "last_reconcile_at": (
-            instance.last_reconcile_at.isoformat() if instance.last_reconcile_at else None
-        ),
+        "last_reconcile_at": datetime_value(instance.last_reconcile_at),
         "last_status": instance.last_status,
         "last_error": instance.last_error,
         "consecutive_failures": instance.consecutive_failures,
@@ -54,7 +53,7 @@ def instance_item(instance: ConnectorInstance) -> JsonObject:
         "external_groups_refresh": _external_groups_refresh_item(instance),
         "reconcile_state": reconcile_state_item(instance),
         "updated_by": instance.updated_by,
-        "updated_at": instance.updated_at.isoformat(),
+        "updated_at": datetime_value(instance.updated_at),
     }
 
 
@@ -86,11 +85,7 @@ def _external_groups_refresh_item(instance: ConnectorInstance) -> JsonObject:
     return {
         "status": instance.external_groups_refresh_status,
         "cursor": instance.external_groups_refresh_cursor,
-        "refreshed_at": (
-            instance.external_groups_refreshed_at.isoformat()
-            if instance.external_groups_refreshed_at
-            else None
-        ),
+        "refreshed_at": datetime_value(instance.external_groups_refreshed_at),
     }
 
 
@@ -116,17 +111,9 @@ def reconcile_state_item(instance: ConnectorInstance) -> JsonObject:
         "dirty": instance.reconcile_dirty,
         "pending_trigger": instance.reconcile_pending_trigger,
         "worker_queued": instance.reconcile_worker_queued,
-        "worker_queued_at": (
-            instance.reconcile_worker_queued_at.isoformat()
-            if instance.reconcile_worker_queued_at
-            else None
-        ),
+        "worker_queued_at": datetime_value(instance.reconcile_worker_queued_at),
         "lease_active": lease_active,
-        "lease_expires_at": (
-            instance.reconcile_lease_expires_at.isoformat()
-            if instance.reconcile_lease_expires_at
-            else None
-        ),
+        "lease_expires_at": datetime_value(instance.reconcile_lease_expires_at),
     }
 
 
@@ -160,8 +147,8 @@ def sync_run_item(run: ConnectorSyncRun) -> JsonObject:
         "id": run.id,
         "trigger": run.trigger,
         "status": run.status,
-        "started_at": run.started_at.isoformat(),
-        "finished_at": run.finished_at.isoformat(),
+        "started_at": datetime_value(run.started_at),
+        "finished_at": datetime_value(run.finished_at),
         "stats": dict(run.stats),
         "error": run.error,
     }

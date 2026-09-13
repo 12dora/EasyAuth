@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 
-from easyauth.admin_console.api_responses import json_response, method_not_allowed_response
+from easyauth.admin_console.api_responses import (
+    json_response,
+    method_not_allowed_response,
+    require_method,
+)
 from easyauth.admin_console.catalog_relationships import ResolvedGroupReference
 from easyauth.admin_console.catalog_write_common import (
     CatalogEvent,
@@ -59,8 +63,8 @@ def console_permission_detail(
     app_key: str,
     permission_key: str,
 ) -> JsonResponse:
-    if request.method != "PATCH":
-        return method_not_allowed_response()
+    if response := require_method(request, "PATCH"):
+        return response
     return _update_permission(request, app_key, permission_key)
 
 

@@ -10,8 +10,9 @@ from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue, build_error_response
-from easyauth.api.pagination import pagination_item, total_pages
+from easyauth.api.pagination import paginated_list_payload, pagination_item, total_pages
 from easyauth.api.permission_query_auth import authenticate_permission_query_token
 from easyauth.api.responses import method_not_allowed_response
 from easyauth.applications.models import App
@@ -209,9 +210,9 @@ def _list_approval_instances(request: HttpRequest, app_key: str) -> JsonResponse
     rows = recover_stale_submissions(tuple(queryset[page.start : page.stop]))
     items: list[JsonValue] = [_instance_payload(instance) for instance in rows]
     return JsonResponse(
-        {
-            "data": items,
-            "pagination": pagination_item(
+        paginated_list_payload(
+            items=items,
+            pagination=pagination_item(
                 _PaginationView(
                     page=page.page,
                     page_size=page.page_size,
@@ -222,7 +223,7 @@ def _list_approval_instances(request: HttpRequest, app_key: str) -> JsonResponse
                     ),
                 ),
             ),
-        },
+        ),
     )
 
 
@@ -288,10 +289,8 @@ def _instance_payload(instance: ApprovalInstance) -> dict[str, JsonValue]:
         "submission_state": instance.submission_state,
         "provider_correlation_key": str(instance.provider_correlation_key),
         "originator_user_id": instance.originator_user.authentik_user_id,
-        "created_at": instance.created_at.isoformat(),
-        "completed_at": (
-            instance.completed_at.isoformat() if instance.completed_at is not None else None
-        ),
+        "created_at": datetime_value(instance.created_at),
+        "completed_at": datetime_value(instance.completed_at),
     }
 
 

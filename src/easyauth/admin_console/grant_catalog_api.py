@@ -6,7 +6,7 @@ from django.http import HttpRequest, JsonResponse
 
 from easyauth.admin_console.api_responses import (
     json_response,
-    method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.portal.request_catalog_approvers import ApproverResolution, RequestCatalogApprovers
@@ -32,8 +32,8 @@ def console_grant_catalog(request: HttpRequest) -> JsonResponse:
             return response
         case str():
             pass
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     catalog = load_request_catalog_data(scope=CONSOLE_CATALOG_SCOPE)
     return json_response(serialize_request_catalog(catalog, _console_catalog_approvers(catalog)))
 

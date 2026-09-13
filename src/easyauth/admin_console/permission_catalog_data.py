@@ -11,6 +11,7 @@ from easyauth.admin_console.permission_catalog_policy_data import (
     grant_managed_scope_policy_item,
     managed_scope_policy_context,
 )
+from easyauth.api.datetime_json import datetime_value
 from easyauth.applications.models import (
     App,
     AppScope,
@@ -269,7 +270,7 @@ def permission_item(permission: Permission) -> dict[str, JsonValue]:
         "group_key": group_key,
         "is_active": permission.is_active,
         "is_deprecated": permission.deprecated_at is not None,
-        "deprecated_at": None if deprecated_at is None else deprecated_at.isoformat(),
+        "deprecated_at": datetime_value(deprecated_at),
         "deprecated_reason": permission.deprecated_reason,
         "supported_scopes": permission.supported_scopes,
         "risk_level": permission.risk_level,

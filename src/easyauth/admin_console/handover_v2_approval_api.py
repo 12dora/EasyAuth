@@ -13,7 +13,7 @@ from easyauth.accounts.person_payload import person_payload
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
-    method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.handover_v2_support import not_found
@@ -41,8 +41,8 @@ def console_approval_rule_replacements(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     resolved_raw = request.GET.get("resolved", "false").strip().lower()
     qs = ApprovalRuleReplacementRequired.objects.select_related(
         "approval_rule",
@@ -84,8 +84,8 @@ def console_approval_rule_replacement_resolve(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     return _resolve_approval_rule_replacement(request, replacement_id, actor_id=actor_id)
 
 

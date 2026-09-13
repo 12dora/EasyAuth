@@ -17,6 +17,7 @@ from easyauth.admin_console.query_tester import (
     run_permission_query_test,
 )
 from easyauth.admin_console.request_guards import require_console_actor, require_post
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.permission_query_payloads import expanded_grant_payload
 from easyauth.applications.models import App
@@ -139,7 +140,7 @@ def _success_payload(
         "grant_version": result.grant_version,
         "catalog_version": result.catalog_version,
         "snapshot_version": result.snapshot_version,
-        "expires_at": None if result.expires_at is None else result.expires_at.isoformat(),
+        "expires_at": datetime_value(result.expires_at),
         "status_code": result.status_code,
         "code": result.code,
         "explanation": result.explanation,

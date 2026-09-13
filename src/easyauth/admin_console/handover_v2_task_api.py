@@ -18,7 +18,7 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
-    method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.handover_v2_support import action_or_none, not_found
@@ -84,8 +84,8 @@ def console_handover_claim(request: HttpRequest, task_id: int) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     return _claim_handover_task(task_id, actor_id=actor_id)
 
 
@@ -139,8 +139,8 @@ def console_handover_reassign(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     return _create_reassign_handover(request, actor_id=actor_id)
 
 
@@ -217,8 +217,8 @@ def console_handover_defer(request: HttpRequest, task_id: int) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     return _defer_handover_task(request, task_id, actor_id=actor_id)
 
 
@@ -274,8 +274,8 @@ def console_handover_async_abandon(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     action = action_or_none(task_id, app_key)
     if action is None:
         return not_found()

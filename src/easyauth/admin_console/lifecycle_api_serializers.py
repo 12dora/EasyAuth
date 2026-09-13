@@ -266,8 +266,8 @@ def template_item(template: OnboardingTemplate) -> JsonObject:
         "current_revision_id": revision.id if revision is not None else None,
         "current_revision": revision.revision if revision is not None else None,
         "items": items,
-        "created_at": template.created_at.isoformat(),
-        "updated_at": template.updated_at.isoformat(),
+        "created_at": datetime_value(template.created_at),
+        "updated_at": datetime_value(template.updated_at),
     }
 
 

@@ -8,6 +8,8 @@ from django.core.cache import cache
 from django.core.signing import BadSignature, TimestampSigner
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.api.datetime_json import datetime_value
+
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
     from easyauth.applications.models import PermissionTemplateVersion
@@ -85,7 +87,7 @@ def template_version_item(template_version: PermissionTemplateVersion) -> dict[s
         "version": template_version.version,
         "status": template_version.status,
         "imported_by": template_version.imported_by,
-        "imported_at": template_version.imported_at.isoformat(),
+        "imported_at": datetime_value(template_version.imported_at),
         "action_count": _template_action_count(template_version),
     }
 

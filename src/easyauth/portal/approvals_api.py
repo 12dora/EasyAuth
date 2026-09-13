@@ -29,10 +29,10 @@ from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.ordering import apply_ordering
 from easyauth.api.ordering_expressions import REQUEST_ORDERING_ANNOTATIONS
-from easyauth.api.pagination import pagination_item, total_pages
+from easyauth.api.pagination import paginated_list_payload, pagination_item, total_pages
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
-from easyauth.api.responses import method_not_allowed_response
+from easyauth.api.responses import require_method
 from easyauth.portal.access_request_data import (
     APPROVER_PREFETCH,
     access_request_items,
@@ -78,8 +78,8 @@ def portal_approvals(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     status = request.GET.get("status", APPROVAL_STATUS_PENDING)
     if status not in {APPROVAL_STATUS_PENDING, APPROVAL_STATUS_PROCESSED}:
         return _error_response(
@@ -97,8 +97,8 @@ def portal_approval_detail(request: HttpRequest, request_id: int) -> JsonRespons
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     access_request = _visible_approval(user, request_id)
     if access_request is None:
         return _not_found_response()
@@ -119,8 +119,8 @@ def _decide(request: HttpRequest, request_id: int, *, action: str) -> JsonRespon
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     try:
         payload = _ApprovalDecisionPayload.model_validate_json(request.body or b"{}")
     except ValidationError as exc:
@@ -422,4 +422,6 @@ def _page_response(page: PortalPage | JsonResponse) -> JsonResponse:
         return page
     items: list[JsonValue] = []
     items.extend(page.items)
-    return _json_response({"data": items, "pagination": pagination_item(page)})
+    return _json_response(
+        paginated_list_payload(items=items, pagination=pagination_item(page)),
+    )

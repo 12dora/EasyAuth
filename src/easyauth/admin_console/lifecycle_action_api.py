@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
-    method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.lifecycle_api_serializers import (
@@ -57,8 +57,8 @@ def lifecycle_action_operation(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     task = task_or_none(task_id)
     if task is None:
         return not_found("交接单不存在。")

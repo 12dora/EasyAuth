@@ -22,7 +22,8 @@ from easyauth.admin_console.operation_filters import (
     operation_filter_error_response,
     paginate_queryset,
 )
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.request_guards import require_console_actor, require_method
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
@@ -198,8 +199,8 @@ def console_team_members(request: HttpRequest, team_id: int) -> JsonResponse:
     team = _team_or_404(team_id)
     if isinstance(team, JsonResponse):
         return team
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     return _add_member(request, team, actor)
 
 
@@ -404,8 +405,8 @@ def _team_item_from_members(
         "is_active": team.is_active,
         "leaders": leaders,
         "member_count": len(members),
-        "created_at": team.created_at.isoformat(),
-        "updated_at": team.updated_at.isoformat(),
+        "created_at": datetime_value(team.created_at),
+        "updated_at": datetime_value(team.updated_at),
     }
 
 
@@ -422,7 +423,7 @@ def _member_item(
         "email": user.email,
         "status": user.status,
         "role": member.role,
-        "added_at": member.added_at.isoformat(),
+        "added_at": datetime_value(member.added_at),
     }
 
 

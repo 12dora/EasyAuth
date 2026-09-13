@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
-    method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.permission_template_handlers import CONFLICT_TEMPLATE_CODES
@@ -106,8 +106,8 @@ def console_app_auto_onboarding(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     try:
         payload = AutoOnboardingPayload.model_validate_json(request.body)
     except ValidationError as exc:

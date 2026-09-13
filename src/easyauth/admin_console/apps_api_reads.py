@@ -17,7 +17,6 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
-from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.apps_api_payloads import CONFIGURATION_ISSUE_TARGET_TYPES
 from easyauth.admin_console.operation_filters import (
     OperationFilterValidationError,
@@ -26,7 +25,8 @@ from easyauth.admin_console.operation_filters import (
     paginate_queryset,
 )
 from easyauth.admin_console.permission_template_api_data import template_version_item
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.request_guards import require_console_actor, require_method
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
@@ -76,8 +76,8 @@ CONSOLE_APP_DEFAULT_ORDER: Final[tuple[str, ...]] = ("app_key",)
 
 def list_console_apps(request: HttpRequest) -> JsonResponse:
     """应用数量较少, 配置状态按声明顺序 blocking < warning < ready 全量计算后分页。"""
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
 
     match require_console_actor(request):
         case ConsoleActor() as actor:
@@ -141,8 +141,8 @@ def _first_owner_name() -> Subquery:
 
 
 def get_console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse:
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
 
     match require_console_actor(request):
         case ConsoleActor() as actor:
@@ -158,8 +158,8 @@ def get_console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse:
 
 
 def get_console_app_configuration_status(request: HttpRequest, app_key: str) -> JsonResponse:
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
@@ -246,7 +246,7 @@ def _app_item(
         "is_active": app.is_active,
         "owners": owners,
         "configuration_status": readiness_status,
-        "updated_at": app.updated_at.isoformat(),
+        "updated_at": datetime_value(app.updated_at),
         "can_manage": capabilities["can_edit_basic_info"],
         "capabilities": capabilities,
     }

@@ -19,7 +19,7 @@ from easyauth.admin_console.connector_api_presenters import (
     instance_item,
     merge_secret_fields,
 )
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.request_guards import require_console_actor, require_method
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
@@ -115,8 +115,8 @@ def console_app_connector_reconcile(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     if response := superuser_required(actor):
         return response
     if not instance.enabled:

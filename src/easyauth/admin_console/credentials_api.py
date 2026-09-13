@@ -28,7 +28,11 @@ from easyauth.admin_console.credentials_api_payloads import (
     oauth_client_item,
     static_credential_item,
 )
-from easyauth.admin_console.request_guards import require_console_actor, require_post
+from easyauth.admin_console.request_guards import (
+    require_console_actor,
+    require_method,
+    require_post,
+)
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App, AppCredential, OAuthClientBinding
 from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
@@ -67,8 +71,8 @@ def console_credentials(request: HttpRequest, app_key: str) -> JsonResponse:
         case JsonResponse() as response:
             return response
 
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
 
     return _json_response(list_payload(credential_items(app)))
 

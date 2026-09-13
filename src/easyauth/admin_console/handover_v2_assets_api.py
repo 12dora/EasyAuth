@@ -16,6 +16,7 @@ from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
     method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.handover_v2_support import action_or_none, not_found, parse_int
@@ -81,8 +82,8 @@ def console_handover_blocked_apps(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     rows = (
         HandoverAppAction.objects.filter(
             status=ACTION_STATUS_BLOCKED,
@@ -123,8 +124,8 @@ def console_handover_app_options(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     # 超管跨部门: 不做管辖校验, subject_user_id 可选
     items: list[JsonValue] = [
         {
@@ -153,8 +154,8 @@ def console_handover_candidates(request: HttpRequest, task_id: int) -> JsonRespo
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     task = HandoverTask.objects.select_related("subject_user").filter(pk=task_id).first()
     if task is None:
         return not_found()
@@ -187,8 +188,8 @@ def console_handover_items(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     action = action_or_none(task_id, app_key)
     if action is None:
         return not_found()
@@ -318,8 +319,8 @@ def console_handover_asset_type(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "PATCH":
-        return method_not_allowed_response()
+    if response := require_method(request, "PATCH"):
+        return response
     action = action_or_none(task_id, app_key)
     if action is None:
         return not_found()

@@ -12,7 +12,6 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
-from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.operation_filters import (
     OperationFilterValidationError,
     operation_filter_error_response,
@@ -26,7 +25,11 @@ from easyauth.admin_console.permission_template_handlers import (
     confirm_template_import,
     preview_template_import,
 )
-from easyauth.admin_console.request_guards import require_console_actor, require_post
+from easyauth.admin_console.request_guards import (
+    require_console_actor,
+    require_method,
+    require_post,
+)
 from easyauth.api.errors import ErrorCode
 from easyauth.api.ordering import apply_ordering
 from easyauth.api.pagination import pagination_item
@@ -87,8 +90,8 @@ def permission_template_versions_api(request: HttpRequest, app_key: str) -> Json
         case JsonResponse() as response:
             return response
 
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     queryset = apply_ordering(
         request,
         PermissionTemplateVersion.objects.filter(app=app),
@@ -125,8 +128,8 @@ def app_manifest_api(request: HttpRequest, app_key: str) -> JsonResponse:
         case JsonResponse() as response:
             return response
 
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     return _json_response(export_manifest(app))
 
 

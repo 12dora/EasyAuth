@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, build_error_response
 from easyauth.api.permission_query_auth import (
     authenticate_permission_query_token,
@@ -82,7 +83,7 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
         "grant_version": snapshot.grant_version,
         "catalog_version": snapshot.catalog_version,
         "snapshot_version": snapshot.snapshot_version,
-        "expires_at": expires_at.isoformat(),
+        "expires_at": datetime_value(expires_at),
     }
     serializer = PermissionQueryResponseSerializer(data=payload)
     if not serializer.is_valid():

@@ -36,7 +36,7 @@ from easyauth.admin_console.configuration import (
     ConsoleMutationActor,
     create_approval_rule,
 )
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.request_guards import require_console_actor, require_method
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
@@ -74,8 +74,8 @@ def console_approval_rule_detail(
     app_key: str,
     approval_rule_id: int,
 ) -> JsonResponse:
-    if request.method != "PATCH":
-        return method_not_allowed_response()
+    if response := require_method(request, "PATCH"):
+        return response
 
     match _write_context(request, app_key):
         case WriteContext(app=app, actor=actor):

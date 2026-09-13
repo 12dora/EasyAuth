@@ -12,12 +12,14 @@ from easyauth.admin_console.api_responses import json_response as admin_json_res
 from easyauth.admin_console.api_responses import (
     method_not_allowed_response as admin_method_not_allowed_response,
 )
+from easyauth.admin_console.api_responses import require_method as admin_require_method
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import (
     METHOD_NOT_ALLOWED_MESSAGE,
     error_response,
     json_response,
     method_not_allowed_response,
+    require_method,
 )
 
 type JsonObject = dict[str, JsonValue]
@@ -108,6 +110,7 @@ def test_method_not_allowed_response_uses_shared_message() -> None:
     admin_response = admin_method_not_allowed_response()
     assert admin_response.status_code == response.status_code
     assert _error_object(admin_response) == _error_object(response)
+    assert admin_require_method is require_method
 
 
 def test_admin_console_reexports_error_response_with_public_helper_behavior() -> None:

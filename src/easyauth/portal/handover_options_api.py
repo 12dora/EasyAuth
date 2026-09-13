@@ -11,7 +11,7 @@ from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.accounts.person_payload import person_payload
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.api.responses import error_response, json_response
+from easyauth.api.responses import error_response, json_response, require_method
 from easyauth.applications.models import App
 from easyauth.lifecycle.api_errors import reason_error
 from easyauth.lifecycle.jurisdiction import (
@@ -19,7 +19,7 @@ from easyauth.lifecycle.jurisdiction import (
     list_reassign_subject_candidates,
     list_receiver_candidates,
 )
-from easyauth.portal.handover_api import method_not_allowed, portal_user
+from easyauth.portal.handover_api import portal_user
 
 
 def portal_handover_app_options(request: HttpRequest) -> JsonResponse:
@@ -28,8 +28,8 @@ def portal_handover_app_options(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed()
+    if response := require_method(request, "GET"):
+        return response
     subject_id = request.GET.get("subject_user_id", "").strip()
     if not subject_id:
         return error_response(
@@ -73,8 +73,8 @@ def portal_handover_candidates(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed()
+    if response := require_method(request, "GET"):
+        return response
     purpose = request.GET.get("purpose", "").strip()
     if not purpose:
         return reason_error("purpose_required")

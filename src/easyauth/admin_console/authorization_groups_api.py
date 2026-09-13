@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from easyauth.admin_console.api_responses import method_not_allowed_response
+from easyauth.admin_console.api_responses import method_not_allowed_response, require_method
 from easyauth.admin_console.authorization_groups_payloads import (
     AuthorizationGroupGrantPayload,
     AuthorizationGroupPayload,
@@ -53,6 +53,6 @@ def console_authorization_group_detail(
     app_key: str,
     authorization_group_key: str,
 ) -> JsonResponse:
-    if request.method != "PATCH":
-        return method_not_allowed_response()
+    if response := require_method(request, "PATCH"):
+        return response
     return _update_authorization_group(request, app_key, authorization_group_key)

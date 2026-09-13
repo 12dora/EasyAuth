@@ -8,16 +8,16 @@ from django.http import HttpRequest, JsonResponse
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
-    method_not_allowed_response,
 )
 from easyauth.admin_console.operation_filters import (
     OperationFilterValidationError,
     operation_filter_error_response,
     paginate_queryset,
 )
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.request_guards import require_console_actor, require_method
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
-from easyauth.api.pagination import pagination_item
+from easyauth.api.pagination import paginated_list_payload, pagination_item
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.services import AuditRecord, AuditService
@@ -43,8 +43,8 @@ def console_app_webhook_deliveries(request: HttpRequest, app_key: str) -> JsonRe
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     include_payload = request.GET.get("include_payload", "").strip().lower() in {
         "1",
         "true",
@@ -57,7 +57,9 @@ def console_app_webhook_deliveries(request: HttpRequest, app_key: str) -> JsonRe
     items: list[JsonValue] = [
         _delivery_summary(delivery, include_payload=include_payload) for delivery in page.items
     ]
-    return json_response({"data": items, "pagination": pagination_item(page)})
+    return json_response(
+        paginated_list_payload(items=items, pagination=pagination_item(page)),
+    )
 
 
 def console_app_webhook_delivery_redeliver(
@@ -71,8 +73,8 @@ def console_app_webhook_delivery_redeliver(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     delivery = WebhookDelivery.objects.filter(app=app, id=delivery_pk).first()
     if delivery is None:
         return error_response(
@@ -136,8 +138,8 @@ def _delivery_summary(delivery: WebhookDelivery, *, include_payload: bool) -> Js
         "attempts": delivery.attempts,
         "generation": delivery.generation,
         "last_error": last_error,
-        "created_at": delivery.created_at.isoformat(),
-        "updated_at": delivery.updated_at.isoformat(),
+        "created_at": datetime_value(delivery.created_at),
+        "updated_at": datetime_value(delivery.updated_at),
     }
     if include_payload:
         item["payload"] = dict(delivery.payload)

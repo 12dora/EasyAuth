@@ -23,9 +23,10 @@ from easyauth.admin_console.operation_filters import (
 )
 from easyauth.admin_console.operations_payloads import person_ref_or_none
 from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.ordering import apply_ordering
-from easyauth.api.pagination import pagination_item
+from easyauth.api.pagination import paginated_list_payload, pagination_item
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.models import AuditLog
@@ -90,7 +91,7 @@ def _audit_item(
         "target_type": audit_log.target_type,
         "target_id": audit_log.target_id,
         "metadata": audit_log.metadata,
-        "created_at": audit_log.created_at.isoformat(),
+        "created_at": datetime_value(audit_log.created_at),
     }
 
 
@@ -116,7 +117,9 @@ def _page_response(page: Page[AuditLog]) -> JsonResponse:
         _audit_item(audit_log, users=users, department_labels=department_labels)
         for audit_log in page.items
     ]
-    return _json_response({"data": result, "pagination": pagination_item(page)})
+    return _json_response(
+        paginated_list_payload(items=result, pagination=pagination_item(page)),
+    )
 
 
 def _users_by_ids(user_ids: Iterable[str]) -> dict[str, UserMirror]:

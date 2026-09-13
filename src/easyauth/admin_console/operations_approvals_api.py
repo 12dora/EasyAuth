@@ -24,7 +24,9 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
-from easyauth.admin_console.api_responses import method_not_allowed_response
+from easyauth.admin_console.api_responses import (
+    require_method,
+)
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.operations_payloads import access_request_decision_fields
 from easyauth.api.errors import ErrorCode, JsonValue
@@ -64,8 +66,8 @@ def operations_reassign_access_request(request: HttpRequest, request_id: int) ->
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     try:
         payload = _ReassignPayload.model_validate_json(request.body)
     except ValidationError as exc:
@@ -87,8 +89,8 @@ def _admin_decide(request: HttpRequest, request_id: int, *, action: str) -> Json
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     try:
         payload = _AdminDecisionPayload.model_validate_json(request.body or b"{}")
     except ValidationError as exc:

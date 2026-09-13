@@ -10,7 +10,7 @@ from easyauth.accounts.person_payload import person_payload
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
-    method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.operation_filters import (
@@ -18,9 +18,10 @@ from easyauth.admin_console.operation_filters import (
     operation_filter_error_response,
     paginate_queryset,
 )
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
 from easyauth.api.ordering import apply_ordering
-from easyauth.api.pagination import pagination_item
+from easyauth.api.pagination import paginated_list_payload, pagination_item
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.webhooks.delivery import WebhookRedeliveryConflictError, redeliver
 from easyauth.workflows.models import (
@@ -56,8 +57,8 @@ def operations_approval_instances(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     queryset = apply_ordering(
         request,
         _filtered_instances(request),
@@ -71,7 +72,9 @@ def operations_approval_instances(request: HttpRequest) -> JsonResponse:
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
     items: list[JsonValue] = _instance_items(page.items)
-    return json_response({"data": items, "pagination": pagination_item(page)})
+    return json_response(
+        paginated_list_payload(items=items, pagination=pagination_item(page)),
+    )
 
 
 def operations_approval_instance_redeliver(
@@ -83,8 +86,8 @@ def operations_approval_instance_redeliver(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     instance = (
         ApprovalInstance.objects.select_related("app", "template", "completion_delivery")
         .filter(id=instance_id)
@@ -178,8 +181,6 @@ def _instance_item(
         "delivery_attempts": delivery.attempts if delivery is not None else 0,
         "delivery_last_error": delivery.last_error if delivery is not None else "",
         "last_error": instance.last_error,
-        "created_at": instance.created_at.isoformat(),
-        "completed_at": (
-            instance.completed_at.isoformat() if instance.completed_at is not None else None
-        ),
+        "created_at": datetime_value(instance.created_at),
+        "completed_at": datetime_value(instance.completed_at),
     }

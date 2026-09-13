@@ -11,6 +11,7 @@ from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
     method_not_allowed_response,
+    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.department_grants_payloads import (
@@ -73,8 +74,8 @@ def console_departments_tree(request: HttpRequest) -> JsonResponse:
             return response
         case str():
             pass
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     match _loaded_directory():
         case JsonResponse() as response:
             return response

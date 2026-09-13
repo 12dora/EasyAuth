@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.api.responses import error_response, json_response
+from easyauth.api.responses import error_response, json_response, require_method
 from easyauth.lifecycle.api_errors import map_handover_exception, reason_error
 from easyauth.lifecycle.api_payloads import (
     SURFACE_PORTAL,
@@ -33,7 +33,6 @@ from easyauth.lifecycle.models import (
 from easyauth.lifecycle.offboarding import HandoverCreationSpec, ensure_handover_task
 from easyauth.portal.handover_api import (
     idempotency_key,
-    method_not_allowed,
     not_found,
     payload_sha256,
     portal_user,
@@ -76,8 +75,8 @@ def portal_me_handover_tasks(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed()
+    if response := require_method(request, "GET"):
+        return response
     as_assignee_tasks = list(
         HandoverTask.objects.select_related("subject_user", "assignee")
         .filter(assignee=user, status__in=TASK_OPEN_STATUSES)
@@ -200,8 +199,8 @@ def portal_handover_task_detail(request: HttpRequest, task_id: int) -> JsonRespo
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed()
+    if response := require_method(request, "GET"):
+        return response
     task = task_visible_to(user, task_id)
     if task is None:
         return not_found()

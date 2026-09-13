@@ -17,8 +17,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
-from easyauth.admin_console.api_responses import method_not_allowed_response
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.request_guards import require_console_actor, require_method
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AppMembership
 from easyauth.applications.ownership import ConsoleActor, can_view_app
@@ -49,8 +48,8 @@ class MembershipPatchPayload(BaseModel):
 def console_app_memberships(request: HttpRequest, app_key: str) -> JsonResponse:
     if request.method == "POST":
         return _create_membership(request, app_key)
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
 
     match require_console_actor(request):
         case ConsoleActor() as actor:
@@ -84,8 +83,8 @@ def console_app_membership_detail(
     app_key: str,
     membership_id: int,
 ) -> JsonResponse:
-    if request.method != "PATCH":
-        return method_not_allowed_response()
+    if response := require_method(request, "PATCH"):
+        return response
     return _update_membership(request, app_key, membership_id)
 
 

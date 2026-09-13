@@ -19,7 +19,9 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
-from easyauth.admin_console.api_responses import method_not_allowed_response
+from easyauth.admin_console.api_responses import (
+    require_method,
+)
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.grant_row_payloads import (
     access_grant_row_queryset,
@@ -44,6 +46,7 @@ from easyauth.admin_console.operations_payloads import (
     dependency_health_map_payload,
     health_item,
 )
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.ordering import apply_ordering
 from easyauth.api.ordering_expressions import (
@@ -166,8 +169,8 @@ def operations_emergency_revokes(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     try:
         result = _execute_emergency_revoke(request=request, actor_id=actor_id)
     except ValidationError as exc:
@@ -302,8 +305,8 @@ def operations_dependency_health_check(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     items = run_dependency_health_checks()
     record_dependency_health_check_run(actor_id)
     return _dependency_health_response(items)
@@ -398,7 +401,7 @@ def _access_request_item(
         "request_type": access_request.request_type,
         "grant_type": access_request.grant_type,
         "reason": access_request.reason,
-        "submitted_at": access_request.submitted_at.isoformat(),
+        "submitted_at": datetime_value(access_request.submitted_at),
         "approval_routing_state": getattr(
             access_request,
             "approval_routing_state",

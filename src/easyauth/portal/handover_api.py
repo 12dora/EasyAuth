@@ -15,7 +15,7 @@ from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
-from easyauth.api.responses import error_response, method_not_allowed_response
+from easyauth.api.responses import error_response, method_not_allowed_response, require_method
 from easyauth.lifecycle.api_errors import reason_error
 from easyauth.lifecycle.assignee import AssigneeApplyOptions, AssigneeResolution, apply_assignee
 from easyauth.lifecycle.core import record_task_event
@@ -42,8 +42,8 @@ def _portal_user_for_method(request: HttpRequest, method: str) -> PortalApiResul
     user = _portal_user(request)
     if isinstance(user, JsonResponse):
         return user
-    if request.method != method:
-        return method_not_allowed_response()
+    if response := require_method(request, method):
+        return response
     return user
 
 

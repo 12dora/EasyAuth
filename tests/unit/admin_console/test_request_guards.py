@@ -12,8 +12,13 @@ from django.test import RequestFactory, override_settings
 
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
-from easyauth.admin_console.request_guards import require_console_actor, require_post
+from easyauth.admin_console.request_guards import (
+    require_console_actor,
+    require_method,
+    require_post,
+)
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.responses import REQUIRE_METHOD_EMPTY_MESSAGE
 from easyauth.applications.ownership import ConsoleActor
 
 if TYPE_CHECKING:
@@ -113,6 +118,33 @@ def test_require_post_returns_405_for_non_post_request() -> None:
         "message": "不支持的请求方法。",
         "details": {},
     }
+
+
+def test_require_method_allows_any_listed_method() -> None:
+    request = RequestFactory().patch("/console/apps/app-001")
+
+    assert require_method(request, "GET", "PATCH") is None
+
+
+def test_require_method_returns_405_when_method_is_not_listed() -> None:
+    request = RequestFactory().delete("/console/apps/app-001")
+
+    response = require_method(request, "GET", "PATCH")
+
+    assert response is not None
+    assert response.status_code == HTTPStatus.METHOD_NOT_ALLOWED
+    assert _json_object(response)["error"] == {
+        "code": ErrorCode.VALIDATION_ERROR,
+        "message": "不支持的请求方法。",
+        "details": {},
+    }
+
+
+def test_require_method_rejects_empty_method_list() -> None:
+    request = RequestFactory().get("/console/apps/app-001")
+
+    with pytest.raises(ValueError, match=REQUIRE_METHOD_EMPTY_MESSAGE):
+        _ = require_method(request)
 
 
 def _json_object(response: HttpResponse) -> JsonObject:

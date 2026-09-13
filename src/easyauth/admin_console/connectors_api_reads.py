@@ -7,7 +7,11 @@ from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
-from easyauth.admin_console.api_responses import json_response, method_not_allowed_response
+from easyauth.admin_console.api_responses import (
+    json_response,
+    method_not_allowed_response,
+    require_method,
+)
 from easyauth.admin_console.connector_api_presenters import (
     connector_type_item,
     connector_types,
@@ -102,8 +106,8 @@ def console_app_connector_test(request: HttpRequest, app_key: str) -> JsonRespon
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return method_not_allowed_response()
+    if response := require_method(request, "POST"):
+        return response
     if response := superuser_required(actor):
         return response
     match _resolve_test_candidate(request, app):
@@ -152,8 +156,8 @@ def console_app_connector_external_groups(  # noqa: PLR0911 - HTTP 权限与方�
             {"connector_key": instance.connector_key, "instance_id": instance.id},
         )
         return json_response({"queued": True}, status=HTTPStatus.ACCEPTED)
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     if response := superuser_required(actor):
         return response
     try:
@@ -219,8 +223,8 @@ def console_app_connector_sync_runs(
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     queryset = apply_ordering(
         request,
         ConnectorSyncRun.objects.filter(instance=instance),

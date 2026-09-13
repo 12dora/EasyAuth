@@ -12,7 +12,8 @@ from easyauth.admin_console.api_responses import (
     method_not_allowed_response,
 )
 from easyauth.admin_console.authz import require_superuser
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.request_guards import require_console_actor, require_method
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import (
     CAPABILITY_CHOICES,
@@ -44,8 +45,8 @@ def console_app_capabilities(request: HttpRequest, app_key: str) -> JsonResponse
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "GET":
-        return method_not_allowed_response()
+    if response := require_method(request, "GET"):
+        return response
     payload: CapabilityPayload = {
         "capabilities": _capability_list(app),
         "can_manage": actor.is_superuser,
@@ -171,8 +172,8 @@ def _capability_item(capability: str, row: AppCapability | None) -> CapabilityPa
         "enabled": row.enabled,
         "config": config,
         "updated_by": row.updated_by,
-        "updated_at": row.updated_at.isoformat(),
-        "created_at": row.created_at.isoformat(),
+        "updated_at": datetime_value(row.updated_at),
+        "created_at": datetime_value(row.created_at),
     }
 
 

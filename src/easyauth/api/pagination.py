@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from easyauth.api.errors import JsonValue
 
 
@@ -29,6 +31,14 @@ def pagination_item(page: Pagination) -> dict[str, JsonValue]:
         "total_items": page.total_items,
         "total_pages": page.total_pages,
     }
+
+
+def paginated_list_payload(
+    *,
+    items: Sequence[JsonValue],
+    pagination: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    return {"data": list(items), "pagination": pagination}
 
 
 PAGE_SIZE_INVALID_MESSAGE = "page_size 必须为正整数。"

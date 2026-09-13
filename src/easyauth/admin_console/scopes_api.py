@@ -7,7 +7,11 @@ from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from easyauth.admin_console.api_responses import json_response, method_not_allowed_response
+from easyauth.admin_console.api_responses import (
+    json_response,
+    method_not_allowed_response,
+    require_method,
+)
 from easyauth.admin_console.catalog_write_common import (
     CatalogEvent,
     CatalogWriteContext,
@@ -74,8 +78,8 @@ def console_scopes(request: HttpRequest, app_key: str) -> JsonResponse:
 
 
 def console_scope_detail(request: HttpRequest, app_key: str, scope_key: str) -> JsonResponse:
-    if request.method != "PATCH":
-        return method_not_allowed_response()
+    if response := require_method(request, "PATCH"):
+        return response
     return _update_scope(request, app_key, scope_key)
 
 
