@@ -1,13 +1,10 @@
 {
   "files": {},
   "functions": {
-    "components/shell/UserSummary.tsx:UserSummary": 161,
     "components/ui/Toast.tsx:ToastProvider": 165,
     "components/UserSelect.tsx:UserMultiSelect": 124,
     "features/grantForm/DepartmentSourcedGrants.tsx:DepartmentSourcedGrants": 126,
-    "features/handover/useHandoverActionPanel.ts:useHandoverActionPanel": 201,
     "pages/console/ApprovalTemplateEditorDialog.tsx:ApprovalTemplateEditorDialog": 136,
-    "pages/console/ConsoleTeamList.tsx:ConsoleTeamList": 188,
     "pages/console/DepartmentGrantsPage.tsx:DepartmentGrantsPage": 175,
     "pages/console/lifecycle/ConsoleReassignDialog.tsx:ConsoleReassignDialog": 136,
     "pages/console/lifecycle/HandoverTaskTable.tsx:taskColumns": 136,
@@ -17,7 +14,6 @@
     "pages/console/onboarding/AutoOnboardPanel.tsx:AutoOnboardPanel": 123,
     "pages/console/operations/useOperationsSection.ts:useOperationsSection": 148,
     "pages/console/useConsoleTeamDetail.ts:useConsoleTeamDetail": 142,
-    "pages/console/useDepartmentGrants.ts:useDepartmentGrants": 163,
     "pages/console/workspace/connector/useConnectorMappings.ts:useConnectorMappings": 121,
     "pages/console/workspace/integration/NotificationChannelForm.tsx:NotificationChannelForm": 143,
     "pages/portal/components/PermissionSelector.tsx:PermissionSelector": 121,
@@ -27,7 +23,6 @@
     "pages/portal/PortalReassignDialog.tsx:PortalReassignDialog": 128
   },
   "hooksStateEffect": {
-    "features/handover/useHandoverActionPanel.ts:useHandoverActionPanel": 12,
     "pages/portal/hooks/useAccessRequestFields.ts:useAccessRequestFields": 14
   },
   "imports": {}
