@@ -1,7 +1,7 @@
 /** 本模块定义 Operations 与 Audit 领域契约。 */
 
 import type { JsonObject, JsonValue } from "./common";
-import { isAccountKind, type AccountKind } from "./person";
+import { isAccountKind, type AccountKind, type PersonRef } from "./person";
 
 /** 访问申请的审批人: 后端 `person_payload`, 界面一律按姓名展示。 */
 export interface OperationApprover {
@@ -63,6 +63,55 @@ export function parseOperationAccessRequestRow(raw: JsonValue): OperationRow {
   };
 }
 
+/** 人员对象; 字段与 `PersonRef` 一一对应, 缺任一字段即契约违约。 */
+export function parsePersonRef(raw: JsonValue, field = "person"): PersonRef {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new OperationContractError(field);
+  }
+  const source = raw as JsonObject;
+  if (typeof source.user_id !== "string") {
+    throw new OperationContractError(`${field}.user_id`);
+  }
+  if (typeof source.name !== "string") {
+    throw new OperationContractError(`${field}.name`);
+  }
+  if (typeof source.department !== "string") {
+    throw new OperationContractError(`${field}.department`);
+  }
+  if (!isAccountKind(source.account_kind)) {
+    throw new OperationContractError(`${field}.account_kind`);
+  }
+  return {
+    user_id: source.user_id,
+    name: source.name,
+    department: source.department,
+    account_kind: source.account_kind,
+  };
+}
+
+/** null 表示系统 / 未解析到 UserMirror; 缺字段或非法值立即失败。 */
+export function parseNullablePersonRef(raw: JsonValue, field: string): PersonRef | null {
+  if (raw === null) {
+    return null;
+  }
+  return parsePersonRef(raw, field);
+}
+
+/** 审计日志行: `actor_person` 必填(可为 null)。 */
+export function parseAuditLogRow(raw: JsonValue): OperationRow {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new OperationContractError("row");
+  }
+  const source = raw as JsonObject;
+  if (!Object.prototype.hasOwnProperty.call(source, "actor_person")) {
+    throw new OperationContractError("actor_person");
+  }
+  return {
+    ...(source as OperationRow),
+    actor_person: parseNullablePersonRef(source.actor_person, "actor_person"),
+  };
+}
+
 export interface OperationRow {
   id?: number;
   user_id?: string;
@@ -88,6 +137,8 @@ export interface OperationRow {
   // 审计日志(audit-logs)行字段: 与后端 audit_api._audit_item 序列化器一一对应, 审计行无 id。
   actor_type?: string;
   actor_id?: string;
+  /** 操作者人员对象; 审计行必填, 解析不到 UserMirror 时为 null。 */
+  actor_person?: PersonRef | null;
   event_type?: string;
   target_type?: string;
   target_id?: string;

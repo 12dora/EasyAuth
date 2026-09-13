@@ -106,11 +106,15 @@ function auditColumns(
     ),
     serverSortColumn(
       serverColumn(
-        textColumn<OperationRow>({
+        personColumn<OperationRow>({
           key: "actor",
           title: t("console.operations.column.actor"),
-          getValue: (row) => auditPair(row.actor_type, row.actor_id),
-          mono: true,
+          t,
+          getName: (row) =>
+            row.actor_person ? row.actor_person.name : auditPair(row.actor_type, row.actor_id),
+          getUserId: (row) => row.actor_person?.user_id ?? "",
+          getDepartment: (row) => row.actor_person?.department,
+          getAccountKind: (row) => row.actor_person?.account_kind,
           filter: true,
           width: 200,
         }),

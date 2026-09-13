@@ -6,7 +6,8 @@
  * 同一个函数, 否则缓存里会混进原始信封, 表格读不出行。
  *
  * 授权明细的行按 A1 契约(`parseAccessGrantRow`)解析; 访问申请的审批人按
- * `parseOperationAccessRequestRow` 校验 account_kind。字段缺失即契约违约,
+ * `parseOperationAccessRequestRow` 校验 account_kind; 审计行按
+ * `parseAuditLogRow` 校验 actor_person。字段缺失即契约违约,
  * 解析放在取数阶段, 错误直接变成查询/变更错误, 走页面已有的失败态,
  * 不在渲染期炸表格, 也不静默兜底。
  */
@@ -14,7 +15,7 @@
 import { itemsFromPayload } from "../../../lib/api";
 import type { JsonValue, ListPayload, Pagination } from "../../../lib/api";
 import { parseAccessGrantRow, type AccessGrantRow } from "../../../lib/domain/accessGrantRow";
-import { parseOperationAccessRequestRow } from "../../../lib/domain/operations";
+import { parseAuditLogRow, parseOperationAccessRequestRow } from "../../../lib/domain/operations";
 import type { OperationRow } from "./operationRow";
 
 export type OperationsPayload =
@@ -34,6 +35,13 @@ export function operationsPayload(section: string, payload: ListPayload<JsonValu
       kind: "generic",
       pagination: payload.pagination,
       rows: itemsFromPayload<JsonValue>(payload).map(parseOperationAccessRequestRow),
+    };
+  }
+  if (section === "audit") {
+    return {
+      kind: "generic",
+      pagination: payload.pagination,
+      rows: itemsFromPayload<JsonValue>(payload).map(parseAuditLogRow),
     };
   }
   return {
