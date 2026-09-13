@@ -6,7 +6,14 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { OperationsPage } from "./OperationsPage";
 import { ToastProvider } from "../../components/ui/Toast";
-import { ANTD_TEST_TIMEOUT_MS, openFilterDropdown, openHeaderFilter, renderWithAntd } from "../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  openFilterDropdown,
+  openHeaderFilter,
+  renderWithAntd,
+  sortByColumn,
+} from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/翻页都要重建整棵表格, 默认 5s 不够。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
@@ -772,6 +779,33 @@ describe("OperationsPage", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "撤销权限" })).not.toBeInTheDocument());
     // 不是一次普通失败: 页面不出撤销失败横幅。
     expect(screen.queryByText("撤销权限失败")).not.toBeInTheDocument();
+  });
+
+  test("待审批表头排序写入 URL 并带 ordering 请求", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = accessRequestsFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage("access-requests");
+    await screen.findByText("胡玉琴");
+    expect(columnSortOrder("状态")).toBeNull();
+
+    await sortByColumn(user, "状态");
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).toHaveTextContent("ordering=status");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/operations/access-requests?page=1&page_size=20&status=submitted&ordering=status",
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+    expect(columnSortOrder("状态")).toBe("ascend");
+
+    await sortByColumn(user, "状态");
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).toHaveTextContent("ordering=-status");
+      expect(columnSortOrder("状态")).toBe("descend");
+    });
   });
 });
 

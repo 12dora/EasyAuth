@@ -1,13 +1,20 @@
-import { dateRangeFilter, textFilter, type ColumnType, type ColumnsType } from "../../../components/antd/AppTable";
+import {
+  dateRangeFilter,
+  textFilter,
+  type ColumnType,
+  type ColumnsType,
+  type ServerSortState,
+} from "../../../components/antd/AppTable";
 import {
   MONO_TEXT_CLASS,
   RowActionButton,
   actionsColumn,
   dateTimeColumn,
+  personColumn,
   serverColumn,
+  serverSortColumn,
   statusColumn,
   textColumn,
-  personColumn,
   type StatusColumnOption,
 } from "../../../components/antd/columns";
 import { GrantExpiryCell } from "../../../components/grants/GrantExpiryCell";
@@ -52,15 +59,16 @@ export function operationColumns(
   section: string,
   t: Translator,
   filters: OperationFilterValues,
+  sort: ServerSortState,
   accessRequestActions?: AccessRequestColumnActions,
 ): ColumnsType<OperationRow> {
   if (section === "dependency-health") {
     return dependencyHealthColumns(t);
   }
   if (section === "audit") {
-    return auditColumns(t, filters);
+    return auditColumns(t, filters, sort);
   }
-  return accessRequestColumns(t, filters, accessRequestActions);
+  return accessRequestColumns(t, filters, sort, accessRequestActions);
 }
 
 function dependencyHealthColumns(t: Translator): ColumnsType<OperationRow> {
@@ -78,57 +86,77 @@ function dependencyHealthColumns(t: Translator): ColumnsType<OperationRow> {
       key: "status",
       title: t("common.status"),
       options: healthStatusOptions(t),
+      sorter: true,
       width: 130,
     }),
-    textColumn<OperationRow>({ key: "summary", title: t("console.operations.column.summary") }),
-    textColumn<OperationRow>({ key: "error_summary", title: t("console.operations.column.error") }),
+    textColumn<OperationRow>({ key: "summary", title: t("console.operations.column.summary"), sorter: true }),
+    textColumn<OperationRow>({ key: "error_summary", title: t("console.operations.column.error"), sorter: true }),
     dateTimeColumn<OperationRow>({ key: "last_checked_at", title: t("console.operations.column.checkedAt") }),
   ];
 }
 
-function auditColumns(t: Translator, filters: OperationFilterValues): ColumnsType<OperationRow> {
+function auditColumns(
+  t: Translator,
+  filters: OperationFilterValues,
+  sort: ServerSortState,
+): ColumnsType<OperationRow> {
   // 审计行字段对齐后端 audit_api._audit_item; 审计行无 id, 故不展示 ID 列。
   return [
-    textColumn<OperationRow>({ key: "event_type", title: t("console.operations.column.event"), width: 220 }),
-    serverColumn(
-      textColumn<OperationRow>({
-        key: "actor",
-        title: t("console.operations.column.actor"),
-        getValue: (row) => auditPair(row.actor_type, row.actor_id),
-        mono: true,
-        filter: true,
-        width: 200,
-      }),
-      filters.actor,
+    serverSortColumn(
+      textColumn<OperationRow>({ key: "event_type", title: t("console.operations.column.event"), width: 220 }),
+      sort,
     ),
-    textColumn<OperationRow>({
-      key: "target",
-      title: t("console.operations.column.target"),
-      getValue: (row) => auditPair(row.target_type, row.target_id),
-      mono: true,
-    }),
-    serverColumn(
-      textColumn<OperationRow>({
-        key: "app",
-        title: t("common.app"),
-        getValue: auditAppKey,
-        mono: true,
-        filter: true,
-        width: 160,
-      }),
-      filters.app,
-    ),
-    serverColumn(
-      {
-        ...dateTimeColumn<OperationRow>({
-          key: "created_at",
-          title: t("console.operations.column.time"),
-          sorter: false,
-          width: 190,
+    serverSortColumn(
+      serverColumn(
+        textColumn<OperationRow>({
+          key: "actor",
+          title: t("console.operations.column.actor"),
+          getValue: (row) => auditPair(row.actor_type, row.actor_id),
+          mono: true,
+          filter: true,
+          width: 200,
         }),
-        ...dateRangeFilter<OperationRow>(),
-      },
-      filters.created_at,
+        filters.actor,
+      ),
+      sort,
+    ),
+    serverSortColumn(
+      textColumn<OperationRow>({
+        key: "target",
+        title: t("console.operations.column.target"),
+        getValue: (row) => auditPair(row.target_type, row.target_id),
+        mono: true,
+      }),
+      sort,
+    ),
+    serverSortColumn(
+      serverColumn(
+        textColumn<OperationRow>({
+          key: "app",
+          title: t("common.app"),
+          getValue: auditAppKey,
+          mono: true,
+          filter: true,
+          width: 160,
+        }),
+        filters.app,
+      ),
+      sort,
+    ),
+    serverSortColumn(
+      serverColumn(
+        {
+          ...dateTimeColumn<OperationRow>({
+            key: "created_at",
+            title: t("console.operations.column.time"),
+            sorter: false,
+            width: 190,
+          }),
+          ...dateRangeFilter<OperationRow>(),
+        },
+        filters.created_at,
+      ),
+      sort,
     ),
   ];
 }
@@ -175,61 +203,80 @@ function appColumn<T>({
 export function accessGrantColumns(
   t: Translator,
   filters: OperationFilterValues,
+  sort: ServerSortState,
   actions: AccessGrantColumnActions | undefined,
 ): ColumnsType<AccessGrantRow> {
   const columns: ColumnsType<AccessGrantRow> = [
-    serverColumn(
-      personColumn<AccessGrantRow>({
-        key: "user_id",
-        title: t("common.user"),
-        t,
-        getName: (row) => row.user_name,
-        getUserId: (row) => row.user_id,
-        getDepartment: (row) => row.user_department,
-        getAccountKind: (row) => row.user_account_kind,
-        filter: true,
+    serverSortColumn(
+      serverColumn(
+        personColumn<AccessGrantRow>({
+          key: "user_id",
+          title: t("common.user"),
+          t,
+          getName: (row) => row.user_name,
+          getUserId: (row) => row.user_id,
+          getDepartment: (row) => row.user_department,
+          getAccountKind: (row) => row.user_account_kind,
+          filter: true,
+          width: 200,
+        }),
+        filters.user_id,
+      ),
+      sort,
+    ),
+    serverSortColumn(
+      serverColumn(
+        appColumn<AccessGrantRow>({
+          title: t("common.app"),
+          getDisplayName: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
+          getAppKey: (row) => row.app_key,
+        }),
+        filters.app_key,
+      ),
+      sort,
+    ),
+    serverSortColumn(
+      serverColumn(
+        statusColumn<AccessGrantRow>({
+          key: "status",
+          title: t("common.status"),
+          options: grantStatusOptions(t),
+          width: 130,
+        }),
+        filters.status,
+      ),
+      sort,
+    ),
+    serverSortColumn(
+      textColumn<AccessGrantRow>({
+        key: "groups",
+        title: t("console.operations.column.groups"),
+        getValue: (row) => formatGrantGroupNames(row.groups, t),
+        ellipsis: false,
         width: 200,
       }),
-      filters.user_id,
+      sort,
     ),
-    serverColumn(
-      appColumn<AccessGrantRow>({
-        title: t("common.app"),
-        getDisplayName: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
-        getAppKey: (row) => row.app_key,
-      }),
-      filters.app_key,
+    serverSortColumn(
+      {
+        key: "permission_details",
+        title: t("console.operations.column.permissionDetails"),
+        width: 140,
+        render: (_value: unknown, row: AccessGrantRow) => <GrantPermissionsCell row={row} />,
+      },
+      sort,
     ),
-    serverColumn(
-      statusColumn<AccessGrantRow>({
-        key: "status",
-        title: t("common.status"),
-        options: grantStatusOptions(t),
-        width: 130,
-      }),
-      filters.status,
+    serverSortColumn(
+      {
+        key: "grant_expires_at",
+        title: t("console.operations.column.expiresAt"),
+        width: 210,
+        render: (_value: unknown, row: AccessGrantRow) => (
+          <GrantExpiryCell grantType={row.grant_type} expiresAt={row.grant_expires_at} />
+        ),
+      },
+      sort,
     ),
-    textColumn<AccessGrantRow>({
-      key: "groups",
-      title: t("console.operations.column.groups"),
-      getValue: (row) => formatGrantGroupNames(row.groups, t),
-      ellipsis: false,
-      width: 200,
-    }),
-    {
-      key: "permission_details",
-      title: t("console.operations.column.permissionDetails"),
-      width: 140,
-      render: (_value: unknown, row: AccessGrantRow) => <GrantPermissionsCell row={row} />,
-    },
-    {
-      key: "grant_expires_at",
-      title: t("console.operations.column.expiresAt"),
-      width: 210,
-      render: (_value: unknown, row: AccessGrantRow) => (
-        <GrantExpiryCell grantType={row.grant_type} expiresAt={row.grant_expires_at} />
-      ),
-    },
   ];
   if (actions) {
     columns.push(
@@ -258,65 +305,87 @@ function renderAccessGrantActions(t: Translator, actions: AccessGrantColumnActio
 function accessRequestColumns(
   t: Translator,
   filters: OperationFilterValues,
+  sort: ServerSortState,
   actions: AccessRequestColumnActions | undefined,
 ): ColumnsType<OperationRow> {
   const columns: ColumnsType<OperationRow> = [
-    textColumn<OperationRow>({ key: "id", title: "ID", width: 90 }),
-    serverColumn(
-      personColumn<OperationRow>({
-        key: "user_id",
-        title: t("common.user"),
-        t,
-        getName: (row) => row.user_name,
-        getUserId: (row) => row.user_id,
-        getDepartment: (row) => row.user_department,
-        getAccountKind: (row) => row.user_account_kind,
-        filter: true,
-        width: 200,
-      }),
-      filters.user_id,
-    ),
-    serverColumn(
-      appColumn<OperationRow>({
-        title: t("common.app"),
-        getDisplayName: operationAppDisplayName,
-        getAppKey: (row) => row.app_key ?? "",
-      }),
-      filters.app_key,
-    ),
-    serverColumn(
-      statusColumn<OperationRow>({
-        key: "status",
-        title: t("common.status"),
-        options: accessRequestStatusOptions(t),
-        width: 130,
-      }),
-      filters.status,
-    ),
-    textColumn<OperationRow>({
-      key: "request_type",
-      title: t("common.type"),
-      getValue: (row) => (row.request_type ? requestTypeLabel(t, row.request_type) : ""),
-      width: 120,
-    }),
-    {
-      key: "approvers",
-      title: t("console.operations.column.approvers"),
-      width: 190,
-      render: (_value: unknown, row: OperationRow) => <ApproversCell t={t} row={row} />,
-    },
-    textColumn<OperationRow>({ key: "failure_reason", title: t("console.operations.column.failureReason") }),
-    serverColumn(
-      {
-        ...dateTimeColumn<OperationRow>({
-          key: "submitted_at",
-          title: t("console.operations.column.submittedAt"),
-          sorter: false,
-          width: 190,
+    serverSortColumn(textColumn<OperationRow>({ key: "id", title: "ID", width: 90 }), sort),
+    serverSortColumn(
+      serverColumn(
+        personColumn<OperationRow>({
+          key: "user_id",
+          title: t("common.user"),
+          t,
+          getName: (row) => row.user_name,
+          getUserId: (row) => row.user_id,
+          getDepartment: (row) => row.user_department,
+          getAccountKind: (row) => row.user_account_kind,
+          filter: true,
+          width: 200,
         }),
-        ...dateRangeFilter<OperationRow>(),
+        filters.user_id,
+      ),
+      sort,
+    ),
+    serverSortColumn(
+      serverColumn(
+        appColumn<OperationRow>({
+          title: t("common.app"),
+          getDisplayName: operationAppDisplayName,
+          getAppKey: (row) => row.app_key ?? "",
+        }),
+        filters.app_key,
+      ),
+      sort,
+    ),
+    serverSortColumn(
+      serverColumn(
+        statusColumn<OperationRow>({
+          key: "status",
+          title: t("common.status"),
+          options: accessRequestStatusOptions(t),
+          width: 130,
+        }),
+        filters.status,
+      ),
+      sort,
+    ),
+    serverSortColumn(
+      textColumn<OperationRow>({
+        key: "request_type",
+        title: t("common.type"),
+        getValue: (row) => (row.request_type ? requestTypeLabel(t, row.request_type) : ""),
+        width: 120,
+      }),
+      sort,
+    ),
+    serverSortColumn(
+      {
+        key: "approvers",
+        title: t("console.operations.column.approvers"),
+        width: 190,
+        render: (_value: unknown, row: OperationRow) => <ApproversCell t={t} row={row} />,
       },
-      filters.submitted_at,
+      sort,
+    ),
+    serverSortColumn(
+      textColumn<OperationRow>({ key: "failure_reason", title: t("console.operations.column.failureReason") }),
+      sort,
+    ),
+    serverSortColumn(
+      serverColumn(
+        {
+          ...dateTimeColumn<OperationRow>({
+            key: "submitted_at",
+            title: t("console.operations.column.submittedAt"),
+            sorter: false,
+            width: 190,
+          }),
+          ...dateRangeFilter<OperationRow>(),
+        },
+        filters.submitted_at,
+      ),
+      sort,
     ),
   ];
   if (actions) {

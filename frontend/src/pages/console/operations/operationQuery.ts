@@ -1,3 +1,4 @@
+import { ORDERING_PARAM, type OrderingFieldMap } from "../../../components/antd/AppTable";
 import type { MessageKey } from "../../../i18n/messages";
 
 export interface OperationSectionConfig {
@@ -80,6 +81,44 @@ const SECTION_FILTER_KEYS: Record<string, string[]> = {
 };
 
 /**
+ * 列 key -> 后端 `ordering` 字段。列 key 就是 ordering 取值, 除非合同另有映射:
+ * 待审批 / 授权明细的用户列 key 是 `user_id`, 后端字段叫 `user`。
+ */
+export const ACCESS_REQUEST_ORDERING_FIELDS = {
+  id: "id",
+  user_id: "user",
+  app_key: "app_key",
+  status: "status",
+  request_type: "request_type",
+  approvers: "approvers",
+  failure_reason: "failure_reason",
+  submitted_at: "submitted_at",
+} as const satisfies OrderingFieldMap;
+
+export const ACCESS_GRANT_ORDERING_FIELDS = {
+  user_id: "user",
+  app_key: "app_key",
+  status: "status",
+  groups: "groups",
+  permission_details: "permission_details",
+  grant_expires_at: "grant_expires_at",
+} as const satisfies OrderingFieldMap;
+
+export const AUDIT_ORDERING_FIELDS = {
+  event_type: "event_type",
+  actor: "actor",
+  target: "target",
+  app: "app",
+  created_at: "created_at",
+} as const satisfies OrderingFieldMap;
+
+export const SECTION_ORDERING_FIELDS: Record<string, OrderingFieldMap> = {
+  "access-requests": ACCESS_REQUEST_ORDERING_FIELDS,
+  "access-grants": ACCESS_GRANT_ORDERING_FIELDS,
+  audit: AUDIT_ORDERING_FIELDS,
+};
+
+/**
  * 授权明细默认只列当前版本(`current_only=true`), 历史版本由表格上方的开关打开。
  * 开关状态挂在 URL 上, 与其余筛选条件一样可深链。
  */
@@ -110,6 +149,10 @@ export function operationQueryString(
   }
   if (section === "access-grants") {
     query.set("current_only", includeHistoryFromSearchParams(searchParams) ? "false" : "true");
+  }
+  const ordering = searchParams.get(ORDERING_PARAM);
+  if (ordering) {
+    query.set(ORDERING_PARAM, ordering);
   }
   return query.toString();
 }
