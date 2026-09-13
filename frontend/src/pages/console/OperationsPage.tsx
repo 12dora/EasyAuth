@@ -219,17 +219,19 @@ function GrantFilters({
 
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2">
-      <TextInput
-        aria-label={t("console.operations.userQueryPlaceholder")}
-        autoComplete="off"
-        className="w-64"
-        placeholder={t("console.operations.userQueryPlaceholder")}
-        value={userQuery}
-        onChange={(event) => {
-          dirtyRef.current = true;
-          setUserQuery(event.currentTarget.value);
-        }}
-      />
+      {/* TextInput 自带 w-full, 宽度由外层容器定, 不然搜索框会占满整行把日期控件挤到下一行。 */}
+      <div className="w-72 shrink-0">
+        <TextInput
+          aria-label={t("console.operations.userQueryPlaceholder")}
+          autoComplete="off"
+          placeholder={t("console.operations.userQueryPlaceholder")}
+          value={userQuery}
+          onChange={(event) => {
+            dirtyRef.current = true;
+            setUserQuery(event.currentTarget.value);
+          }}
+        />
+      </div>
       <DateRangeControl
         ariaLabel={t("console.operations.grants.createdRange")}
         value={{

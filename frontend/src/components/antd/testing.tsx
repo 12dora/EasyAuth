@@ -64,6 +64,13 @@ export async function openHeaderFilter(
   if (!(trigger instanceof HTMLElement)) {
     throw new Error(`列「${columnTitle}」的表头上没有筛选图标, 该列没有开启筛选?`);
   }
+  // 表格加载中时 antd 给 .ant-spin-blur 套 pointer-events: none, user-event 会拒绝点击;
+  // 先等上一次请求落定, 否则在慢机器上偶发 "Unable to perform pointer interaction"。
+  await waitFor(() => {
+    if (header.closest(".ant-spin-nested-loading")?.querySelector(".ant-spin-blur")) {
+      throw new Error("表格仍在加载中");
+    }
+  });
   await user.click(trigger);
   return openFilterDropdown();
 }
