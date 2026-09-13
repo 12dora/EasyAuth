@@ -95,7 +95,6 @@ class AccessRequest(models.Model):
         user_id: ClassVar[int]
         app_id: ClassVar[int]
         base_grant_id: ClassVar[int | None]
-        # Prefetch(to_attr=...) / 审批 API 按实例挂载; 缺 prefetch 时运行时仍 AttributeError。
         loaded_approver_assignments: list[AccessRequestApprover] = []
 
     user: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
