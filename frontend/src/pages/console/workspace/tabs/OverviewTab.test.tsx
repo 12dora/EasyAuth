@@ -139,7 +139,7 @@ test("成员表头按角色筛选并保留 AppTable 分页", async () => {
 
 function membershipUserIds(scope: HTMLElement): string[] {
   return [...scope.querySelectorAll(".ant-table-tbody tr.ant-table-row")].map(
-    (row) => row.querySelector("td")?.textContent ?? "",
+    (row) => row.querySelector("td strong")?.textContent ?? "",
   );
 }
 

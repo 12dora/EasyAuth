@@ -10,6 +10,7 @@ import type { BadgeTone, Translator } from "../../lib/status";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { ButtonLink } from "../ButtonLink";
+import { PersonAvatar } from "../PersonAvatar";
 import { TruncatedText } from "../TruncatedText";
 import { personNameWithDepartment, userOptionName, userSecondaryLabel } from "../UserCombobox";
 import { enumFilter, readField, textFilter, type ColumnType, type ServerSortState } from "./AppTable";
@@ -404,6 +405,8 @@ export interface PersonColumnConfig<T> {
   getDepartment?: (record: T) => string | null | undefined;
   /** 账号类型; `local` 时次行固定为「本地用户」, 即使 user_id 是 UUID。 */
   getAccountKind?: (record: T) => AccountKind | undefined;
+  /** 头像 URL; 缺省或空串时 PersonAvatar 走姓名首字母。 */
+  getAvatarUrl?: (record: T) => string | null | undefined;
   /** 本地账号次行文案需要 t("user.localAccount")。 */
   t: Translator;
   filter?: boolean;
@@ -504,12 +507,14 @@ export function userColumn<T>({
 }
 
 /**
- * 人员列: 姓名 + 部门路径(或「本地用户」), 次行绝不出 UUID。
+ * 人员列: 24px 头像 + 姓名 + 部门路径(或「本地用户」), 次行绝不出 UUID。
  * 姓名缺失时主行仍回退到 user_id, 与 `userOptionName` 同一条规则。
+ * 无照片或 URL 不安全时 PersonAvatar 走姓名首字母, 门户申请人和其它走本预设的列自动带上头像。
  */
 export function personColumn<T>({
   filter = false,
   getAccountKind,
+  getAvatarUrl,
   getDepartment,
   getName,
   getUserId,
@@ -519,7 +524,7 @@ export function personColumn<T>({
   title,
   width,
 }: PersonColumnConfig<T>): ColumnType<T> {
-  return userColumn<T>({
+  const column = userColumn<T>({
     filter,
     getName,
     getUserId,
@@ -538,12 +543,32 @@ export function personColumn<T>({
     title,
     width,
   });
+  const innerRender = column.render;
+  return {
+    ...column,
+    render: (value, record, index) => {
+      const inner = innerRender?.(value, record, index);
+      if (inner === "-" || inner == null) {
+        return inner ?? "-";
+      }
+      const displayName = userOptionName({
+        user_id: String(getUserId(record) ?? ""),
+        name: getName(record) ?? "",
+      });
+      return (
+        <div className="flex min-w-0 items-center gap-2">
+          <PersonAvatar name={displayName} avatarUrl={getAvatarUrl?.(record) ?? ""} size={24} />
+          <div className="min-w-0 flex-1">{inner as ReactNode}</div>
+        </div>
+      );
+    },
+  };
 }
 
 /**
- * 多人列: 姓名以 `, ` 写在同一行, 超长由 TruncatedText 截断; 悬停单个姓名才出部门
- * (或「本地用户」)。溢出 Tooltip 只在指针落在姓名 span 以外时打开, 内容是每人一行
- * 「姓名 · 部门」, 避免与单人部门 Tooltip 叠开。次行绝不出 UUID。
+ * 多人列: 每人 24px 头像 + 姓名以 `, ` 写在同一行, 超长由 TruncatedText 截断;
+ * 悬停单个姓名才出部门(或「本地用户」)。溢出 Tooltip 只在指针落在姓名 span 以外时打开,
+ * 内容是每人一行「姓名 · 部门」, 避免与单人部门 Tooltip 叠开。次行绝不出 UUID。
  */
 export function peopleColumn<T>({
   filter = false,
@@ -629,14 +654,16 @@ function PeopleOverflowTitle({ people, t }: { people: readonly PersonRef[]; t: T
 function PersonName({ person, t }: { person: PersonRef; t: Translator }) {
   const name = userOptionName(person);
   const secondary = userSecondaryLabel(person, t);
-  if (!secondary) {
-    return <span data-tooltip-child="">{name}</span>;
-  }
-  return (
-    <Tooltip title={secondary}>
-      <span data-tooltip-child="">{name}</span>
-    </Tooltip>
+  const body = (
+    <span data-tooltip-child="" className="inline-flex items-center gap-1.5">
+      <PersonAvatar name={name} avatarUrl={person.avatar_url} size={24} />
+      <span>{name}</span>
+    </span>
   );
+  if (!secondary) {
+    return body;
+  }
+  return <Tooltip title={secondary}>{body}</Tooltip>;
 }
 
 function UserColumnTitle() {

@@ -86,6 +86,7 @@ function peopleColumns(
         getUserId: (person) => person.user_id,
         getDepartment: (person) => person.department,
         getAccountKind: (person) => person.account_kind,
+        getAvatarUrl: (person) => person.avatar_url,
         // 次行是部门路径(truncate 展示), 260 够放下姓名与一段可辨认的前缀。
         width: 260,
       }),

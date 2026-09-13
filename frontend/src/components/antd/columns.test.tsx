@@ -51,6 +51,41 @@ describe("personColumn", () => {
     expect(screen.queryByText("u-empty-dept")).not.toBeInTheDocument();
     expect(secondaryLineTexts().every((text) => !UUID_RE.test(text.trim()))).toBe(true);
   });
+
+  test("姓名前展示 24px 头像: 有 https 照片则渲染 img, 否则走首字母", () => {
+    interface Person {
+      id: string;
+      name: string;
+      department: string;
+      avatar_url: string;
+    }
+    const columns: ColumnsType<Person> = [
+      personColumn<Person>({
+        t,
+        getName: (row) => row.name,
+        getUserId: (row) => row.id,
+        getDepartment: (row) => row.department,
+        getAvatarUrl: (row) => row.avatar_url,
+      }),
+    ];
+
+    renderWithAntd(
+      <AppTable<Person>
+        columns={columns}
+        dataSource={[
+          { id: "u-1", name: "张三", department: "捷发-安环部", avatar_url: "https://cdn.example.com/zhang.png" },
+          { id: "u-2", name: "李四", department: "", avatar_url: "" },
+        ]}
+        pagination={false}
+        rowKey="id"
+      />,
+    );
+
+    const photo = document.querySelector("tbody img");
+    expect(photo).toHaveAttribute("src", "https://cdn.example.com/zhang.png");
+    expect(photo).toHaveAttribute("width", "24");
+    expect(screen.getByText("李")).toBeVisible();
+  });
 });
 
 describe("peopleColumn", () => {
@@ -63,8 +98,14 @@ describe("peopleColumn", () => {
       {
         key: "crm",
         owners: [
-          { user_id: "u-1", name: "张三", department: "捷发-安环部", account_kind: "directory" },
-          { user_id: UUID, name: "系统管理员", department: "", account_kind: "local" },
+          {
+            user_id: "u-1",
+            name: "张三",
+            department: "捷发-安环部",
+            account_kind: "directory",
+            avatar_url: "https://cdn.example.com/zhang.png",
+          },
+          { user_id: UUID, name: "系统管理员", department: "", account_kind: "local", avatar_url: "" },
         ],
       },
     ];
@@ -81,7 +122,11 @@ describe("peopleColumn", () => {
     const zhang = screen.getByText("张三");
     const cell = zhang.closest("td");
     expect(cell).not.toBeNull();
-    expect(cell).toHaveTextContent("张三, 系统管理员");
+    expect(within(cell as HTMLElement).getByText("张三")).toBeVisible();
+    expect(within(cell as HTMLElement).getByText("系统管理员")).toBeVisible();
+    const photo = (cell as HTMLElement).querySelector("img");
+    expect(photo).toHaveAttribute("src", "https://cdn.example.com/zhang.png");
+    expect(photo).toHaveAttribute("width", "24");
     expect(zhang.closest(".truncate")).not.toBeNull();
     expect(within(cell as HTMLElement).queryByText("捷发-安环部")).not.toBeInTheDocument();
     expect(within(cell as HTMLElement).queryByText("本地用户")).not.toBeInTheDocument();
@@ -112,7 +157,9 @@ describe("peopleColumn", () => {
     renderWithAntd(
       <AppTable<App>
         columns={columns}
-        dataSource={[{ key: "crm", owners: [{ user_id: "missing-user", name: "", department: "", account_kind: "unresolved" }] }]}
+        dataSource={[
+          { key: "crm", owners: [{ user_id: "missing-user", name: "", department: "", account_kind: "unresolved", avatar_url: "" }] },
+        ]}
         pagination={false}
         rowKey="key"
       />,
@@ -143,8 +190,8 @@ describe("peopleColumn", () => {
           {
             key: "crm",
             owners: [
-              { user_id: "u-1", name: "张三", department: "捷发-安环部", account_kind: "directory" },
-              { user_id: UUID, name: "系统管理员", department: "", account_kind: "local" },
+              { user_id: "u-1", name: "张三", department: "捷发-安环部", account_kind: "directory", avatar_url: "" },
+              { user_id: UUID, name: "系统管理员", department: "", account_kind: "local", avatar_url: "" },
             ],
           },
         ]}
