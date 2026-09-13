@@ -1,17 +1,8 @@
-import { LayoutDashboard, LogOut, ShieldCheck, Users } from "lucide-react";
-import { useEffect, useId, useRef } from "react";
-import type { KeyboardEvent } from "react";
-import { Link } from "react-router-dom";
-
 import type { CurrentUser } from "../../App";
 import { useI18n } from "../../i18n/I18nProvider";
-import { readCsrfToken } from "../../lib/api";
 import { PersonAvatar } from "../PersonAvatar";
-
-const DEFAULT_LOGOUT_URL = "/auth/logout/";
-/** 壳层模式在 main.tsx 启动时定死, 门户↔控制台只能整页跳转, 不能走 react-router。 */
-const CONSOLE_HOME_URL = "/console/";
-const PORTAL_HOME_URL = "/portal/";
+import { UserSummaryMenu } from "./UserSummaryMenu";
+import { firstPresent, useUserSummaryMenu } from "./useUserSummaryMenu";
 
 interface UserSummaryProps {
   currentUser: CurrentUser;
@@ -22,90 +13,26 @@ interface UserSummaryProps {
 
 export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSummaryProps) {
   const { t } = useI18n();
-  const menuId = useId();
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuItemRefs = useRef<Array<HTMLElement | null>>([]);
-  const shouldRestoreFocusRef = useRef(false);
+  const menu = useUserSummaryMenu({ currentUser, mode, open, onOpenChange });
   const userName = firstPresent(
     currentUser.displayName,
     mode === "console" ? t("shell.user.consoleFallback") : t("shell.user.portalFallback"),
   );
   // role 是后端下发的 code, 展示名只在 i18n 里; 顶栏不得直接印 code。
   const userRole = currentUser.role === "admin" ? t("shell.user.role.admin") : t("shell.user.role.member");
-  const logoutUrl = localLogoutUrl(currentUser.logoutUrl);
-  const csrfToken = readCsrfToken();
-  // 控制台壳层回门户的入口收在头像菜单里, 与门户的「管理后台」镜像对称。
-  const showEmployeePortalEntry = mode === "console";
-  const showSecuritySettings = mode === "console";
-  // 门户壳层的「管理后台」入口只信后端下发的准入能力, 不看本地化 role 字符串。
-  const showAdminConsoleEntry = mode === "portal" && currentUser.canAccessConsole === true;
-  // 菜单项按渲染顺序占位: 员工门户 → 安全设置(控制台)/管理后台(门户) → 退出登录。
-  const employeePortalItemIndex = 0;
-  const secondaryItemIndex = showEmployeePortalEntry ? 1 : 0;
-  const logoutItemIndex =
-    (showEmployeePortalEntry ? 1 : 0) + (showSecuritySettings || showAdminConsoleEntry ? 1 : 0);
-
-  useEffect(() => {
-    if (open) {
-      window.requestAnimationFrame(() => menuItemRefs.current[0]?.focus());
-      return;
-    }
-    if (shouldRestoreFocusRef.current) {
-      shouldRestoreFocusRef.current = false;
-      window.requestAnimationFrame(() => triggerRef.current?.focus());
-    }
-  }, [open]);
-
-  const closeAndReturnFocus = () => {
-    shouldRestoreFocusRef.current = true;
-    onOpenChange(false);
-  };
-
-  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      onOpenChange(true);
-    }
-  };
-
-  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const items = menuItemRefs.current.filter((item): item is HTMLElement => item !== null);
-    const currentIndex = items.findIndex((item) => item === document.activeElement);
-    const nextIndex =
-      event.key === "ArrowDown"
-        ? (currentIndex + 1) % items.length
-        : event.key === "ArrowUp"
-          ? (currentIndex - 1 + items.length) % items.length
-          : event.key === "Home"
-            ? 0
-            : event.key === "End"
-              ? items.length - 1
-              : -1;
-
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeAndReturnFocus();
-      return;
-    }
-    if (nextIndex === -1) {
-      return;
-    }
-    event.preventDefault();
-    items[nextIndex]?.focus();
-  };
 
   return (
     <div className="user-menu">
       <button
-        ref={triggerRef}
+        ref={menu.triggerRef}
         type="button"
         className="user-menu-trigger"
         aria-label={t("shell.userMenu")}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
+        aria-controls={open ? menu.menuId : undefined}
         onClick={() => onOpenChange(!open)}
-        onKeyDown={onTriggerKeyDown}
+        onKeyDown={menu.onTriggerKeyDown}
       >
         <span className="user-summary">
           <strong>{userName}</strong>
@@ -118,88 +45,7 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
           alt={t("shell.user.avatarAlt", { name: userName })}
         />
       </button>
-      {open ? (
-        <div className="user-menu-popover topbar-popover" id={menuId} data-open="true" role="menu" onKeyDown={onMenuKeyDown}>
-          {showEmployeePortalEntry ? (
-            <a
-              ref={(node) => {
-                menuItemRefs.current[employeePortalItemIndex] = node;
-              }}
-              className="user-menu-item"
-              href={PORTAL_HOME_URL}
-              role="menuitem"
-              onClick={() => onOpenChange(false)}
-            >
-              <Users size={15} aria-hidden="true" />
-              <span>{t("shell.employeePortal")}</span>
-            </a>
-          ) : null}
-          {showSecuritySettings ? (
-            <Link
-              ref={(node) => {
-                menuItemRefs.current[secondaryItemIndex] = node;
-              }}
-              className="user-menu-item"
-              to="/console/settings"
-              role="menuitem"
-              onClick={() => onOpenChange(false)}
-            >
-              <ShieldCheck size={15} aria-hidden="true" />
-              <span>{t("shell.securitySettings")}</span>
-            </Link>
-          ) : null}
-          {showAdminConsoleEntry ? (
-            <a
-              ref={(node) => {
-                menuItemRefs.current[secondaryItemIndex] = node;
-              }}
-              className="user-menu-item"
-              href={CONSOLE_HOME_URL}
-              role="menuitem"
-              onClick={() => onOpenChange(false)}
-            >
-              <LayoutDashboard size={15} aria-hidden="true" />
-              <span>{t("shell.adminConsole")}</span>
-            </a>
-          ) : null}
-          <form action={logoutUrl} aria-label={t("shell.logout")} method="post">
-            {csrfToken ? <input type="hidden" name="csrfmiddlewaretoken" value={csrfToken} /> : null}
-            <button
-              ref={(node) => {
-                menuItemRefs.current[logoutItemIndex] = node;
-              }}
-              type="submit"
-              className="user-menu-item user-menu-item-danger"
-              role="menuitem"
-            >
-              <LogOut size={15} aria-hidden="true" />
-              <span>{t("shell.logout")}</span>
-            </button>
-          </form>
-        </div>
-      ) : null}
+      <UserSummaryMenu open={open} onOpenChange={onOpenChange} menu={menu} />
     </div>
   );
-}
-
-function localLogoutUrl(value: string | undefined): string {
-  const normalizedValue = firstPresent(value, DEFAULT_LOGOUT_URL);
-  if (
-    normalizedValue.startsWith("/") &&
-    !normalizedValue.startsWith("//") &&
-    !normalizedValue.includes("\\")
-  ) {
-    return normalizedValue;
-  }
-  return DEFAULT_LOGOUT_URL;
-}
-
-function firstPresent(...values: Array<string | undefined>): string {
-  for (const value of values) {
-    const normalizedValue = value?.trim();
-    if (normalizedValue) {
-      return normalizedValue;
-    }
-  }
-  return "";
 }
