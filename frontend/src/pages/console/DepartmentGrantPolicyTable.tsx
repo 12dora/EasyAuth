@@ -10,7 +10,7 @@ import { formatAppDisplayName } from "../../lib/appDisplayName";
 import { departmentDisplayName } from "../../lib/departmentDisplayName";
 import type { DepartmentGrantPolicy } from "../../lib/domain/departmentGrants";
 
-/** 「授权内容」列最多平铺的徽章数, 其余收进 +N 的悬浮提示。 */
+/** 「授权组」列最多平铺的徽章数, 其余收进 +N 的悬浮提示。 */
 const VISIBLE_CHIP_COUNT = 3;
 
 interface DepartmentGrantPolicyTableProps {
@@ -198,7 +198,7 @@ function GrantContentCell({ policy }: { policy: DepartmentGrantPolicy }) {
       )}
       {overflow.length > 0 ? (
         <Tooltip
-          // 键盘用户也要看得到被折叠的授权内容, 因此聚焦即展开, 而不是只在悬浮时显示。
+          // 键盘用户也要看得到被折叠的授权组, 因此聚焦即展开, 而不是只在悬浮时显示。
           trigger={["hover", "focus", "click"]}
           title={
             <ul className="m-0 list-none p-0">
