@@ -9,6 +9,7 @@ from easyauth.accounts.models import UserMirror
 from easyauth.connectors.base import DesiredState, DesiredUserProfile
 from easyauth.connectors.models import ConnectorInstance
 from easyauth.connectors.netbird import connector as connector_module
+from easyauth.connectors.netbird import runtime as runtime_module
 from easyauth.connectors.netbird.client import (
     NetBirdApiError,
     NetBirdGroup,
@@ -237,8 +238,8 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> _FakeNetBirdClient:
         return client
 
     monkeypatch.setattr(connector_module, "_client_from_config", client_from_config)
-    monkeypatch.setattr(connector_module, "_expansion_allowed", _allow_expansion)
-    monkeypatch.setattr(connector_module, "_external_write_allowed", _allow_external_write)
+    monkeypatch.setattr(runtime_module, "_expansion_allowed", _allow_expansion)
+    monkeypatch.setattr(runtime_module, "_external_write_allowed", _allow_external_write)
     return client
 
 
@@ -330,7 +331,7 @@ def test_lost_lease_stops_group_shrink_before_external_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        connector_module,
+        runtime_module,
         "_external_write_allowed",
         _deny_external_write,
     )
@@ -406,7 +407,7 @@ def test_lost_lease_stops_ungranted_user_block_before_external_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        connector_module,
+        runtime_module,
         "_external_write_allowed",
         _deny_external_write,
     )
@@ -508,7 +509,7 @@ def test_reconcile_stops_at_api_budget_and_reports_partial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: 预算只够 list_groups + list_users 两次调用。
-    monkeypatch.setattr(connector_module, "MAX_API_CALLS_PER_RUN", 2)
+    monkeypatch.setattr(runtime_module, "MAX_API_CALLS_PER_RUN", 2)
     fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
     desired = _desired(
         {"u-1": frozenset({"g1"}), "u-2": frozenset({"g1"})},
@@ -529,7 +530,7 @@ def test_api_budget_is_reserved_for_safety_shrink_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # 两次 list 后只剩一次写预算, 必须先用于无授权用户撤权而不是创建用户。
-    monkeypatch.setattr(connector_module, "MAX_API_CALLS_PER_RUN", 3)
+    monkeypatch.setattr(runtime_module, "MAX_API_CALLS_PER_RUN", 3)
     fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
     fake_client.users = {
         "revoke-me": _netbird_user("revoke-me", auto_group_ids=frozenset({"g1"})),
@@ -617,7 +618,7 @@ def test_on_user_offboarded_stops_when_fence_is_lost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        connector_module,
+        runtime_module,
         "_external_write_allowed",
         _deny_external_write,
     )
@@ -650,7 +651,7 @@ def test_reconcile_blocks_ungranted_jit_user_without_local_mirror(
             return allow_unknown_user
         return True
 
-    monkeypatch.setattr(connector_module, "_external_write_allowed", write_allowed)
+    monkeypatch.setattr(runtime_module, "_external_write_allowed", write_allowed)
     fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
     fake_client.users = {
         "jit-1": _netbird_user("jit-1", auto_group_ids=frozenset({"g1"})),
@@ -859,7 +860,7 @@ def test_reconcile_stops_peer_delete_when_fence_lost_mid_loop(
         remaining["n"] -= 1
         return True
 
-    monkeypatch.setattr(connector_module, "_external_write_allowed", write_allowed)
+    monkeypatch.setattr(runtime_module, "_external_write_allowed", write_allowed)
     fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
     fake_client.users = {
         "u-2": _netbird_user("u-2", auto_group_ids=frozenset({"g1"})),
@@ -897,7 +898,7 @@ def test_on_user_offboarded_stops_peer_delete_when_fence_lost_mid_loop(
         remaining["n"] -= 1
         return True
 
-    monkeypatch.setattr(connector_module, "_external_write_allowed", write_allowed)
+    monkeypatch.setattr(runtime_module, "_external_write_allowed", write_allowed)
     fake_client.users = {"u-1": _netbird_user("u-1")}
     fake_client.peers = [
         _netbird_peer("p-1", user_id="u-1"),
