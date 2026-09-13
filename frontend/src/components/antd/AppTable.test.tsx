@@ -1,6 +1,7 @@
 import { theme } from "antd";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import dayjs from "dayjs";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { useState } from "react";
@@ -13,7 +14,9 @@ import {
   AppTable,
   DateRangeControl,
   dateRangeFilter,
+  formatDateRangeBound,
   orderingSerializer,
+  parseDateRangeBound,
   parseOrderingParam,
   searchParamsWithOrdering,
   sortStateFromOrdering,
@@ -746,6 +749,51 @@ describe("dateRangeFilter", () => {
     expect(onChange).toHaveBeenCalledWith({ from: "", to: "" });
   });
 
+  test("日界按本地时区带偏移序列化, 回读 +08:00 与 Z 保持同一日历日", () => {
+    const offset = dayjs().format("Z");
+    expect(formatDateRangeBound(dayjs("2026-09-13"), "from")).toBe(`2026-09-13T00:00:00${offset}`);
+    expect(formatDateRangeBound(dayjs("2026-09-13"), "to")).toBe(`2026-09-13T23:59:59${offset}`);
+
+    const plusEightFrom = parseDateRangeBound("2026-09-13T00:00:00+08:00");
+    const plusEightTo = parseDateRangeBound("2026-09-13T23:59:59+08:00");
+    expect(plusEightFrom?.format("YYYY-MM-DD")).toBe("2026-09-13");
+    expect(plusEightTo?.format("YYYY-MM-DD")).toBe("2026-09-13");
+    expect(formatDateRangeBound(plusEightFrom!, "from")).toBe(`2026-09-13T00:00:00${offset}`);
+    expect(formatDateRangeBound(plusEightTo!, "to")).toBe(`2026-09-13T23:59:59${offset}`);
+
+    const zFrom = parseDateRangeBound("2026-09-13T00:00:00Z");
+    const zTo = parseDateRangeBound("2026-09-13T23:59:59Z");
+    expect(zFrom?.format("YYYY-MM-DD")).toBe("2026-09-13");
+    expect(zTo?.format("YYYY-MM-DD")).toBe("2026-09-13");
+    expect(formatDateRangeBound(zFrom!, "from")).toBe(`2026-09-13T00:00:00${offset}`);
+    expect(formatDateRangeBound(zTo!, "to")).toBe(`2026-09-13T23:59:59${offset}`);
+  });
+
+  test("DateRangeControl 回读 +08:00 与 Z 都显示字符串中的日历日", () => {
+    const { unmount } = renderWithAntd(
+      <DateRangeControl
+        ariaLabel="创建时间"
+        onChange={() => undefined}
+        value={{ from: "2026-09-13T00:00:00+08:00", to: "2026-09-13T23:59:59+08:00" }}
+      />,
+    );
+    const plusEight = screen.getByRole("group", { name: "创建时间" });
+    expect(within(plusEight).getAllByRole("textbox")[0]).toHaveValue("2026-09-13");
+    expect(within(plusEight).getAllByRole("textbox")[1]).toHaveValue("2026-09-13");
+    unmount();
+
+    renderWithAntd(
+      <DateRangeControl
+        ariaLabel="创建时间"
+        onChange={() => undefined}
+        value={{ from: "2026-09-13T00:00:00Z", to: "2026-09-13T23:59:59Z" }}
+      />,
+    );
+    const utc = screen.getByRole("group", { name: "创建时间" });
+    expect(within(utc).getAllByRole("textbox")[0]).toHaveValue("2026-09-13");
+    expect(within(utc).getAllByRole("textbox")[1]).toHaveValue("2026-09-13");
+  });
+
   test("下拉里的 RangePicker 经确定把起止编码进同一个筛选值回传 onChange", async () => {
     vi.useFakeTimers({ now: new Date("2026-09-13T12:00:00+08:00"), toFake: ["Date"] });
     const user = userEvent.setup({ delay: null });
@@ -773,8 +821,8 @@ describe("dateRangeFilter", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const filters = onChange.mock.calls.at(-1)?.[1] as Record<string, FilterValue | null>;
     expect(decodeDateRange(filters.updated_at)).toEqual({
-      from: "2026-09-07T00:00:00",
-      to: "2026-09-13T23:59:59",
+      from: formatDateRangeBound(dayjs("2026-09-07"), "from"),
+      to: formatDateRangeBound(dayjs("2026-09-13"), "to"),
     });
     vi.useRealTimers();
   });

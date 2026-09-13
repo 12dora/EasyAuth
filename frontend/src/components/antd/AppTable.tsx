@@ -709,7 +709,11 @@ function toSelectedKeys(value: string): Key[] {
 /* 时间范围筛选                                                        */
 /* ------------------------------------------------------------------ */
 
-/** 起止时间; 空字符串表示这一端不限。写入 URL / 后端的是 ISO 8601 datetime。 */
+/**
+ * 起止时间; 空字符串表示这一端不限。
+ * 写入 URL / 后端的是浏览器本地时区的日界, 带偏移的 ISO 8601
+ * (`YYYY-MM-DDTHH:mm:ssZ`, 如 `2026-09-13T00:00:00+08:00`)。
+ */
 export interface DateRangeValue {
   from: string;
   to: string;
@@ -754,8 +758,10 @@ export interface DateRangeControlProps {
  * 全站唯一的日期范围控件: antd RangePicker, 预设近7天 / 近30天 / 本月。
  * 授权明细工具栏与表头 `dateRangeFilter` 都走这里, 不要再各写一份。
  *
- * 展示按日; 写回 URL / 后端时 from 取当日 00:00:00、to 取当日 23:59:59,
- * 以满足运营接口 `created_from` / `created_to` 的 ISO 8601 datetime 契约。
+ * 展示按日。写回 URL / 后端时在浏览器本地时区取当日 00:00:00 / 23:59:59,
+ * 并以带偏移的 ISO 8601 序列化(`format("YYYY-MM-DDTHH:mm:ssZ")`)。
+ * 回读取字符串里的日历日, 不把带 Z / 偏移的瞬间换算成浏览器当天,
+ * 避免再确认时日期被挪一天。
  */
 export function DateRangeControl({
   allowClear = true,
@@ -818,17 +824,26 @@ function fromPickerValue(dates: [Dayjs | null, Dayjs | null] | null): DateRangeV
   };
 }
 
-function parseDateRangeBound(raw: string): Dayjs | null {
+/** ISO 日界字符串开头的日历日。 */
+const DATE_BOUND_DATE = /^(\d{4}-\d{2}-\d{2})/;
+
+/**
+ * 从 URL / 筛选值解析日历日: 取 ISO 字符串的日期部分, 忽略时区换算。
+ * `2026-09-13T23:59:59Z` 与 `2026-09-13T00:00:00+08:00` 都显示 9 月 13 日。
+ */
+export function parseDateRangeBound(raw: string): Dayjs | null {
   if (raw === "") {
     return null;
   }
-  const parsed = dayjs(raw);
+  const datePart = DATE_BOUND_DATE.exec(raw)?.[1];
+  const parsed = datePart === undefined ? dayjs(raw) : dayjs(`${datePart}T00:00:00`);
   return parsed.isValid() ? parsed : null;
 }
 
-function formatDateRangeBound(day: Dayjs, bound: "from" | "to"): string {
-  const date = day.format("YYYY-MM-DD");
-  return bound === "from" ? `${date}T00:00:00` : `${date}T23:59:59`;
+/** 把日历日格式化为本地时区的日起/日止瞬时, 带偏移。 */
+export function formatDateRangeBound(day: Dayjs, bound: "from" | "to"): string {
+  const boundary = bound === "from" ? day.startOf("day") : day.endOf("day");
+  return boundary.format("YYYY-MM-DDTHH:mm:ssZ");
 }
 
 /** dateRangeFilter 的返回值; 直接展开到列定义上(多出来的方法 antd 会忽略)。 */

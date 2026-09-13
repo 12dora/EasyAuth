@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import dayjs from "dayjs";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { formatDateRangeBound } from "../../components/antd/AppTable";
 import { OperationsPage } from "./OperationsPage";
 import { ToastProvider } from "../../components/ui/Toast";
 import {
@@ -348,11 +350,13 @@ describe("OperationsPage", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(
-        "/console/api/v1/audit-logs?page=1&page_size=20&created_from=2026-09-07T00%3A00%3A00&created_to=2026-09-13T23%3A59%3A59",
+        `/console/api/v1/audit-logs?page=1&page_size=20&created_from=${encodedBound("2026-09-07", "from")}&created_to=${encodedBound("2026-09-13", "to")}`,
         expect.objectContaining({ credentials: "include" }),
       );
     });
-    expect(screen.getByTestId("location-search")).toHaveTextContent("created_from=2026-09-07T00%3A00%3A00");
+    expect(screen.getByTestId("location-search")).toHaveTextContent(
+      `created_from=${encodedBound("2026-09-07", "from")}`,
+    );
   });
 
   test("展示失败原因并通过带原因确认框重试授权(FF-21)", async () => {
@@ -694,11 +698,78 @@ describe("OperationsPage", () => {
     await user.click(await screen.findByText("本月"));
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(
-        expect.stringContaining("created_from=2026-09-01T00%3A00%3A00"),
+        expect.stringContaining(`created_from=${encodedBound("2026-09-01", "from")}`),
         expect.objectContaining({ credentials: "include" }),
       );
     });
-    expect(screen.getByTestId("location-search")).toHaveTextContent("created_to=2026-09-30T23%3A59%3A59");
+    expect(screen.getByTestId("location-search")).toHaveTextContent(
+      `created_to=${encodedBound("2026-09-30", "to")}`,
+    );
+  });
+
+  test("授权列表创建时间 URL 带 +08:00 时回填同一日历日", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        return jsonResponse({ data: [], pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 1 } });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderOperationsPage(
+      "access-grants",
+      "?created_from=2026-09-13T00%3A00%3A00%2B08%3A00&created_to=2026-09-13T23%3A59%3A59%2B08%3A00",
+    );
+
+    const range = await screen.findByRole("group", { name: "创建时间" });
+    const inputs = within(range).getAllByRole("textbox");
+    expect(inputs[0]).toHaveValue("2026-09-13");
+    expect(inputs[1]).toHaveValue("2026-09-13");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("created_from=2026-09-13T00%3A00%3A00%2B08%3A00"),
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+  });
+
+  test("授权列表创建时间 URL 带 Z 时回填同一日历日, 再确认不跨日", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        return jsonResponse({ data: [], pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 1 } });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers({ now: new Date("2026-09-13T12:00:00+08:00"), toFake: ["Date"] });
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage(
+      "access-grants",
+      "?created_from=2026-09-13T00%3A00%3A00Z&created_to=2026-09-13T23%3A59%3A59Z",
+    );
+
+    const range = await screen.findByRole("group", { name: "创建时间" });
+    const inputs = within(range).getAllByRole("textbox");
+    expect(inputs[0]).toHaveValue("2026-09-13");
+    expect(inputs[1]).toHaveValue("2026-09-13");
+
+    await user.click(inputs[0]);
+    await user.click(await screen.findByText("近7天"));
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).toHaveTextContent(
+        `created_from=${encodedBound("2026-09-07", "from")}`,
+      );
+      expect(screen.getByTestId("location-search")).toHaveTextContent(
+        `created_to=${encodedBound("2026-09-13", "to")}`,
+      );
+    });
+    expect(within(range).getAllByRole("textbox")[0]).toHaveValue("2026-09-07");
+    expect(within(range).getAllByRole("textbox")[1]).toHaveValue("2026-09-13");
   });
 
   test("授权列表的创建时间范围可一键清除, 且没有值时不显示清除按钮", async () => {
@@ -1067,4 +1138,9 @@ function jsonResponse(payload: unknown, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+/** 本地日界写入 URL / 查询串时的百分号编码。 */
+function encodedBound(date: string, bound: "from" | "to"): string {
+  return encodeURIComponent(formatDateRangeBound(dayjs(date), bound));
 }
