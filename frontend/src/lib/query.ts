@@ -16,7 +16,8 @@ export const queryClient = new QueryClient({
 });
 
 /**
- * 控制台/门户弹窗变更的共用包装: 成功后按 queryKey 失效缓存, 失败留给 MutationErrorBanner。
+ * 控制台/门户弹窗变更的共用包装: 成功时先跑调用方 onSuccess, 再按 queryKey 失效缓存;
+ * 失败留给 MutationErrorBanner。
  */
 export function useApiMutation<TData = unknown, TError = Error, TVariables = void, TContext = unknown>(
   options: UseMutationOptions<TData, TError, TVariables, TContext> & {
@@ -29,13 +30,15 @@ export function useApiMutation<TData = unknown, TError = Error, TVariables = voi
   return useMutation({
     ...rest,
     onSuccess: (data, variables, onMutateResult, context) => {
+      onSuccess?.(data, variables, onMutateResult, context);
+      const tasks: Promise<unknown>[] = [];
       if (invalidateQueryKeys) {
         for (const queryKey of invalidateQueryKeys) {
-          void client.invalidateQueries({ queryKey });
+          tasks.push(client.invalidateQueries({ queryKey }));
         }
       }
       invalidate?.(client);
-      return onSuccess?.(data, variables, onMutateResult, context);
+      return tasks.length > 0 ? Promise.all(tasks) : undefined;
     },
   });
 }

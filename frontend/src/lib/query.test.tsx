@@ -47,4 +47,28 @@ describe("useApiMutation", () => {
     expect(onSuccess).toHaveBeenCalled();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["console", "apps"] });
   });
+
+  test("成功时先调用 onSuccess 再失效缓存", async () => {
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const order: string[] = [];
+    vi.spyOn(client, "invalidateQueries").mockImplementation(async () => {
+      order.push("invalidate");
+    });
+    const onSuccess = vi.fn(() => {
+      order.push("onSuccess");
+    });
+    const { result } = renderHook(
+      () =>
+        useApiMutation({
+          mutationFn: async (name: string) => ({ name }),
+          invalidateQueryKeys: [["console", "apps"]],
+          onSuccess,
+        }),
+      { wrapper: wrapperFor(client) },
+    );
+
+    result.current.mutate("crm");
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(order).toEqual(["onSuccess", "invalidate"]);
+  });
 });
