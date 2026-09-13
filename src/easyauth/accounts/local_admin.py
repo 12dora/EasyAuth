@@ -19,6 +19,7 @@ from easyauth.accounts.auth import (
     AUTHENTIK_SESSION_KEY,
     LOCAL_ADMIN_SESSION_FLAG,
     LOCAL_ADMIN_SESSION_VERSION_KEY,
+    LOCAL_ADMIN_SUBJECT_PREFIX,
     VerifiedOidcClaims,
     bind_oidc_session,
 )
@@ -71,7 +72,6 @@ if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
     from easyauth.audit.models import JsonValue
 
-LOCAL_ADMIN_SUBJECT_PREFIX: Final = "local-admin:"
 LOCAL_ADMIN_ACTOR_TYPE: Final = "local_admin"
 LOCAL_ADMIN_TARGET_TYPE: Final = "local_admin_account"
 PENDING_SESSION_KEY: Final = "easyauth_local_admin_pending"

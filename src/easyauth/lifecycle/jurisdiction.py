@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final
 
 from django.db.models import Q
 
+from easyauth.accounts.directory_identity import has_directory_identity
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import (
     USER_STATUS_ACTIVE,
@@ -62,7 +63,7 @@ def _reject_ineligible_pair(actor: UserMirror, subject: UserMirror) -> Jurisdict
         or actor.id == subject.id
     ):
         return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
-    if not _has_directory_identity(subject) or not _has_directory_identity(actor):
+    if not has_directory_identity(subject) or not has_directory_identity(actor):
         return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
     if (
         actor.dingtalk_source_slug != subject.dingtalk_source_slug
@@ -77,10 +78,6 @@ def _is_ineligible_principal(user: UserMirror) -> bool:
         user.authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX)
         or user.status != USER_STATUS_ACTIVE
     )
-
-
-def _has_directory_identity(user: UserMirror) -> bool:
-    return bool(user.dingtalk_source_slug and user.dingtalk_corp_id and user.dingtalk_userid)
 
 
 def _subject_org_context(

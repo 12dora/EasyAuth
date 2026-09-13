@@ -5,6 +5,7 @@ from typing import Final, cast, final
 
 from django.db import transaction
 
+from easyauth.accounts.directory_identity import has_directory_identity
 from easyauth.accounts.models import UserMirror
 from easyauth.accounts.status import UserStatus, is_non_active_status
 from easyauth.audit.services import AuditRecord, AuditService
@@ -125,7 +126,7 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
 
 def _should_reconcile_department_grants(upsert: _UserUpsertResult) -> bool:
     user = upsert.user
-    if is_non_active_status(user.status) or user.dingtalk_userid == "":
+    if is_non_active_status(user.status) or not has_directory_identity(user):
         return False
     return upsert.created or upsert.was_non_active
 

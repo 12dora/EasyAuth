@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.accounts.directory_identity import has_directory_identity
 from easyauth.accounts.models import UserMirror
 from easyauth.admin_console.api_responses import error_response, json_response
 from easyauth.admin_console.request_guards import require_console_actor, require_post
@@ -113,7 +114,7 @@ def _resolve_for_preview(*, user: UserMirror, resolver: str) -> ResolutionResult
             "managed_scope_resolver_unsupported",
         )
 
-    if not user.dingtalk_source_slug or not user.dingtalk_corp_id or not user.dingtalk_userid:
+    if not has_directory_identity(user):
         if resolver == MANAGED_SCOPE_POLICY_RESOLVER_UNION:
             # 绑定缺失是稳定事实: union 下团队侧照常返回, 与运行时一致。
             return team_resolved_managed_users(user, resolver=resolver)

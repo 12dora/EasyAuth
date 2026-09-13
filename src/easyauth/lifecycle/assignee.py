@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from easyauth.accounts.directory_identity import has_directory_identity
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import (
     USER_STATUS_ACTIVE,
@@ -54,11 +55,7 @@ _DEFAULT_ASSIGNEE_APPLY_OPTIONS = AssigneeApplyOptions()
 
 def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeResolution:
     """沿 manager_chain 自 start_level 向上找第一个可用主管。"""
-    if (
-        not subject.dingtalk_source_slug
-        or not subject.dingtalk_corp_id
-        or not subject.dingtalk_userid
-    ):
+    if not has_directory_identity(subject):
         _audit_subject(
             subject,
             action="handover_assignee_resolution_degraded",

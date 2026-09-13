@@ -24,7 +24,7 @@ OIDC_ID_TOKEN_SESSION_KEY: Final = "easyauth_oidc_id_token"  # noqa: S105 - sess
 # current_local_admin 必须校验此标志, 防止某个 sub 恰为 local-admin:<username> 的 OIDC 会话被冒认。
 LOCAL_ADMIN_SESSION_FLAG: Final = "easyauth_local_admin"
 LOCAL_ADMIN_SESSION_VERSION_KEY: Final = "easyauth_local_admin_session_version"
-LOCAL_ADMIN_RESERVED_SUBJECT_PREFIX: Final = "local-admin:"
+LOCAL_ADMIN_SUBJECT_PREFIX: Final = "local-admin:"
 FIELD_SID: Final = "sid"
 FIELD_LOGOUT: Final = "logout_token"
 SID_MAX_LENGTH: Final = 128
@@ -165,7 +165,7 @@ def bind_oidc_session(
     local_admin: bool = False,
 ) -> UserMirror:
     # OIDC 登录路径禁止绑定 local-admin: 命名空间的 subject; 只有本地超管绑定才允许该前缀。
-    if not local_admin and claims.subject.startswith(LOCAL_ADMIN_RESERVED_SUBJECT_PREFIX):
+    if not local_admin and claims.subject.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
         raise OidcSessionError(FIELD_SUBJECT, REASON_RESERVED_SUBJECT)
     if not local_admin and (not claims.sid or len(claims.sid) > SID_MAX_LENGTH):
         raise OidcSessionError(FIELD_SID, "must be non-empty and at most 128 characters")

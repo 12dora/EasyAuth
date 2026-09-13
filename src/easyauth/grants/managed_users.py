@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final
 
 from django.utils import timezone
 
+from easyauth.accounts.directory_identity import has_directory_identity
 from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
 from easyauth.applications.models import (
     MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS,
@@ -60,7 +61,7 @@ def resolve_managed_users(
         if resolver == MANAGED_SCOPE_POLICY_RESOLVER_UNION
         else None
     )
-    if not user.dingtalk_source_slug or not user.dingtalk_corp_id or not user.dingtalk_userid:
+    if not has_directory_identity(user):
         _record_resolution_failed(
             app=app,
             authorization_group_grant=authorization_group_grant,

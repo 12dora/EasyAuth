@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, Literal
 
+from easyauth.accounts.directory_identity import has_directory_identity
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -32,7 +34,7 @@ __all__ = [
 
 def account_kind(user: UserMirror) -> AccountKind:
     # 目录用户的充分条件是钉钉绑定; 本地管理员与 Authentik 内建用户都没有 userid。
-    if user.dingtalk_userid != "":
+    if has_directory_identity(user):
         return ACCOUNT_KIND_DIRECTORY
     return ACCOUNT_KIND_LOCAL
 

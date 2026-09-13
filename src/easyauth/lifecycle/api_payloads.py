@@ -294,22 +294,27 @@ def _task_detail_users(
     return users
 
 
+def team_item(
+    entry: HandoverTeamItem,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> JsonObject:
+    return {
+        "id": entry.id,
+        "team_id": entry.team_id,
+        "team_name": entry.team.name,
+        "action": entry.action,
+        "status": entry.status,
+        "to_user": user_ref(entry.to_user, department_labels=department_labels),
+    }
+
+
 def _task_team_items_payload(
     entries: list[HandoverTeamItem],
     *,
     department_labels: Mapping[str, str] | None = None,
 ) -> list[JsonValue]:
-    return [
-        {
-            "id": entry.id,
-            "team_id": entry.team_id,
-            "team_name": entry.team.name,
-            "action": entry.action,
-            "status": entry.status,
-            "to_user": user_ref(entry.to_user, department_labels=department_labels),
-        }
-        for entry in entries
-    ]
+    return [team_item(entry, department_labels=department_labels) for entry in entries]
 
 
 def _transfer_plan_payload(task: HandoverTask) -> JsonObject | None:

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from django.db.models import Q
 
+from easyauth.accounts.directory_identity import has_directory_identity
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import (
     App,
@@ -339,7 +340,7 @@ class _ApproverResolver:
                 user.authentik_user_id
             )
             for user in users
-            if user.dingtalk_source_slug and user.dingtalk_corp_id and user.dingtalk_userid
+            if has_directory_identity(user)
         }
 
     def resolve(self, raw_user_ids: object) -> tuple[str, ...]:

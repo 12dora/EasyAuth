@@ -7,13 +7,12 @@ from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from easyauth.accounts.department_paths import department_path_labels
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.accounts.person_payload import person_payload
 from easyauth.admin_console.api_responses import error_response
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
+from easyauth.lifecycle.api_payloads import team_item as payload_team_item
 from easyauth.lifecycle.models import (
     HandoverGrantItem,
     HandoverTask,
@@ -171,19 +170,7 @@ def active_user_or_none(user_id: str) -> UserMirror | None:
 
 
 def team_item(entry: HandoverTeamItem) -> JsonObject:
-    to_user = entry.to_user
-    return {
-        "id": entry.id,
-        "team_id": entry.team_id,
-        "team_name": entry.team.name,
-        "action": entry.action,
-        "status": entry.status,
-        "to_user": (
-            person_payload(to_user, department_path_labels((to_user,)))
-            if to_user is not None
-            else None
-        ),
-    }
+    return payload_team_item(entry)
 
 
 def grant_item(item: HandoverGrantItem) -> JsonObject:

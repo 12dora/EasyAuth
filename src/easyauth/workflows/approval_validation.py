@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 from django.core.exceptions import ValidationError
 
+from easyauth.accounts.directory_identity import has_directory_identity
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.integrations.dingtalk.api_client import DingTalkFormComponent
 from easyauth.workflows.approval_types import (
@@ -87,7 +88,7 @@ def _valid_originator(originator_user_id: str) -> UserMirror:
         status=USER_STATUS_ACTIVE,
     ).first()
     # 钉钉 userid 映射只在 EasyAuth(§0.4): 发起审批必须能换算, 否则明确报错。
-    if originator is None or not originator.dingtalk_userid:
+    if originator is None or not has_directory_identity(originator):
         raise ApprovalCreateError(kind="originator_invalid", message=ORIGINATOR_INVALID_MESSAGE)
     return originator
 

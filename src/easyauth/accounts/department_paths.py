@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 from django.db.models import Q
 
+from easyauth.accounts.directory_identity import has_directory_identity
 from easyauth.accounts.models import DingTalkDepartmentMirror, DingTalkUserMirror
 
 if TYPE_CHECKING:
@@ -52,12 +53,11 @@ def department_path_labels(users: Iterable[UserMirror]) -> dict[str, str]:
 def _dingtalk_bindings(users: tuple[UserMirror, ...]) -> list[tuple[UserMirror, _UserKey]]:
     bindings: list[tuple[UserMirror, _UserKey]] = []
     for user in users:
-        source_slug = user.dingtalk_source_slug
-        corp_id = user.dingtalk_corp_id
-        userid = user.dingtalk_userid
-        if source_slug == "" or corp_id == "" or userid == "":
+        if not has_directory_identity(user):
             continue
-        bindings.append((user, (source_slug, corp_id, userid)))
+        bindings.append(
+            (user, (user.dingtalk_source_slug, user.dingtalk_corp_id, user.dingtalk_userid)),
+        )
     return bindings
 
 
