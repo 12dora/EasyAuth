@@ -83,6 +83,7 @@ def test_superuser_creates_team_and_manages_members() -> None:
             "name": "张三",
             "department": "销售一部",
             "account_kind": "local",
+            "avatar_url": "",
         },
     ]
     member_added_body = _response_json(member_added)

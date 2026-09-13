@@ -41,11 +41,14 @@
 `400 VALIDATION_ERROR`。省略时保持各列表原默认顺序，并附加稳定并列键 `pk`/`id`。
 `null` 与空字符串在升序、降序下都排在最后，空单元格始终留在表格底部。
 
-人员对象 `{ user_id, name, department, account_kind }` 的 `account_kind`：
+人员对象（PersonRef）`{ user_id, name, department, account_kind, avatar_url }` 一律由
+`accounts/person_payload.py` 生成。`account_kind`：
 
 - `directory`：有钉钉绑定的目录用户。
 - `local`：已有 UserMirror 但无钉钉绑定（本地管理员、Authentik 内建用户）。
 - `unresolved`：只存用户 ID、尚无 UserMirror（例如从未登录）；不得推断为 `local`。
+
+`avatar_url` 为 `UserMirror.avatar_url`；无照片时为空字符串，**不会**是 `data:` URI。
 
 ---
 
@@ -260,7 +263,7 @@
 审批条目在 access_request 基础上额外包含：
 
 - `authorization_groups`（含提交时冻结的 grants 明细）
-- `applicant`：`{ user_id, name, email, department, account_kind }`；`account_kind` 为 `directory` / `local` / `unresolved`，口径见上文人员对象。本接口申请人必有 UserMirror，因此只有 `directory` 或 `local`。
+- `applicant`：`{ user_id, name, email, department, account_kind, avatar_url }`；`account_kind` 为 `directory` / `local` / `unresolved`，口径见上文人员对象。本接口申请人必有 UserMirror，因此只有 `directory` 或 `local`。
 - `approver_user_ids`
 - `decided_by` / `decided_at`
 

@@ -259,6 +259,7 @@ def test_people_page_allows_superuser() -> None:
         email="departed@example.com",
         department="历史部门",
         status=USER_STATUS_DISABLED,
+        avatar_url="https://static-legacy.dingtalk.com/media/departed.jpg",
     )
 
     response = client.get(USERS_API_URL, {"page": "1", "page_size": "20"})
@@ -266,7 +267,10 @@ def test_people_page_allows_superuser() -> None:
     payload = cast("dict[str, JsonValue]", response.json())
     items = cast("list[dict[str, JsonValue]]", payload["data"])
     assert response.status_code == HTTPStatus.OK
-    assert any(item["user_id"] == person.authentik_user_id for item in items)
+    by_id = {item["user_id"]: item for item in items}
+    assert by_id[person.authentik_user_id]["avatar_url"] == (
+        "https://static-legacy.dingtalk.com/media/departed.jpg"
+    )
 
 
 def test_people_page_honors_ordering_and_rejects_unknown_field() -> None:

@@ -224,10 +224,7 @@ def _user_item(
     department_labels: Mapping[str, str] | None = None,
 ) -> dict[str, JsonValue]:
     labels = department_labels if department_labels is not None else department_path_labels((user,))
-    return {
-        **person_payload(user, labels),
-        "avatar_url": user.avatar_url,
-    }
+    return person_payload(user, labels)
 
 
 def _person_item(

@@ -49,6 +49,7 @@ def person_payload(user: UserMirror, labels: Mapping[str, str]) -> dict[str, Jso
         "name": user.name,
         "department": labels.get(user.authentik_user_id, user.department),
         "account_kind": account_kind(user),
+        "avatar_url": user.avatar_url,
     }
 
 
@@ -64,13 +65,14 @@ def unresolved_person_payload(user_id: str) -> dict[str, JsonValue]:
     """成员关系等只存 authentik_user_id、尚无 UserMirror 时的人员形状。
 
     无法观察钉钉绑定, `account_kind` 为 `unresolved`, 不得推断为 `local`。
-    姓名与部门为空字符串。
+    姓名、部门与头像为空字符串。
     """
     return {
         "user_id": user_id,
         "name": "",
         "department": "",
         "account_kind": ACCOUNT_KIND_UNRESOLVED,
+        "avatar_url": "",
     }
 
 
@@ -84,4 +86,5 @@ def _row_fields(person: Mapping[str, JsonValue], prefix: str) -> dict[str, JsonV
         f"{prefix}name": person["name"],
         f"{prefix}department": person["department"],
         f"{prefix}account_kind": person["account_kind"],
+        f"{prefix}avatar_url": person["avatar_url"],
     }

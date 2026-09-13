@@ -312,6 +312,7 @@ def test_ops1_apps_api_owners_are_person_refs_sorted_by_name_then_user_id() -> N
             "name": "Bob",
             "department": "安环部",
             "account_kind": "directory",
+            "avatar_url": "",
         },
     ]
 
@@ -750,6 +751,7 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
             "user_name": "",
             "user_department": "",
             "user_account_kind": "unresolved",
+            "user_avatar_url": "",
             "role": "developer",
             "is_active": False,
         },
@@ -759,6 +761,7 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
             "user_name": "",
             "user_department": "",
             "user_account_kind": "unresolved",
+            "user_avatar_url": "",
             "role": "owner",
             "is_active": True,
         },
@@ -768,6 +771,7 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
             "user_name": "",
             "user_department": "",
             "user_account_kind": "local",
+            "user_avatar_url": "",
             "role": "developer",
             "is_active": True,
         },
@@ -795,6 +799,7 @@ def test_ops1_memberships_api_superuser_creates_developer_membership() -> None:
         "user_name": "",
         "user_department": "",
         "user_account_kind": "unresolved",
+        "user_avatar_url": "",
         "role": "developer",
         "is_active": True,
     }
@@ -854,6 +859,7 @@ def test_ops1_memberships_api_superuser_patches_role_and_active_state() -> None:
         "user_name": "",
         "user_department": "",
         "user_account_kind": "unresolved",
+        "user_avatar_url": "",
         "role": "owner",
         "is_active": False,
     }
@@ -1029,6 +1035,7 @@ def _local_person(user_id: str, *, name: str = "", department: str = "") -> dict
         "name": name,
         "department": department,
         "account_kind": "local",
+        "avatar_url": "",
     }
 
 
@@ -1038,6 +1045,7 @@ def _unresolved_person(user_id: str) -> dict[str, str]:
         "name": "",
         "department": "",
         "account_kind": "unresolved",
+        "avatar_url": "",
     }
 
 

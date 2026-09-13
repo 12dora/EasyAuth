@@ -24,11 +24,15 @@
 分页、状态和枚举筛选只有省略或空值时使用默认语义；出现非法值必须返回
 `422 VALIDATION_ERROR`，不得静默忽略、截断或返回不可信空列表。
 
-人员对象 `{ user_id, name, department, account_kind }` 的 `account_kind`：
+人员对象（PersonRef）`{ user_id, name, department, account_kind, avatar_url }` 一律由
+`accounts/person_payload.py` 生成。`account_kind`：
 
 - `directory`：有钉钉绑定的目录用户。
 - `local`：已有 UserMirror 但无钉钉绑定（本地管理员、Authentik 内建用户）。
 - `unresolved`：只存用户 ID、尚无 UserMirror（例如从未登录）；不得推断为 `local`。
+
+`avatar_url` 为 `UserMirror.avatar_url`；无照片时为空字符串，**不会**是 `data:` URI
+（Authentik 首字母 SVG 视为缺失）。行字段形态为 `{prefix}avatar_url`（如 `user_avatar_url`）。
 
 ---
 
@@ -51,7 +55,8 @@
 | GET | `/apps/{app_key}/managed-users-preview` | 管理范围预览 |
 | POST | `/apps/{app_key}/permission-query-tests` | 权限查询联调 |
 
-应用列表和详情项的 `owners` 为人员对象数组（`user_id`、`name`、`department`、`account_kind`），
+应用列表和详情项的 `owners` 为人员对象数组（PersonRef：`user_id`、`name`、`department`、
+`account_kind`、`avatar_url`），
 按姓名再按 `user_id` 排序；整页 owner 成员关系、UserMirror 与部门路径一次性批量解析，不按 App
 回源。尚无 UserMirror 的 owner 为 `account_kind: "unresolved"`。`developers` 仍为 Authentik 用户
 ID 字符串数组。筛选参数 `owner_user_id` 不变，仍按成员关系的用户 ID 过滤。
@@ -132,10 +137,11 @@ ID 字符串数组。筛选参数 `owner_user_id` 不变，仍按成员关系的
 | `user_name` | 对应用户 `UserMirror.name`；无镜像或镜像无姓名时为空字符串 |
 | `user_department` | 对应用户部门路径（与 `GET /user-options` 的 `department` 同口径）；无镜像时为空字符串 |
 | `user_account_kind` | `directory` / `local` / `unresolved`，口径见上文人员对象 `account_kind` |
+| `user_avatar_url` | 口径见上文人员对象 `avatar_url` |
 | `role` | `owner` / `developer` |
 | `is_active` | 是否有效 |
 
-`user_name` / `user_department` / `user_account_kind` 按当前列表一次性批量查询 `UserMirror`，不按行回源。创建与 PATCH 成功体中的
+`user_name` / `user_department` / `user_account_kind` / `user_avatar_url` 按当前列表一次性批量查询 `UserMirror`，不按行回源。创建与 PATCH 成功体中的
 `membership` 使用同一项形状。人员展示字段一律来自 `person_payload` / `person_row_fields`。
 
 App capability 与 credential capability 必须同时开启；manifest 声明只供展示，
@@ -264,7 +270,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 申请人 `UserMirror.name`（镜像无姓名时为空字符串）；`user_department` 为申请人部门路径
 （与 `GET /user-options` 的 `department` 同口径）；`user_account_kind` 为 `directory`、
 `local` 或 `unresolved`。`app_name` / `app_alias` 为应用名称与别名。`approvers` 为
-`[{ "user_id", "name", "department", "account_kind" }]`，与既有 `approver_user_ids` 并列。
+`[{ "user_id", "name", "department", "account_kind", "avatar_url" }]`，与既有 `approver_user_ids` 并列。
 `decided_by_name` 为决定人姓名；无决定人或镜像中无该用户时为空字符串。
 
 ### 授权运营列表
@@ -360,7 +366,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 部门路径按本响应一次批量解析。门户交接列表/详情使用同一套字段。
 
 团队详情 `members[]` 与列表 `leaders[]` 均为人员对象：`user_id`、`name`、`department`、
-`account_kind`（成员项另含 `email`、`status`、`role`、`added_at`）。部门路径与人员选项同口径。
+`account_kind`、`avatar_url`（成员项另含 `email`、`status`、`role`、`added_at`）。部门路径与人员选项同口径。
 
 ---
 
@@ -611,7 +617,7 @@ PUT 不得变更策略所属部门或应用，否则 422。
 
 **GET `/audit-logs`** 列表项在既有 `actor_type` / `actor_id` 之外提供 `actor_person`：
 当 `actor_id` 能解析到 `UserMirror` 时为人员对象（`user_id`、`name`、`department`、
-`account_kind`，由 `person_payload` 生成，与 `actor_type` 无关）；系统账号或未知 ID 为
+`account_kind`、`avatar_url`，由 `person_payload` 生成，与 `actor_type` 无关）；系统账号或未知 ID 为
 `null`。人员部门路径按当前页批量解析。
 
 全局 `/settings/integrations` 中的钉钉 agent 配置只用于旧配置迁移、审批等仍属全局的能力；

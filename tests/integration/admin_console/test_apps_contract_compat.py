@@ -445,6 +445,7 @@ def _local_person(user_id: str) -> dict[str, str]:
         "name": "",
         "department": "",
         "account_kind": "local",
+        "avatar_url": "",
     }
 
 
@@ -454,6 +455,7 @@ def _unresolved_person(user_id: str) -> dict[str, str]:
         "name": "",
         "department": "",
         "account_kind": "unresolved",
+        "avatar_url": "",
     }
 
 

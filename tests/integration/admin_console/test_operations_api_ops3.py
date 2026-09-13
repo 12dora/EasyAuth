@@ -200,6 +200,7 @@ def test_ops3_access_requests_include_user_app_and_approver_names() -> None:
             "name": "审批人甲",
             "department": "",
             "account_kind": "local",
+            "avatar_url": "",
         },
     ]
     assert submitted_item["decided_by_name"] == ""

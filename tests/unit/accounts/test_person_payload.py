@@ -55,6 +55,7 @@ def test_person_payload_uses_batched_department_label() -> None:
         dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="dt-labeled",
+        avatar_url="https://static-legacy.dingtalk.com/media/labeled.jpg",
     )
     labels = {user.authentik_user_id: "捷发-安环部"}
 
@@ -63,6 +64,7 @@ def test_person_payload_uses_batched_department_label() -> None:
         "name": "胡玉琴A",
         "department": "捷发-安环部",
         "account_kind": ACCOUNT_KIND_DIRECTORY,
+        "avatar_url": "https://static-legacy.dingtalk.com/media/labeled.jpg",
     }
 
 
@@ -78,6 +80,7 @@ def test_person_payload_falls_back_to_user_department_when_label_missing() -> No
         "name": "本地用户",
         "department": "销售部",
         "account_kind": ACCOUNT_KIND_LOCAL,
+        "avatar_url": "",
     }
 
 
@@ -93,6 +96,7 @@ def test_person_row_fields_default_prefix() -> None:
         "user_name": "胡玉琴A",
         "user_department": "安环部",
         "user_account_kind": ACCOUNT_KIND_LOCAL,
+        "user_avatar_url": "",
     }
 
 
@@ -108,6 +112,7 @@ def test_person_row_fields_originator_prefix() -> None:
         "originator_name": "发起人",
         "originator_department": "研发部",
         "originator_account_kind": ACCOUNT_KIND_LOCAL,
+        "originator_avatar_url": "",
     }
 
 
@@ -117,6 +122,7 @@ def test_unresolved_person_payload_is_unresolved_with_empty_display_fields() -> 
         "name": "",
         "department": "",
         "account_kind": ACCOUNT_KIND_UNRESOLVED,
+        "avatar_url": "",
     }
 
 
@@ -126,6 +132,7 @@ def test_unresolved_person_row_fields_uses_user_prefix() -> None:
         "user_name": "",
         "user_department": "",
         "user_account_kind": ACCOUNT_KIND_UNRESOLVED,
+        "user_avatar_url": "",
     }
 
 
@@ -147,6 +154,7 @@ def test_missing_mirror_owner_is_unresolved() -> None:
         "name": "",
         "department": "",
         "account_kind": ACCOUNT_KIND_UNRESOLVED,
+        "avatar_url": "",
     }
 
 

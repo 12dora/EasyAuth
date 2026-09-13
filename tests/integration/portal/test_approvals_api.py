@@ -94,6 +94,7 @@ def test_approver_sees_pending_approvals_and_approves() -> None:
     assert isinstance(applicant, dict)
     assert applicant["user_id"] == "portal-applicant"
     assert "department" in applicant
+    assert applicant["avatar_url"] == ""
     approval = _json_dict(approved_body, "approval")
     assert approval["status"] == "grant_applied"
     assert AccessGrant.objects.filter(is_current=True).count() == 1
