@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 from django.db.models import OuterRef, Subquery
 from django.http import HttpRequest, JsonResponse
@@ -51,11 +51,10 @@ from easyauth.applications.ownership import (
     apps_visible_to_actor_queryset,
     can_manage_app,
     can_view_app,
+    member_user_ids_by_app_id,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from django.db.models import QuerySet
 
 type VisibleAppResult = App | JsonResponse
@@ -288,24 +287,14 @@ def _app_member_ids(app: App, role: str) -> list[JsonValue]:
     return result
 
 
-def _member_ids_by_app_id(apps: tuple[App, ...], role: str) -> dict[int, list[JsonValue]]:
-    app_ids = tuple(app.id for app in apps)
-    member_ids_by_app_id: dict[int, list[JsonValue]] = {app_id: [] for app_id in app_ids}
-    if not app_ids:
-        return member_ids_by_app_id
-    membership_rows = (
-        AppMembership.objects.filter(
-            app_id__in=app_ids,
+def _member_ids_by_app_id(apps: tuple[App, ...], role: str) -> dict[int, list[str]]:
+    return {
+        app_id: list(user_ids)
+        for app_id, user_ids in member_user_ids_by_app_id(
+            (app.id for app in apps),
             role=role,
-            is_active=True,
-        )
-        .order_by("app_id", "user_id")
-        .values_list("app_id", "user_id")
-    )
-    for raw_app_id, raw_user_id in cast("Iterable[tuple[object, object]]", membership_rows):
-        app_id = cast("int", raw_app_id)
-        member_ids_by_app_id.setdefault(app_id, []).append(cast("str", raw_user_id))
-    return member_ids_by_app_id
+        ).items()
+    }
 
 
 def _visible_apps_queryset(actor: ConsoleActor) -> QuerySet[App]:

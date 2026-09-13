@@ -17,6 +17,8 @@ from easyauth.applications.models import (
     AuthorizationGroupGrant,
     Permission,
 )
+from easyauth.applications.ops_models import APP_MEMBERSHIP_ROLE_OWNER
+from easyauth.applications.ownership import member_user_ids_by_app_id
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -197,7 +199,10 @@ def _app_default_approver_by_app_id(
     resolver: _ApproverResolver,
 ) -> dict[int, ApproverResolution]:
     app_ids = tuple(app.id for app in apps)
-    owner_user_ids_by_app_id = _owner_user_ids_by_app_id(app_ids)
+    owner_user_ids_by_app_id = member_user_ids_by_app_id(
+        app_ids,
+        role=APP_MEMBERSHIP_ROLE_OWNER,
+    )
     manager_user_ids = resolver.resolve_direct_manager(user)
     return {
         app.id: ApproverResolution(
@@ -222,26 +227,6 @@ def _direct_manager_approver_resolution(
         user_ids=(),
         status=APPROVER_RESOLUTION_DIRECT_MANAGER_MISSING,
     )
-
-
-def _owner_user_ids_by_app_id(app_ids: tuple[int, ...]) -> dict[int, tuple[str, ...]]:
-    owner_user_ids_by_app_id: dict[int, list[str]] = {app_id: [] for app_id in app_ids}
-    membership_rows = (
-        AppMembership.objects.filter(
-            app_id__in=app_ids,
-            role="owner",
-            is_active=True,
-        )
-        .order_by("app_id", "user_id")
-        .values_list("app_id", "user_id")
-    )
-    for raw_app_id, raw_user_id in cast("Iterable[tuple[object, object]]", membership_rows):
-        app_id = cast("int", raw_app_id)
-        user_id = cast("str", raw_user_id)
-        owner_user_ids_by_app_id.setdefault(app_id, []).append(user_id)
-    return {
-        app_id: tuple(owner_user_ids) for app_id, owner_user_ids in owner_user_ids_by_app_id.items()
-    }
 
 
 def _approval_rule_approvers_by_group_id(

@@ -3,12 +3,14 @@ from __future__ import annotations
 import pytest
 
 from easyauth.applications.models import App, AppMembership
+from easyauth.applications.ops_models import APP_MEMBERSHIP_ROLE_OWNER
 from easyauth.applications.ownership import (
     ConsoleActor,
     apps_visible_to_actor,
     can_manage_app,
     can_operate_credentials,
     can_view_app,
+    member_user_ids_by_app_id,
 )
 
 pytestmark = pytest.mark.django_db
@@ -99,3 +101,27 @@ def test_ops1_superuser_can_view_and_manage_all_apps_without_membership() -> Non
     assert visible_app_keys == ["ops1-super-crm", "ops1-super-erp"]
     assert can_manage_crm is True
     assert can_operate_erp is True
+
+
+def test_member_user_ids_by_app_id_batches_active_owners_in_user_id_order() -> None:
+    crm = App.objects.create(app_key="ops1-batch-crm", name="CRM")
+    erp = App.objects.create(app_key="ops1-batch-erp", name="ERP")
+    _ = AppMembership.objects.create(app=crm, user_id="owner-b", role="owner")
+    _ = AppMembership.objects.create(app=crm, user_id="owner-a", role="owner")
+    _ = AppMembership.objects.create(app=crm, user_id="dev-1", role="developer")
+    _ = AppMembership.objects.create(
+        app=crm,
+        user_id="owner-inactive",
+        role="owner",
+        is_active=False,
+    )
+    _ = AppMembership.objects.create(app=erp, user_id="erp-owner", role="owner")
+
+    owners = member_user_ids_by_app_id(
+        (crm.id, erp.id),
+        role=APP_MEMBERSHIP_ROLE_OWNER,
+    )
+
+    assert owners[crm.id] == ("owner-a", "owner-b")
+    assert owners[erp.id] == ("erp-owner",)
+    assert member_user_ids_by_app_id((), role=APP_MEMBERSHIP_ROLE_OWNER) == {}
