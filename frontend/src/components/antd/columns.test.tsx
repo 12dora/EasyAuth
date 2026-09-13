@@ -1,4 +1,5 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
 import type { AccountKind, PersonRef } from "../../lib/domain/person";
@@ -53,7 +54,7 @@ describe("personColumn", () => {
 });
 
 describe("peopleColumn", () => {
-  test("多名负责人纵向堆叠姓名与部门, 本地账号次行不是 UUID", () => {
+  test("多名负责人同一行逗号分隔, 悬停姓名展示部门或本地用户, 单元格不出 UUID", async () => {
     interface App {
       key: string;
       owners: PersonRef[];
@@ -73,15 +74,53 @@ describe("peopleColumn", () => {
         getPeople: (app) => app.owners,
       }),
     ];
+    const user = userEvent.setup();
 
     renderWithAntd(<AppTable<App> columns={columns} dataSource={apps} pagination={false} rowKey="key" />);
 
-    expect(screen.getByText("张三")).toBeVisible();
-    expect(screen.getByText("捷发-安环部")).toBeVisible();
-    expect(screen.getByText("系统管理员")).toBeVisible();
-    expect(screen.getByText("本地用户")).toBeVisible();
+    const zhang = screen.getByText("张三");
+    const cell = zhang.closest("td");
+    expect(cell).not.toBeNull();
+    expect(cell).toHaveTextContent("张三, 系统管理员");
+    expect(zhang.closest(".truncate")).not.toBeNull();
+    expect(within(cell as HTMLElement).queryByText("捷发-安环部")).not.toBeInTheDocument();
+    expect(within(cell as HTMLElement).queryByText("本地用户")).not.toBeInTheDocument();
     expect(screen.queryByText(UUID)).not.toBeInTheDocument();
-    expect(secondaryLineTexts().every((text) => !UUID_RE.test(text.trim()))).toBe(true);
+
+    await user.hover(zhang);
+    await waitFor(() => expect(visibleTooltip()).toHaveTextContent("捷发-安环部"));
+
+    await user.unhover(zhang);
+    await waitFor(() => expect(visibleTooltip()).toBeNull());
+    await user.hover(screen.getByText("系统管理员"));
+    await waitFor(() => expect(visibleTooltip()).toHaveTextContent("本地用户"));
+  });
+
+  test("无部门的 unresolved 人员不挂 Tooltip", async () => {
+    interface App {
+      key: string;
+      owners: PersonRef[];
+    }
+    const columns: ColumnsType<App> = [
+      peopleColumn<App>({
+        t,
+        getPeople: (app) => app.owners,
+      }),
+    ];
+    const user = userEvent.setup();
+
+    renderWithAntd(
+      <AppTable<App>
+        columns={columns}
+        dataSource={[{ key: "crm", owners: [{ user_id: "missing-user", name: "", department: "", account_kind: "unresolved" }] }]}
+        pagination={false}
+        rowKey="key"
+      />,
+    );
+
+    const name = screen.getByText("missing-user");
+    await user.hover(name);
+    expect(visibleTooltip()).toBeNull();
   });
 });
 
@@ -89,4 +128,8 @@ function secondaryLineTexts(): string[] {
   return [...document.querySelectorAll("tbody td .flex.flex-col span.truncate, tbody td .flex.flex-col code")].map(
     (node) => node.textContent ?? "",
   );
+}
+
+function visibleTooltip(): HTMLElement | null {
+  return document.querySelector(".ant-tooltip:not(.ant-tooltip-hidden)");
 }

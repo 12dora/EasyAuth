@@ -102,6 +102,39 @@ describe("ConsoleAppList", () => {
     });
   });
 
+  test("负责人列把多名 owner 写在同一行, 单元格不堆叠部门", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({
+          data: [
+            {
+              id: 1,
+              app_key: "crm",
+              name: "CRM",
+              alias: "",
+              owners: [
+                { user_id: "u-1", name: "胡玉琴A", department: "捷发-安环部", account_kind: "directory" },
+                { user_id: "u-2", name: "认证系统管理员", department: "", account_kind: "local" },
+              ],
+              is_active: true,
+              updated_at: "2026-07-01T09:00:00Z",
+              capabilities: {},
+            },
+          ],
+        }),
+      ),
+    );
+
+    renderList();
+
+    const row = await screen.findByRole("row", { name: /CRM/ });
+    expect(row).toHaveTextContent("胡玉琴A, 认证系统管理员");
+    expect(within(row).queryByText("捷发-安环部")).not.toBeInTheDocument();
+    expect(within(row).queryByText("本地用户")).not.toBeInTheDocument();
+  });
+
   test("表头状态筛选映射成后端 status 查询参数并回到第 1 页", async () => {
     document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [], pagination: emptyPagination() }));

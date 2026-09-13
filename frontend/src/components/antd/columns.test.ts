@@ -94,7 +94,7 @@ describe("列预设 sorter", () => {
     ).toBeLessThan(0);
   });
 
-  test("peopleColumn({ sorter: true }) 按堆叠顺序逐人比较", () => {
+  test("peopleColumn({ sorter: true }) 按第一负责人姓名比较, 同位再比后续人员", () => {
     const li: PersonRef = { user_id: "u1", name: "李四", department: "安环部", account_kind: "directory" };
     const zhang: PersonRef = { user_id: "u2", name: "张三", department: "安环部", account_kind: "directory" };
     const column = peopleColumn<{ owners: PersonRef[] }>({

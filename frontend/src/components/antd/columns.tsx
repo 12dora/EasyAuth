@@ -1,8 +1,11 @@
-import type { ComponentPropsWithoutRef, MouseEvent, ReactNode } from "react";
+import { Fragment, type ComponentPropsWithoutRef, type MouseEvent, type ReactNode } from "react";
+
+import { Tooltip } from "antd";
 
 import { useI18n } from "../../i18n/I18nProvider";
 import { cn } from "../../lib/cn";
 import type { AccountKind, PersonRef } from "../../lib/domain/person";
+import { joinLabels } from "../../lib/joinLabels";
 import type { BadgeTone, Translator } from "../../lib/status";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
@@ -415,7 +418,7 @@ export interface PeopleColumnConfig<T> {
   getPeople: (record: T) => readonly PersonRef[] | null | undefined;
   t: Translator;
   filter?: boolean;
-  /** 开启客户端排序: 按堆叠顺序逐人比较姓名然后次行。服务端表改过 `serverSortColumn`。 */
+  /** 开启客户端排序: 按第一负责人姓名然后次行, 同位再比后续人员。服务端表改过 `serverSortColumn`。 */
   sorter?: boolean;
   width?: number;
 }
@@ -538,8 +541,8 @@ export function personColumn<T>({
 }
 
 /**
- * 多人列: 每人姓名 + 部门路径(或「本地用户」)纵向堆叠, 次行绝不出 UUID。
- * 应用列表负责人等「一行多个人」的场景走这里, 不要再用 textColumn + safeJoin。
+ * 多人列: 姓名以 `, ` 写在同一行, 超长由 TruncatedText 截断; 悬停单个姓名才出部门
+ * (或「本地用户」)。次行绝不出 UUID。应用列表负责人走这里, 不要再用 textColumn + safeJoin。
  */
 export function peopleColumn<T>({
   filter = false,
@@ -565,13 +568,7 @@ export function peopleColumn<T>({
       if (people.length === 0) {
         return "-";
       }
-      return (
-        <div className="flex w-full min-w-0 flex-col gap-2">
-          {people.map((person) => (
-            <PersonStack key={person.user_id} person={person} t={t} />
-          ))}
-        </div>
-      );
+      return <PeopleLine people={people} t={t} />;
     },
     ...(filter
       ? textFilter<T>(key, {
@@ -605,16 +602,35 @@ export function peopleColumn<T>({
   };
 }
 
-function PersonStack({ person, t }: { person: PersonRef; t: Translator }) {
-  const displayName = userOptionName(person);
-  const secondary = userSecondaryLabel(person, t);
+const PEOPLE_NAME_SEPARATOR = ", ";
+
+function PeopleLine({ people, t }: { people: readonly PersonRef[]; t: Translator }) {
+  const joined = joinLabels(
+    people.map((person) => userOptionName(person)),
+    { separator: PEOPLE_NAME_SEPARATOR },
+  );
   return (
-    <div className="flex w-full min-w-0 flex-col gap-1">
-      <strong className="block w-full min-w-0 truncate">{displayName}</strong>
-      {secondary ? (
-        <TruncatedText className="block w-full min-w-0 text-body leading-5 text-ink-soft" text={secondary} />
-      ) : null}
-    </div>
+    <TruncatedText className="block w-full min-w-0" text={joined}>
+      {people.map((person, index) => (
+        <Fragment key={person.user_id}>
+          {index > 0 ? PEOPLE_NAME_SEPARATOR : null}
+          <PersonName person={person} t={t} />
+        </Fragment>
+      ))}
+    </TruncatedText>
+  );
+}
+
+function PersonName({ person, t }: { person: PersonRef; t: Translator }) {
+  const name = userOptionName(person);
+  const secondary = userSecondaryLabel(person, t);
+  if (!secondary) {
+    return <span>{name}</span>;
+  }
+  return (
+    <Tooltip title={secondary}>
+      <span>{name}</span>
+    </Tooltip>
   );
 }
 

@@ -130,8 +130,9 @@ personColumn<T>({ getName, getUserId, getDepartment?, getAccountKind?, t, key? =
 // sorter 同 userColumn
 
 peopleColumn<T>({ getPeople, t, key?, title?, filter?, sorter? = false, width? }): ColumnType<T>
-// 多名 PersonRef 纵向堆叠姓名/部门, 应用列表负责人列走这里, 禁止 textColumn + safeJoin
-// sorter: 按堆叠顺序逐人比较姓名然后次行
+// 多名 PersonRef 同一行以 ", " 拼接姓名, 超长 TruncatedText 截断; 悬停单个姓名出部门(或「本地用户」)
+// 无部门的 unresolved 人员不挂 Tooltip。应用列表负责人列走这里, 禁止 textColumn + safeJoin
+// sorter: 按第一负责人姓名然后次行, 同位再比后续人员
 
 actionsColumn<T>({ render, title?, width? = ACTIONS_COLUMN_DEFAULT_WIDTH, fixed? = "right", key? = "actions" }): ColumnType<T>
 // render: (record, index) => ReactNode, 右对齐 / 不换行 / 点击不冒泡到行

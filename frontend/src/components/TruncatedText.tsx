@@ -1,7 +1,7 @@
 /** 超长文本截断; 仅在确实溢出时用 Tooltip 展示全文。 */
 
 import { Tooltip } from "antd";
-import { useCallback, useLayoutEffect, useState, type FocusEvent, type MouseEvent } from "react";
+import { useCallback, useLayoutEffect, useState, type FocusEvent, type MouseEvent, type ReactNode } from "react";
 
 import { cn } from "../lib/cn";
 
@@ -9,10 +9,13 @@ export function TruncatedText({
   text,
   className,
   as: Tag = "span",
+  children,
 }: {
   text: string;
   className?: string;
   as?: "span" | "code";
+  /** 可见内容; 缺省渲染 `text`。溢出时 Tooltip 仍展示 `text`(例如一行姓名的拼接全文)。 */
+  children?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -41,7 +44,7 @@ export function TruncatedText({
         onFocus={onFocus}
         onBlur={close}
       >
-        {text}
+        {children ?? text}
       </Tag>
     </Tooltip>
   );
