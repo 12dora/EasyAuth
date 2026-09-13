@@ -59,6 +59,15 @@ export function requestTypeLabel(t: Translator, requestType: string): string {
   }
 }
 
+/** 全量撤销: 撤销申请且目标权限组与直接授权都为空。 */
+export function isFullRevokeRequest(approval: PortalApprovalRow): boolean {
+  return (
+    approval.request_type === "revoke" &&
+    approval.authorization_groups.length === 0 &&
+    approval.direct_grants.length === 0
+  );
+}
+
 export function approvalFactsAreComplete(approval: PortalApprovalRow): boolean {
   if (approval.authorization_groups.some((group) => group.grants.length === 0)) {
     return false;

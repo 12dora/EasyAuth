@@ -53,8 +53,9 @@ describe("PortalApprovalsSection", () => {
     expect(await screen.findByText("张三")).toBeVisible();
     expect(screen.getByText("销售部")).toBeVisible();
     expect(screen.getByText("客户管理 (CRM)")).toBeVisible();
-    // 申请内容格只留条数浮层, 申请类型与权限组名都进浮层/决定弹窗, 不再印在单元格里。
-    expect(screen.queryByText("新增授权")).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "类型" })).toBeVisible();
+    expect(screen.getByText("新增授权")).toBeVisible();
+    // 申请内容格只留条数浮层, 权限组名进浮层/决定弹窗, 不再印在内容单元格里。
     expect(screen.queryByText("销售只读")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "3 项权限" })).toBeVisible();
     expect(screen.queryByText("订单列表 (orders.list) · SELF")).not.toBeInTheDocument();
@@ -71,6 +72,70 @@ describe("PortalApprovalsSection", () => {
     expect(screen.getByRole("button", { name: "驳回" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "待办" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "已处理" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  test("待办与已处理行内都展示新增、变更、撤销、续期四种申请类型", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === PENDING_LIST_URL) {
+        return jsonResponse({
+          data: REQUEST_TYPE_CASES.map((row, index) => approvalOfType(row.requestType, index + 1)),
+          pagination: { page: 1, page_size: 20, total_items: 4, total_pages: 1 },
+        });
+      }
+      if (url === PROCESSED_LIST_URL) {
+        return jsonResponse({
+          data: REQUEST_TYPE_CASES.map((row, index) => approvalOfType(row.requestType, index + 11, "processed")),
+          pagination: { page: 1, page_size: 20, total_items: 4, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSection();
+
+    expect(await screen.findByText("申请人-grant")).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "类型" })).toBeVisible();
+    for (const row of REQUEST_TYPE_CASES) {
+      expect(screen.getByText(row.label)).toBeVisible();
+    }
+
+    await user.click(screen.getByRole("tab", { name: "已处理" }));
+    expect(await screen.findAllByText("已生效")).toHaveLength(4);
+    expect(screen.getByRole("columnheader", { name: "类型" })).toBeVisible();
+    for (const row of REQUEST_TYPE_CASES) {
+      expect(screen.getByText(row.label)).toBeVisible();
+    }
+  });
+
+  test("全量撤销申请的内容格展示全部撤销文案而不是 0 项权限", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        if (String(input) === PENDING_LIST_URL) {
+          return jsonResponse({
+            data: [
+              {
+                ...approvalOfType("revoke", 8),
+                authorization_groups: [],
+                direct_grants: [],
+              },
+            ],
+            pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+          });
+        }
+        throw new Error(`Unexpected fetch: ${String(input)}`);
+      }),
+    );
+
+    renderSection();
+
+    expect(await screen.findByText("撤销授权")).toBeVisible();
+    expect(screen.getByText("撤销该应用的全部当前授权")).toBeVisible();
+    expect(screen.queryByText("0 项权限")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /项权限/ })).not.toBeInTheDocument();
   });
 
   test("审批 tabs 使用方向键 roving tabindex 切换", async () => {
@@ -655,8 +720,9 @@ describe("PortalApprovalsSection", () => {
     expect(screen.getByText(/2026\/08\/15/)).toBeVisible();
     expect(screen.getByText("已生效")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "审批意见" })).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "类型" })).toBeVisible();
     expect(screen.queryByRole("columnheader", { name: "我的意见" })).not.toBeInTheDocument();
-    expect(screen.queryByText("新增授权")).not.toBeInTheDocument();
+    expect(screen.getByText("新增授权")).toBeVisible();
     expect(screen.queryByText("销售只读")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "3 项权限" })).toBeVisible();
     expect(screen.queryByText("订单列表 (orders.list) · SELF")).not.toBeInTheDocument();
@@ -763,4 +829,33 @@ function jsonResponse(payload: unknown, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+const REQUEST_TYPE_CASES = [
+  { requestType: "grant", label: "新增授权" },
+  { requestType: "change", label: "变更授权" },
+  { requestType: "revoke", label: "撤销授权" },
+  { requestType: "renew", label: "续期授权" },
+] as const;
+
+function approvalOfType(
+  requestType: (typeof REQUEST_TYPE_CASES)[number]["requestType"],
+  id: number,
+  tab: "pending" | "processed" = "pending",
+) {
+  const identity = {
+    id,
+    request_type: requestType,
+    base_grant_id: requestType === "grant" ? null : 7,
+    base_grant_revision: requestType === "grant" ? null : 1,
+    applicant: {
+      ...pendingApproval.applicant,
+      user_id: `u-${requestType}-${id}`,
+      name: `申请人-${requestType}`,
+    },
+  };
+  if (tab === "processed") {
+    return decidedApproval({ ...identity, status: "grant_applied", status_label: "已生效" });
+  }
+  return { ...pendingApproval, ...identity };
 }

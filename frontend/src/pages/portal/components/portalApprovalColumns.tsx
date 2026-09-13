@@ -16,6 +16,7 @@ import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import { badgeToneForAccessRequestStatus } from "../../../lib/status";
 import type { Translator } from "../../../lib/status";
 
+import { isFullRevokeRequest, requestTypeLabel } from "./portalApprovalFacts";
 import { approvalContentSummary } from "./PortalApprovalDetails";
 import type { ApprovalTab, PortalApprovalRow } from "./portalApprovalTypes";
 
@@ -25,8 +26,9 @@ export const PROCESSED_APPROVALS_MIN_WIDTH = 1500;
 export const PENDING_APPROVALS_MIN_WIDTH = 1400;
 
 /**
- * 排序发生在后端, 每一个数据列都过 `serverSortColumn`:
- * `sorter: true` 只当开关、指示器由查询状态受控。
+ * 排序发生在后端: 白名单内的数据列过 `serverSortColumn`
+ * (`sorter: true` 只当开关、指示器由查询状态受控)。
+ * `request_type` 不在 `PORTAL_APPROVAL_ORDERING` 里, 不挂 sorter。
  */
 export function approvalColumns(
   t: Translator,
@@ -68,6 +70,15 @@ function identityColumns(t: Translator, sort: ServerSortState): ColumnsType<Port
       }),
       sort,
     ),
+    // 后端 PORTAL_APPROVAL_ORDERING 没有 request_type, 表头不可排序。
+    {
+      key: "request_type",
+      title: t("portal.approvals.column.requestType"),
+      width: 90,
+      ellipsis: false,
+      className: "whitespace-nowrap",
+      render: (_value: unknown, approval: PortalApprovalRow) => requestTypeLabel(t, approval.request_type),
+    },
   ];
 }
 
@@ -103,7 +114,12 @@ function requestBodyColumns(
         key: "content",
         title: t("portal.approvals.column.content"),
         ellipsis: false,
-        render: (_value: unknown, approval: PortalApprovalRow) => approvalContentSummary(approval),
+        render: (_value: unknown, approval: PortalApprovalRow) =>
+          isFullRevokeRequest(approval) ? (
+            <span className="text-ink-soft">{t("portal.approvals.fullRevoke")}</span>
+          ) : (
+            approvalContentSummary(approval)
+          ),
       },
       sort,
     ),
