@@ -1,6 +1,7 @@
 /** 本模块定义审批模板与审批实例领域契约。 */
 
-import type { AccountKind } from "./person";
+import type { JsonObject, JsonValue } from "./common";
+import { isAccountKind, type AccountKind } from "./person";
 
 export type ApprovalFormFieldType = "string" | "integer" | "number" | "boolean";
 
@@ -46,7 +47,7 @@ export interface ApprovalInstanceRow {
   originator_name: string;
   /** 发起人部门路径; 未同步或本地账号时缺省/空串。 */
   originator_department?: string;
-  originator_account_kind?: AccountKind;
+  originator_account_kind: AccountKind;
   dingtalk_process_instance_id: string;
   delivery_state: "" | "pending" | "delivered" | "failed" | "skipped" | string;
   delivery_attempts: number;
@@ -54,5 +55,32 @@ export interface ApprovalInstanceRow {
   last_error: string;
   created_at: string;
   completed_at: string | null;
+}
+
+export class ApprovalInstanceContractError extends Error {
+  constructor(field: string) {
+    super(`审批实例契约违约: ${field}`);
+    this.name = "ApprovalInstanceContractError";
+  }
+}
+
+/** 审批实例行: originator_account_kind 必填, 缺失或非法值立即失败。 */
+export function parseApprovalInstanceRow(raw: JsonValue): ApprovalInstanceRow {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ApprovalInstanceContractError("row");
+  }
+  const source = raw as JsonObject;
+  if (!isAccountKind(source.originator_account_kind)) {
+    throw new ApprovalInstanceContractError("originator_account_kind");
+  }
+  const originatorDepartment = source.originator_department;
+  if (originatorDepartment !== undefined && typeof originatorDepartment !== "string") {
+    throw new ApprovalInstanceContractError("originator_department");
+  }
+  return {
+    ...(source as unknown as ApprovalInstanceRow),
+    originator_account_kind: source.originator_account_kind,
+    originator_department: originatorDepartment,
+  };
 }
 

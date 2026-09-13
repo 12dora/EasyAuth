@@ -10,8 +10,8 @@ import {
 import { useToast } from "../../components/ui/Toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
-import type { ListPayload } from "../../lib/api";
-import type { ApprovalInstanceRow } from "../../lib/domain";
+import type { JsonValue, ListPayload } from "../../lib/api";
+import { parseApprovalInstanceRow, type ApprovalInstanceRow } from "../../lib/domain";
 
 export const INSTANCES_QUERY_PREFIX = ["console", "operations", "approval-instances"];
 const DEFAULT_PAGE_SIZE = 20;
@@ -34,7 +34,7 @@ const INSTANCE_ORDERING_FIELDS = {
 } as const;
 
 interface RedeliverPayload {
-  approval_instance: ApprovalInstanceRow;
+  approval_instance: JsonValue;
 }
 
 /** 审批实例列表的过滤、分页与逐行补投。 */
@@ -57,8 +57,13 @@ export function useApprovalInstances() {
 
   const query = useQuery({
     queryKey: [...INSTANCES_QUERY_PREFIX, queryString],
-    queryFn: ({ signal }) =>
-      apiRequest<ListPayload<ApprovalInstanceRow>>(`${LIST_ENDPOINT}?${queryString}`, { signal }),
+    queryFn: async ({ signal }) => {
+      const payload = await apiRequest<ListPayload<JsonValue>>(`${LIST_ENDPOINT}?${queryString}`, { signal });
+      return {
+        ...payload,
+        data: itemsFromPayload<JsonValue>(payload).map(parseApprovalInstanceRow),
+      };
+    },
   });
   const redeliverMutation = useMutation({
     mutationFn: (row: ApprovalInstanceRow) =>
@@ -67,6 +72,7 @@ export function useApprovalInstances() {
         body: {},
       }),
     onSuccess: async (payload) => {
+      const instance = parseApprovalInstanceRow(payload.approval_instance);
       await queryClient.cancelQueries({ queryKey: INSTANCES_QUERY_PREFIX });
       queryClient.setQueriesData<ListPayload<ApprovalInstanceRow>>(
         { queryKey: INSTANCES_QUERY_PREFIX },
@@ -75,7 +81,7 @@ export function useApprovalInstances() {
             ? {
                 ...current,
                 data: current.data.map((row) =>
-                  row.instance_id === payload.approval_instance.instance_id ? payload.approval_instance : row,
+                  row.instance_id === instance.instance_id ? instance : row,
                 ),
               }
             : current,
