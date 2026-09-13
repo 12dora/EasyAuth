@@ -447,6 +447,8 @@ describe("GrantForm", () => {
     const auditOption = await authorizationGroupOption(user, "审计");
     expect(auditOption).toHaveAttribute("aria-selected", "true");
     expect(auditOption).toHaveClass("ant-select-item-option-disabled");
+    await user.hover(within(auditOption).getByText("审计"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("由组织授权下发，请在「组织授权」中调整");
 
     await user.click(await authorizationGroupOption(user, "销售"));
 
@@ -466,6 +468,8 @@ describe("GrantForm", () => {
     const lockedChip = screen.getByRole("checkbox", { name: "选择 crm.customer.read 本人" });
     expect(lockedChip).toBeChecked();
     expect(lockedChip).toBeDisabled();
+    await user.hover(lockedChip.closest("span") as HTMLElement);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("由组织授权下发，请在「组织授权」中调整");
 
     await user.click(screen.getByRole("button", { name: "全选" }));
 
@@ -515,6 +519,11 @@ function GrantFormHarness({
       draft={draft}
       lockedAuthorizationGroupKeys={locked.lockedAuthorizationGroupKeys}
       lockedPermissionKeys={locked.lockedPermissionKeys}
+      lockedHint={
+        locked.lockedAuthorizationGroupKeys?.length || locked.lockedPermissionKeys?.length
+          ? "由组织授权下发，请在「组织授权」中调整"
+          : undefined
+      }
       onDraftChange={(next) => {
         setDraft(next);
         onDraftChange?.(next);

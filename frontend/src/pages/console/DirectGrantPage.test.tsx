@@ -285,7 +285,9 @@ describe("DirectGrantPage", () => {
     const reportChip = screen.getByRole("checkbox", { name: "选择 crm.report.view 全部" });
     expect(reportChip).toBeChecked();
     expect(reportChip).toBeDisabled();
-    expect(reportChip.closest("label")).toHaveAttribute("title", "由组织授权下发");
+    expect(reportChip.closest("label")).not.toHaveAttribute("title");
+    await user.hover(reportChip.closest("span") as HTMLElement);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("由组织授权下发，请在「组织授权」中调整");
     // 期限取本人来源成员关系里最早的到期时间。
     expect(screen.getByLabelText("到期时间")).toHaveValue(
       localDatetimeValue("2030-06-30T15:59:59.123456+00:00"),
@@ -557,7 +559,9 @@ describe("DirectGrantPage", () => {
     expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).not.toBeChecked();
     expect(reportChip).toBeChecked();
     expect(reportChip).toBeDisabled();
-    expect(reportChip.closest("label")).toHaveAttribute("title", "由组织授权下发");
+    expect(reportChip.closest("label")).not.toHaveAttribute("title");
+    await user.hover(reportChip.closest("span") as HTMLElement);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("由组织授权下发，请在「组织授权」中调整");
 
     const auditAfterClear = await authorizationGroupOption(user, "审计");
     expect(auditAfterClear).toHaveAttribute("aria-selected", "true");

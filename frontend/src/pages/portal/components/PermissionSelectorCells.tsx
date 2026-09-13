@@ -1,3 +1,4 @@
+import { Tooltip } from "antd";
 import { ChevronRight } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useRef } from "react";
@@ -77,6 +78,7 @@ export function PermissionGroupScopeCell({
   selectedKeys,
   retainableKeySet,
   lockedKeySet,
+  lockedHint,
   onScopeChange,
   locale,
 }: {
@@ -87,6 +89,7 @@ export function PermissionGroupScopeCell({
   retainableKeySet: Set<string> | null;
   /** 组织授权锁定的权限范围; 空集合表示没有锁定项。 */
   lockedKeySet: Set<string>;
+  lockedHint: string;
   onScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => void;
   locale: Locale;
 }) {
@@ -107,7 +110,7 @@ export function PermissionGroupScopeCell({
             checked={chip.checked}
             mixed={chip.mixed}
             disabled={chip.disabled}
-            title={chip.locked ? t("selector.scope.grantedByOrganization") : undefined}
+            lockedHint={chip.locked ? lockedHint : undefined}
             ariaLabel={t("selector.selectGroupScope", { groupKey: group.key, scopeName: localizedName(locale, scope) })}
             onChange={() => onScopeChange(group, scope.key, chip.shouldSelect)}
           />
@@ -123,6 +126,7 @@ export function PermissionScopeCell({
   coveredKeySet,
   retainableKeySet,
   lockedKeySet,
+  lockedHint,
   onScopeChange,
   locale,
 }: {
@@ -133,6 +137,7 @@ export function PermissionScopeCell({
   retainableKeySet: Set<string> | null;
   /** 组织授权锁定的权限范围; 空集合表示没有锁定项。 */
   lockedKeySet: Set<string>;
+  lockedHint: string;
   onScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
   locale: Locale;
 }) {
@@ -158,13 +163,8 @@ export function PermissionScopeCell({
             checked={chip.checked}
             covered={isCovered && !chip.locked}
             disabled={chip.disabled}
-            title={
-              chip.locked
-                ? t("selector.scope.grantedByOrganization")
-                : isCovered
-                  ? t("selector.scope.coveredByGroup")
-                  : undefined
-            }
+            title={isCovered && !chip.locked ? t("selector.scope.coveredByGroup") : undefined}
+            lockedHint={chip.locked ? lockedHint : undefined}
             ariaLabel={scopeLabel}
             onChange={() => onScopeChange(permission, scope.key)}
           />
@@ -181,6 +181,7 @@ function ScopeChip({
   covered = false,
   disabled = false,
   title,
+  lockedHint,
   ariaLabel,
   onChange,
 }: {
@@ -191,6 +192,8 @@ function ScopeChip({
   covered?: boolean;
   disabled?: boolean;
   title?: string;
+  /** 组织授权锁定: 用 antd Tooltip, 包一层 span 让禁用控件仍能悬停。 */
+  lockedHint?: string;
   ariaLabel: string;
   onChange: () => void;
 }) {
@@ -202,19 +205,18 @@ function ScopeChip({
     }
   }, [mixed]);
 
-  return (
+  const chip = (
     <label
-      title={title}
+      title={lockedHint ? undefined : title}
       className={cn(
         "permission-selector__scope-chip",
         checked && "permission-selector__scope-chip--checked",
         mixed && "permission-selector__scope-chip--mixed",
         covered && "permission-selector__scope-chip--covered",
-        // 与只读行一致的禁用样式(见 PermissionSelectorBody.rowClassName)。
-        // 带 title 的锁定 chip 不能 pointer-events-none: 否则悬停「由组织授权下发」出不来。
         disabled && "opacity-60",
-        disabled && !title && "pointer-events-none",
-        disabled && title && "cursor-not-allowed",
+        disabled && !lockedHint && !title && "pointer-events-none",
+        disabled && !lockedHint && title && "cursor-not-allowed",
+        lockedHint && "pointer-events-none",
       )}
     >
       <input
@@ -228,6 +230,16 @@ function ScopeChip({
       />
       <span>{label}</span>
     </label>
+  );
+
+  if (!lockedHint) {
+    return chip;
+  }
+
+  return (
+    <Tooltip title={lockedHint}>
+      <span className="inline-flex cursor-not-allowed">{chip}</span>
+    </Tooltip>
   );
 }
 

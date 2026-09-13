@@ -1,6 +1,8 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
+
+import { renderWithAntd } from "../../../components/antd/testing";
 
 import { directGrantSelectionKey } from "../hooks/accessRequestSelection";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
@@ -51,7 +53,7 @@ function selectorWithGroups(groups: ScopedPermissionGroupItem[], expandedGroupKe
 
 /** 先渲染折叠态, 再切到展开态: 过渡集合在渲染期同步推进, 这一次渲染里子行就带着进场标记。 */
 function renderExpanded(permissionCount: number) {
-  const view = render(selector(permissionCount, []));
+  const view = renderWithAntd(selector(permissionCount, []));
   view.rerender(selector(permissionCount, ["orders"]));
   return view;
 }
@@ -104,7 +106,7 @@ describe("PermissionSelector 前后两批过渡各自定案", () => {
   test("先后收起两个大组: 第一批放完不会让第二批反悔重播退场动画", () => {
     vi.useFakeTimers();
     const groups = [groupWith(30, "a", 0), groupWith(30, "b", 100)];
-    const { container, rerender } = render(selectorWithGroups(groups, ["a", "b"]));
+    const { container, rerender } = renderWithAntd(selectorWithGroups(groups, ["a", "b"]));
     // 两个组的行都在场: 2 个组行 + 60 条权限。
     expect(container.querySelectorAll("tbody tr")).toHaveLength(62);
 
@@ -148,13 +150,14 @@ describe("PermissionSelector lockedKeys", () => {
     const onClearPermissionKeys = vi.fn();
     const noop = () => undefined;
 
-    render(
+    renderWithAntd(
       <PermissionSelector
         appKey="crm"
         groups={[groupWith(2)]}
         ungroupedPermissions={[]}
         selectedKeys={[]}
         lockedKeys={[lockedKey]}
+        lockedHint="由组织授权下发，请在「组织授权」中调整"
         expandedGroupKeys={["orders"]}
         loading={false}
         errorMessage=""
@@ -171,7 +174,9 @@ describe("PermissionSelector lockedKeys", () => {
     const lockedChip = screen.getByRole("checkbox", { name: "选择 crm.perm.0 本人" });
     expect(lockedChip).toBeChecked();
     expect(lockedChip).toBeDisabled();
-    expect(lockedChip.closest("label")).toHaveAttribute("title", "由组织授权下发");
+    expect(lockedChip.closest("label")).not.toHaveAttribute("title");
+    await user.hover(lockedChip.closest("span") as HTMLElement);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("由组织授权下发，请在「组织授权」中调整");
     expect(screen.getByRole("checkbox", { name: "选择 crm.perm.1 本人" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "选择 crm.perm.1 本人" })).toBeEnabled();
 

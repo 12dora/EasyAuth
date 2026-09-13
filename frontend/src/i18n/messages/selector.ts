@@ -44,6 +44,8 @@ export const zhCN = {
   "selector.scope.all": "全部",
   "selector.scope.coveredByGroup": "已包含在所选权限组",
   "selector.scope.grantedByOrganization": "由组织授权下发",
+  "selector.scope.lockedByOrganizationAdmin": "由组织授权下发，请在「组织授权」中调整",
+  "selector.scope.lockedByOrganizationEmployee": "由组织授权自动获得，无需申请",
 
   "selector.group.collapse": "收起",
   "selector.group.expand": "展开",
@@ -102,6 +104,8 @@ export const en: Record<keyof typeof zhCN, string> = {
   "selector.scope.all": "All",
   "selector.scope.coveredByGroup": "Included in the selected group",
   "selector.scope.grantedByOrganization": "Granted by organization",
+  "selector.scope.lockedByOrganizationAdmin": "Granted by organization policy. Adjust it under Organization grants.",
+  "selector.scope.lockedByOrganizationEmployee": "Granted automatically by organization policy. No request needed.",
 
   "selector.group.collapse": "Collapse",
   "selector.group.expand": "Expand",

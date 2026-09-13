@@ -1,6 +1,6 @@
-import { Select } from "antd";
+import { Select, Tooltip } from "antd";
 import { useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 import { Field, SelectInput, TextArea, TextInput } from "../../components/Field";
 import { localizedField, useI18n } from "../../i18n/I18nProvider";
@@ -51,6 +51,10 @@ export interface GrantFormProps {
    * 组织授权下发的直接权限选择键; 与锁定组覆盖的范围一并交给 PermissionSelector.lockedKeys。
    */
   lockedPermissionKeys?: string[];
+  /**
+   * 锁定项的悬停说明。有锁定组或锁定权限时必填。
+   */
+  lockedHint?: string;
   /** 渲染在目标选择器上方的插槽(直接授权页放"被授权人")。 */
   header?: ReactNode;
 }
@@ -71,6 +75,7 @@ export function GrantForm({
   lockedAppKey,
   lockedAuthorizationGroupKeys = EMPTY_KEYS,
   lockedPermissionKeys = EMPTY_KEYS,
+  lockedHint,
   header,
 }: GrantFormProps) {
   const { t, locale } = useI18n();
@@ -88,6 +93,11 @@ export function GrantForm({
     [catalogView, lockedAuthorizationGroupKeys, lockedPermissionKeys],
   );
   const lockedSelectionKeySet = useMemo(() => new Set(lockedSelectionKeys), [lockedSelectionKeys]);
+  const resolvedLockedHint = requireGrantLockedHint(
+    lockedAuthorizationGroupKeys,
+    lockedSelectionKeys,
+    lockedHint,
+  );
   const coveredSelectionKeys = useMemo(
     () => groupCoveredSelectionKeys(draft.authorizationGroupKeys, catalogView),
     [draft.authorizationGroupKeys, catalogView],
@@ -160,6 +170,19 @@ export function GrantForm({
             // 用户看不到 key 就无从下手。
             optionFilterProp="label"
             disabled={disabled || !appKey}
+            optionRender={(option) =>
+              wrapLockedSelectContent(String(option.value), option.label, lockedGroupKeySet, resolvedLockedHint)
+            }
+            tagRender={(props) => (
+              <LockedSelectTag
+                label={props.label}
+                value={String(props.value)}
+                closable={props.closable}
+                onClose={props.onClose}
+                lockedGroupKeySet={lockedGroupKeySet}
+                lockedHint={resolvedLockedHint}
+              />
+            )}
             onChange={(groupKeys: string[]) =>
               onDraftChange(
                 grantDraftWithAuthorizationGroupKeys(
@@ -181,6 +204,7 @@ export function GrantForm({
           selectedKeys={draft.selectedPermissionKeys}
           coveredKeys={coveredSelectionKeys}
           lockedKeys={lockedSelectionKeys}
+          lockedHint={resolvedLockedHint || undefined}
           revokeBaseGrant={null}
           expandedGroupKeys={expandedGroupKeys}
           loading={catalogIsLoading}
@@ -282,4 +306,84 @@ export function GrantForm({
 /** 收起一个权限分组时, 它的所有后代分组一起收起, 否则再展开会露出上次的深层展开态。 */
 function collapseKeySet(keys: string[], permissionGroups: ScopedPermissionGroupItem[]): Set<string> {
   return new Set(keys.flatMap((key) => [key, ...descendantGroupKeys(permissionGroups, key)]));
+}
+
+function requireGrantLockedHint(
+  lockedGroupKeys: string[],
+  lockedSelectionKeys: string[],
+  lockedHint: string | undefined,
+): string {
+  if (lockedGroupKeys.length === 0 && lockedSelectionKeys.length === 0) {
+    return "";
+  }
+  if (!lockedHint) {
+    throw new Error("GrantForm: 有组织授权锁定项时必须提供 lockedHint");
+  }
+  return lockedHint;
+}
+
+function wrapLockedSelectContent(
+  value: string,
+  label: ReactNode,
+  lockedGroupKeySet: Set<string>,
+  lockedHint: string,
+): ReactNode {
+  if (!lockedGroupKeySet.has(value) || !lockedHint) {
+    return label;
+  }
+  return (
+    <Tooltip title={lockedHint}>
+      <span className="inline-flex w-full cursor-not-allowed pointer-events-auto">
+        {label}
+      </span>
+    </Tooltip>
+  );
+}
+
+function LockedSelectTag({
+  label,
+  value,
+  closable,
+  onClose,
+  lockedGroupKeySet,
+  lockedHint,
+}: {
+  label: ReactNode;
+  value: string;
+  closable: boolean;
+  onClose: (event: MouseEvent<HTMLElement>) => void;
+  lockedGroupKeySet: Set<string>;
+  lockedHint: string;
+}) {
+  const locked = lockedGroupKeySet.has(value);
+  const onPreventMouseDown = (event: MouseEvent<HTMLSpanElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const tag = (
+    <span
+      className="ant-select-selection-item"
+      onMouseDown={onPreventMouseDown}
+    >
+      <span className="ant-select-selection-item-content">{label}</span>
+      {closable ? (
+        <span
+          className="ant-select-selection-item-remove"
+          onClick={onClose}
+          role="img"
+          aria-label="close"
+        >
+          ×
+        </span>
+      ) : null}
+    </span>
+  );
+  if (!locked || !lockedHint) {
+    return tag;
+  }
+  return (
+    <Tooltip title={lockedHint}>
+      <span className="inline-flex cursor-not-allowed">{tag}</span>
+    </Tooltip>
+  );
 }

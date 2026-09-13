@@ -35,6 +35,8 @@ declare module "@tanstack/react-table" {
      * 空集合表示没有锁定项(门户申请不传 lockedKeys)。
      */
     lockedKeySet: Set<string>;
+    /** 锁定 chip 的悬停说明; 没有锁定项时为空串。 */
+    lockedHint: string;
     /** 仅看已选: 空态文案要跟着换。 */
     showSelectedOnly: boolean;
     disabled: boolean;

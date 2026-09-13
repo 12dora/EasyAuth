@@ -185,6 +185,7 @@ export function DirectGrantPage() {
           disabled={grantMutation.isPending}
           lockedAuthorizationGroupKeys={lockedAuthorizationGroupKeys}
           lockedPermissionKeys={lockedPermissionKeys}
+          lockedHint={t("selector.scope.lockedByOrganizationAdmin")}
           header={
             <div>
               <Field

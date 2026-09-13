@@ -41,8 +41,11 @@ interface PermissionSelectorProps {
   /**
    * 组织授权下发的权限范围: 勾选且禁用, 不进直接权限草稿。
    * 缺省空数组, 门户申请不传时行为与原来完全一致。
+   * 传入非空 lockedKeys 时必须同时给 lockedHint。
    */
   lockedKeys?: string[];
+  /** 锁定 chip 的悬停说明; 有锁定项时必填。 */
+  lockedHint?: string;
   expandedGroupKeys: string[];
   loading: boolean;
   errorMessage: string;
@@ -64,6 +67,7 @@ export function PermissionSelector({
   coveredKeys = [],
   revokeBaseGrant = null,
   lockedKeys = [],
+  lockedHint,
   expandedGroupKeys,
   loading,
   errorMessage,
@@ -85,6 +89,7 @@ export function PermissionSelector({
   const stableLockedKeys = useStableStringList(lockedKeys);
   const coveredKeySet = useMemo(() => new Set(stableCoveredKeys), [stableCoveredKeys]);
   const lockedKeySet = useMemo(() => new Set(stableLockedKeys), [stableLockedKeys]);
+  const resolvedLockedHint = requireLockedHint(stableLockedKeys, lockedHint);
   // 展示态 = 直接勾选 ∪ 权限组覆盖 ∪ 组织授权锁定; 提交载荷仍只用直接勾选(selectedKeys)。
   const displaySelectedKeys = useMemo(
     () => Array.from(new Set([...stableSelectedKeys, ...stableCoveredKeys, ...stableLockedKeys])),
@@ -124,6 +129,7 @@ export function PermissionSelector({
       coveredKeySet,
       retainableKeySet,
       lockedKeySet,
+      lockedHint: resolvedLockedHint,
       showSelectedOnly,
       disabled,
       onPermissionScopeChange,
@@ -195,6 +201,17 @@ function useStableStringList(list: string[]): string[] {
 
 function stringListsAreEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+/** 有锁定项就必须有悬停说明: 禁用 chip 没有原生 title, 不传 hint 等于没解释。 */
+function requireLockedHint(lockedKeys: string[], lockedHint: string | undefined): string {
+  if (lockedKeys.length === 0) {
+    return "";
+  }
+  if (!lockedHint) {
+    throw new Error("PermissionSelector: lockedKeys 非空时必须提供 lockedHint");
+  }
+  return lockedHint;
 }
 
 /** 无应用/加载中/加载失败/无数据四种占位态: 命中任一即整表让位给占位文案。 */
