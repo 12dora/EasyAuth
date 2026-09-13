@@ -10,9 +10,14 @@
 - `main`：只承载 React 挂载、鉴权 shell、路由表、加载态和错误边界。
 - `vendor`：第三方 React、Router、Query、Table 与图标依赖。
 - `antd`：Ant Design 及其运行时（`antd`、`@ant-design/*`、`rc-*`、`@rc-component/*`，
-  以及只被 antd 使用的传递依赖 `@babel/runtime`、`classnames`、`dayjs`、`throttle-debounce`、
+  以及只被 antd 使用的传递依赖 `@babel/runtime`、`classnames`、`throttle-debounce`、
   `scroll-into-view-if-needed` 等）。判定逻辑在 `vite.config.ts` 的 `isAntdModule()`：
   只看路径里最后一个 `node_modules/` 之后的包名，避免 pnpm 的 `.pnpm/<pkg>@<ver>/` 目录误判。
+- `antd-picker`：DatePicker / Calendar / TimePicker、`rc-picker` 实现与 `dayjs`
+  （含 dayjs locale）。由 `DateRangeControl` 的 `React.lazy` 异步拉取，只在运营授权明细
+  工具栏和表头日期筛选打开时下载。`ConfigProvider` 同步引入的 antd locale 会再引用
+  date-picker / rc-picker 的文案文件，那些文案留在同步 `antd` chunk，否则整个
+  `antd-picker` 会被一并同步拉进来。
 - `i18n`：中英文消息目录。
 - 门户路由：`PortalPage`、`PortalHandoverList`、`PortalHandoverDetail` 独立异步 chunk。
 - 控制台路由：`ConsoleAppList`、`ConsoleAppWorkspace`、`ConsoleSettingsPage`、`ConsoleTeamList`、

@@ -200,13 +200,14 @@ enumFilter<T>(columnKey: string, options: { label: ReactNode; value: string }[],
 
 ```ts
 dateRangeFilter<T>(paramKey? = "created", options?: {
-  inputType?: "datetime-local" | "date";      // 默认 datetime-local
-  fromLabel?: string; toLabel?: string;       // 默认 `<paramKey>_from` / `<paramKey>_to`
+  fromLabel?: string; toLabel?: string;       // 默认 i18n table.dateRange.from / to
 }): { filterDropdown; decode; encode; toParams }
 // antd 只内建「文本 / 枚举」两种筛选, 时间范围要自定义下拉:
-// 两个时间输入 + 确定/重置, 起止编码进同一个筛选值("<from>~<to>"), 一列只占一个筛选槽。
+// 输入区走全站共用的 DateRangeControl(RangePicker + 近7天/近30天/本月),
+// 起止编码进同一个筛选值("<from>~<to>"), 一列只占一个筛选槽。
 // toParams(from, to) -> { <paramKey>_from, <paramKey>_to }, 空的一端不进参数;
 // encode({from,to}) / decode(values) 用来在 URL <-> 受控 filteredValue 之间来回。
+// DateRangeControl 与下拉由 React.lazy 加载, 不把 DatePicker 打进同步 antd chunk。
 ```
 
 三者都直接展开到列定义上，列必须有 `key`（或 `dataIndex`），否则 antd 无法回传筛选状态：

@@ -14,9 +14,7 @@ import {
   AppTable,
   DateRangeControl,
   dateRangeFilter,
-  formatDateRangeBound,
   orderingSerializer,
-  parseDateRangeBound,
   parseOrderingParam,
   searchParamsWithOrdering,
   sortStateFromOrdering,
@@ -35,6 +33,7 @@ import {
   type SorterResult,
   type TableCurrentDataSource,
 } from "./AppTable";
+import { formatDateRangeBound, parseDateRangeBound } from "./DateRangeControl";
 import {
   actionsColumn,
   dateTimeColumn,
@@ -234,7 +233,7 @@ describe("AppTable 客户端模式", () => {
     await user.click(document.querySelectorAll(".ant-table-filter-trigger")[1] as HTMLElement);
     const dropdown = (await screen.findByText("Active")).closest(".ant-table-filter-dropdown") as HTMLElement;
     await user.click(within(dropdown).getByText("Active"));
-    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+    await user.click(await within(dropdown).findByRole("button", { name: "确定" }));
 
     await waitFor(() => expect(bodyRowNames()).toHaveLength(4));
   });
@@ -365,7 +364,7 @@ describe("列预设", () => {
       return node as HTMLElement;
     });
     await user.click(within(dropdown).getByText("Blocked"));
-    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+    await user.click(await within(dropdown).findByRole("button", { name: "确定" }));
 
     await waitFor(() => expect(bodyRowNames()).toHaveLength(8));
   });
@@ -737,7 +736,7 @@ describe("dateRangeFilter", () => {
       />,
     );
 
-    const group = screen.getByRole("group", { name: "创建时间" });
+    const group = await screen.findByRole("group", { name: "创建时间" });
     const inputs = within(group).getAllByRole("textbox");
     expect(inputs[0]).toHaveValue("2026-07-01");
     expect(inputs[1]).toHaveValue("2026-07-10");
@@ -769,7 +768,7 @@ describe("dateRangeFilter", () => {
     expect(formatDateRangeBound(zTo!, "to")).toBe(`2026-09-13T23:59:59${offset}`);
   });
 
-  test("DateRangeControl 回读 +08:00 与 Z 都显示字符串中的日历日", () => {
+  test("DateRangeControl 回读 +08:00 与 Z 都显示字符串中的日历日", async () => {
     const { unmount } = renderWithAntd(
       <DateRangeControl
         ariaLabel="创建时间"
@@ -777,7 +776,7 @@ describe("dateRangeFilter", () => {
         value={{ from: "2026-09-13T00:00:00+08:00", to: "2026-09-13T23:59:59+08:00" }}
       />,
     );
-    const plusEight = screen.getByRole("group", { name: "创建时间" });
+    const plusEight = await screen.findByRole("group", { name: "创建时间" });
     expect(within(plusEight).getAllByRole("textbox")[0]).toHaveValue("2026-09-13");
     expect(within(plusEight).getAllByRole("textbox")[1]).toHaveValue("2026-09-13");
     unmount();
@@ -789,7 +788,7 @@ describe("dateRangeFilter", () => {
         value={{ from: "2026-09-13T00:00:00Z", to: "2026-09-13T23:59:59Z" }}
       />,
     );
-    const utc = screen.getByRole("group", { name: "创建时间" });
+    const utc = await screen.findByRole("group", { name: "创建时间" });
     expect(within(utc).getAllByRole("textbox")[0]).toHaveValue("2026-09-13");
     expect(within(utc).getAllByRole("textbox")[1]).toHaveValue("2026-09-13");
   });
@@ -814,9 +813,9 @@ describe("dateRangeFilter", () => {
     );
 
     const dropdown = await openHeaderFilter(user, "时间");
-    await user.click(within(dropdown).getByPlaceholderText("开始日期"));
+    await user.click(await within(dropdown).findByPlaceholderText("开始日期"));
     await user.click(await screen.findByText("近7天"));
-    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+    await user.click(await within(dropdown).findByRole("button", { name: "确定" }));
 
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const filters = onChange.mock.calls.at(-1)?.[1] as Record<string, FilterValue | null>;
@@ -847,19 +846,28 @@ describe("dateRangeFilter", () => {
     );
 
     const dropdown = await openHeaderFilter(user, "时间");
-    await user.click(within(dropdown).getByPlaceholderText("开始日期"));
+    await user.click(await within(dropdown).findByPlaceholderText("开始日期"));
     await user.click(await screen.findByText("近7天"));
-    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+    await user.click(await within(dropdown).findByRole("button", { name: "确定" }));
     await waitFor(() => expect(onChange).toHaveBeenCalled());
 
     const reopened = await openHeaderFilter(user, "时间");
-    await user.click(within(reopened).getByRole("button", { name: "重置" }));
+    await user.click(await within(reopened).findByRole("button", { name: "重置" }));
 
     await waitFor(() => {
       const filters = onChange.mock.calls.at(-1)?.[1] as Record<string, FilterValue | null>;
       expect(filters.updated_at ?? null).toBeNull();
     });
     vi.useRealTimers();
+  });
+});
+
+describe("日期范围控件分包", () => {
+  test("AppTable 不静态引入 DatePicker / dayjs, 选择器走 React.lazy", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/components/antd/AppTable.tsx"), "utf8");
+    expect(source).not.toMatch(/DatePicker/);
+    expect(source).not.toMatch(/from ["']dayjs["']/);
+    expect(source).toMatch(/lazy\(\(\) =>\s*import\(["']\.\/DateRangeControl["']\)/);
   });
 });
 

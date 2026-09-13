@@ -5,7 +5,7 @@ import dayjs from "dayjs";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { formatDateRangeBound } from "../../components/antd/AppTable";
+import { formatDateRangeBound } from "../../components/antd/DateRangeControl";
 import { OperationsPage } from "./OperationsPage";
 import { ToastProvider } from "../../components/ui/Toast";
 import {
@@ -344,9 +344,9 @@ describe("OperationsPage", () => {
     await screen.findByText("grant.approved");
 
     const timeFilter = await openHeaderFilter(user, "时间");
-    await user.click(within(timeFilter).getByPlaceholderText("开始日期"));
+    await user.click(await within(timeFilter).findByPlaceholderText("开始日期"));
     await user.click(await screen.findByText("近7天"));
-    await user.click(within(timeFilter).getByRole("button", { name: "确定" }));
+    await user.click(await within(timeFilter).findByRole("button", { name: "确定" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(
@@ -689,7 +689,7 @@ describe("OperationsPage", () => {
         expect.objectContaining({ credentials: "include" }),
       );
     });
-    const range = screen.getByRole("group", { name: "创建时间" });
+    const range = await screen.findByRole("group", { name: "创建时间" });
     const inputs = within(range).getAllByRole("textbox");
     expect(inputs[0]).toHaveValue("2026-07-01");
     expect(inputs[1]).toHaveValue("2026-07-10");
