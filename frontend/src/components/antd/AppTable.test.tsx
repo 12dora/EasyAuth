@@ -864,10 +864,13 @@ describe("dateRangeFilter", () => {
 
 describe("日期范围控件分包", () => {
   test("AppTable 不静态引入 DatePicker / dayjs, 选择器走 React.lazy", () => {
-    const source = readFileSync(resolve(process.cwd(), "src/components/antd/AppTable.tsx"), "utf8");
-    expect(source).not.toMatch(/DatePicker/);
-    expect(source).not.toMatch(/from ["']dayjs["']/);
-    expect(source).toMatch(/lazy\(\(\) =>\s*import\(["']\.\/DateRangeControl["']\)/);
+    const tableSource = readFileSync(resolve(process.cwd(), "src/components/antd/AppTable.tsx"), "utf8");
+    const filterSource = readFileSync(resolve(process.cwd(), "src/components/antd/tableFilters.tsx"), "utf8");
+    expect(tableSource).not.toMatch(/DatePicker/);
+    expect(tableSource).not.toMatch(/from ["']dayjs["']/);
+    expect(filterSource).not.toMatch(/DatePicker/);
+    expect(filterSource).not.toMatch(/from ["']dayjs["']/);
+    expect(filterSource).toMatch(/lazy\(\(\) =>\s*import\(["']\.\/DateRangeControl["']\)/);
   });
 });
 
