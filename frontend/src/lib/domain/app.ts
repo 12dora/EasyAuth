@@ -1,6 +1,7 @@
 /** 本模块定义应用工作区与权限目录领域契约。 */
 
 import type { JsonObject, Pagination } from "./common";
+import type { AccountKind, PersonRef } from "./person";
 
 export interface AppSummary {
   id: number;
@@ -10,7 +11,8 @@ export interface AppSummary {
   alias: string;
   description?: string;
   is_active?: boolean;
-  owners?: string[];
+  /** 负责人; 后端 `_app_item.owners` 为 PersonRef[], 按姓名再 user_id 排序。 */
+  owners?: PersonRef[];
   developers?: string[];
   configuration_status?: string;
   updated_at?: string;
@@ -154,6 +156,7 @@ export interface TeamMemberItem {
   name?: string;
   email?: string;
   department?: string;
+  account_kind?: AccountKind;
   status?: string;
   role: "leader" | "member" | string;
   added_at?: string;

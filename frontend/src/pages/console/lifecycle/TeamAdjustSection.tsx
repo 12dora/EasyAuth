@@ -161,7 +161,12 @@ function toUserOption(user: HandoverUserRef | null | undefined, expectedUserId: 
   if (!user || user.user_id !== expectedUserId) {
     return null;
   }
-  return { user_id: user.user_id, name: user.name, department: user.department ?? "" };
+  return {
+    user_id: user.user_id,
+    name: user.name,
+    department: user.department ?? "",
+    account_kind: user.account_kind,
+  };
 }
 
 function personNameWithDepartment(user: HandoverUserRef | null | undefined, t: Translator): string {

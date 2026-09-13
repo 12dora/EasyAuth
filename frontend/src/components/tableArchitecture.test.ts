@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
@@ -72,7 +72,118 @@ describe("表格架构", () => {
     expect(content).toMatch(/if \(!stringListsAreEqual\(previousExpandedGroupKeys, expandedGroupKeys\)\)/);
     expect(content).toMatch(/stringListsAreEqual\(current, next\) \? current : next/);
   });
+
+  test("人员标识不得用 textColumn / safeJoin / .join 展示, 应使用 personColumn / peopleColumn", () => {
+    const files = sourceFiles(sourceRoot).filter(
+      (file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file) && !file.endsWith("tableArchitecture.test.ts"),
+    );
+    const violations = files.flatMap((file) => {
+      const relativePath = relative(sourceRoot, file).split(sep).join("/");
+      if (ALLOWED_PERSON_ID_DISPLAY[relativePath]) {
+        return [];
+      }
+      return personIdDisplayViolations(file).map(
+        (reason) => `${relativePath}: ${reason} —— 改用 personColumn / peopleColumn`,
+      );
+    });
+
+    expect(violations).toEqual([]);
+
+    const ownersPanel = readFileSync(join(sourceRoot, "pages/console/workspace/overview/AppBasicInfoPanel.tsx"), "utf8");
+    expect(ownersPanel).not.toMatch(/safeJoin\(\s*app\?\.owners/);
+    expect(ownersPanel).toMatch(/formatOwnerList\(app\?\.owners/);
+  });
 });
+
+/**
+ * 本批次仍把人员 ID 当字符串拼接的页面。台账只能变短, 不得新增;
+ * 对应接口改为 PersonRef[] 后必须删掉对应条目。
+ */
+const ALLOWED_PERSON_ID_DISPLAY: Record<string, string> = {
+  "pages/console/workspace/tabs/RulesTab.tsx": "审批规则 approver_userids 本批次仍为 string[]",
+  "pages/console/onboarding/BasicsStep.tsx": "接入向导 AppSummaryLike.owners 仍为 string[]",
+  "pages/console/workspace/overview/AppBasicInfoPanel.tsx": "developers 本批次仍为 string[]",
+};
+
+/** 人员 ID 数组字段: 把它们 join 成单元格就是 UUID 回归。单数 user_id 常作姓名回退, 不在此列。 */
+const PERSON_ARRAY_FIELD = /^(?:owners|developers|[A-Za-z0-9_]*user_ids|[A-Za-z0-9_]*userids)$/;
+/** textColumn 的 key 若是人员标识(含单数 user_id), 同样禁止。 */
+const PERSON_COLUMN_KEY = /^(?:owners|developers|[A-Za-z0-9_]*user_ids?|[A-Za-z0-9_]*userids)$/;
+
+function personIdDisplayViolations(file: string): string[] {
+  const content = stripComments(readFileSync(file, "utf8"));
+  const hits: string[] = [];
+
+  for (const match of content.matchAll(/\bsafeJoin\s*\(([^)]*)\)/g)) {
+    if (personArrayFieldInExpression(match[1] ?? "")) {
+      hits.push(`safeJoin(${(match[1] ?? "").trim()})`);
+    }
+  }
+
+  for (const match of content.matchAll(
+    /\.((?:owners|developers|[A-Za-z0-9_]*user_ids|[A-Za-z0-9_]*userids))\b(?:\s*\?\?[\s\S]{0,40})?\)?\s*\.join\s*\(/g,
+  )) {
+    hits.push(`.${match[1]}.join(`);
+  }
+
+  for (const block of extractNamedCalls(content, "textColumn")) {
+    if (textColumnReadsPersonField(block)) {
+      hits.push("textColumn 读取人员标识字段");
+    }
+  }
+
+  return hits;
+}
+
+function personArrayFieldInExpression(expression: string): boolean {
+  return [...expression.matchAll(/\.([A-Za-z0-9_]+)\b/g)].some((match) => PERSON_ARRAY_FIELD.test(match[1] ?? ""));
+}
+
+function textColumnReadsPersonField(block: string): boolean {
+  const key = block.match(/\bkey\s*:\s*["']([^"']+)["']/);
+  if (key && PERSON_COLUMN_KEY.test(key[1] ?? "")) {
+    return true;
+  }
+  if (!personArrayFieldInExpression(block)) {
+    return false;
+  }
+  // 联调结果「解析到 N 人」读的是 user_ids.length, 不是把 ID 列表渲染进单元格。
+  return !/\.user_ids\s*\.\s*length\b/.test(block);
+}
+
+function extractNamedCalls(source: string, name: string): string[] {
+  const calls: string[] = [];
+  const pattern = new RegExp(`\\b${name}\\s*(?:<[^>]*>)?\\s*\\(`, "g");
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source))) {
+    const start = match.index + match[0].length - 1;
+    const end = matchingParen(source, start);
+    if (end !== -1) {
+      calls.push(source.slice(start, end + 1));
+    }
+  }
+  return calls;
+}
+
+function matchingParen(source: string, openIndex: number): number {
+  let depth = 0;
+  for (let index = openIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
 
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory).flatMap((entry) => {

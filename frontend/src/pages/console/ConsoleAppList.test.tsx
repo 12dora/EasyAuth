@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import type { PersonRef } from "../../lib/domain";
 import { ConsoleAppList } from "./ConsoleAppList";
 import {
   ANTD_TEST_TIMEOUT_MS,
@@ -44,7 +45,7 @@ describe("ConsoleAppList", () => {
               app_key: "crm",
               name: "CRM",
               alias: "客户管理",
-              owners: ["owner-a"],
+              owners: [ownerRef("owner-a")],
               is_active: true,
               updated_at: "2026-07-01T09:00:00Z",
               capabilities: { can_delete: true, can_toggle_active: true },
@@ -54,7 +55,7 @@ describe("ConsoleAppList", () => {
               app_key: "billing",
               name: "Billing",
               alias: "",
-              owners: ["owner-b"],
+              owners: [ownerRef("owner-b")],
               is_active: false,
               updated_at: "2026-07-01T09:00:00Z",
               capabilities: { can_delete: true, can_toggle_active: true },
@@ -178,7 +179,7 @@ describe("ConsoleAppList", () => {
             app_key: "crm",
             name: "CRM",
             alias: "",
-            owners: ["owner-a"],
+            owners: [ownerRef("owner-a")],
             is_active: true,
             updated_at: "2026-07-01T09:00:00Z",
             capabilities: {},
@@ -188,7 +189,7 @@ describe("ConsoleAppList", () => {
             app_key: "billing",
             name: "Billing",
             alias: "",
-            owners: ["owner-b"],
+            owners: [ownerRef("owner-b")],
             is_active: false,
             updated_at: "2026-07-01T09:00:00Z",
             capabilities: {},
@@ -310,6 +311,10 @@ function findFetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, url: s
 
 function parseJsonBody(init: RequestInit | undefined) {
   return JSON.parse(String(init?.body));
+}
+
+function ownerRef(userId: string): PersonRef {
+  return { user_id: userId, name: userId, department: "", account_kind: "directory" };
 }
 
 function jsonResponse(payload: unknown, status = 200) {

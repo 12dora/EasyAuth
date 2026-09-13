@@ -55,6 +55,7 @@ function teamMemberTableColumns(t: Translator, actions: TeamMemberTableActions):
       getName: (member) => member.name,
       getUserId: (member) => member.user_id,
       getDepartment: (member) => member.department,
+      getAccountKind: (member) => member.account_kind,
       filter: true,
     }),
     textColumn<TeamMemberItem>({

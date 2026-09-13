@@ -1,5 +1,7 @@
 /** 本模块定义审批模板与审批实例领域契约。 */
 
+import type { AccountKind } from "./person";
+
 export type ApprovalFormFieldType = "string" | "integer" | "number" | "boolean";
 
 export interface ApprovalFormFieldDefinition {
@@ -44,6 +46,7 @@ export interface ApprovalInstanceRow {
   originator_name: string;
   /** 发起人部门路径; 未同步或本地账号时缺省/空串。 */
   originator_department?: string;
+  originator_account_kind?: AccountKind;
   dingtalk_process_instance_id: string;
   delivery_state: "" | "pending" | "delivered" | "failed" | "skipped" | string;
   delivery_attempts: number;

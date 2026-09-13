@@ -4,6 +4,7 @@
  */
 
 import type { JsonObject, JsonValue } from "../api";
+import type { AccountKind } from "./person";
 
 export type GrantMembershipSource = "user" | "department";
 export type GrantLifecycleType = "permanent" | "timed" | "mixed";
@@ -51,6 +52,7 @@ export interface AccessGrantRow {
   user_name: string;
   /** 用户部门路径; 后端未下发或为空时按空串展示。 */
   user_department?: string;
+  user_account_kind: AccountKind;
   app_key: string;
   app_name: string;
   app_alias: string;
@@ -137,6 +139,14 @@ function requireGrantType(source: JsonObject, field: string): GrantLifecycleType
   return value;
 }
 
+function requireAccountKind(source: JsonObject, field: string): AccountKind {
+  const value = source[field];
+  if (value !== "directory" && value !== "local") {
+    throw new AccessGrantRowContractError(field);
+  }
+  return value;
+}
+
 export function parseAccessGrantRow(raw: JsonValue): AccessGrantRow {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new AccessGrantRowContractError("row");
@@ -156,6 +166,7 @@ export function parseAccessGrantRow(raw: JsonValue): AccessGrantRow {
     user_id: requireString(source, "user_id"),
     user_name: requireString(source, "user_name"),
     user_department: optionalString(source, "user_department"),
+    user_account_kind: requireAccountKind(source, "user_account_kind"),
     app_key: requireString(source, "app_key"),
     app_name: requireString(source, "app_name"),
     app_alias: requireString(source, "app_alias"),

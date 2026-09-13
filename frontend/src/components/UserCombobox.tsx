@@ -9,6 +9,7 @@ import { useI18n } from "../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../lib/api";
 import type { ListPayload } from "../lib/api";
 import { cn } from "../lib/cn";
+import type { AccountKind } from "../lib/domain/person";
 import type { Translator } from "../lib/status";
 import { TruncatedText } from "./TruncatedText";
 
@@ -17,6 +18,7 @@ export interface UserOption {
   name: string;
   /** 部门名; 后端目录未同步到部门时为空串。 */
   department?: string;
+  account_kind?: AccountKind;
   /** 头像地址; 为空表示没有头像, 此时不渲染任何占位图形。 */
   avatar_url?: string;
 }
@@ -293,10 +295,10 @@ export const LOCAL_ADMIN_USER_ID_PREFIX = "local-admin:";
  * 本地账号没有部门, 用「本地用户」与目录人员区分; 既不是本地账号又没有部门时返回空串, 调用方不要渲染次行。
  */
 export function userSecondaryLabel(
-  option: Pick<UserOption, "user_id"> & { department?: string | null },
+  option: Pick<UserOption, "user_id"> & { department?: string | null; account_kind?: AccountKind | null },
   t: Translator,
 ): string {
-  if (option.user_id.startsWith(LOCAL_ADMIN_USER_ID_PREFIX)) {
+  if (option.account_kind === "local" || option.user_id.startsWith(LOCAL_ADMIN_USER_ID_PREFIX)) {
     return t("user.localAccount");
   }
   return option.department?.trim() ?? "";

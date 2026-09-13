@@ -1,11 +1,14 @@
 /** 本模块定义 Lifecycle、Handover 与 Onboarding 领域契约。 */
 
+import type { AccountKind } from "./person";
+
 /** M4 生命周期: 人员列表行, 对齐后端 users_api._person_item 序列化字段。 */
 export interface PersonRow {
   user_id: string;
   name: string;
   email: string;
   department: string;
+  account_kind?: AccountKind;
   status: "active" | "disabled" | "departed" | string;
   open_handover_task_id: number | null;
   open_handover_kind: "offboard" | "transfer" | "";
@@ -32,6 +35,7 @@ export interface HandoverUserRef {
   user_id: string;
   name: string;
   department?: string;
+  account_kind?: AccountKind;
   status?: "active" | "disabled" | "departed";
 }
 

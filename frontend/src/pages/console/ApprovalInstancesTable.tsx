@@ -112,6 +112,7 @@ function instanceColumns(
       getName: (row) => row.originator_name,
       getUserId: (row) => row.originator_user_id,
       getDepartment: (row) => row.originator_department,
+      getAccountKind: (row) => row.originator_account_kind,
       width: 190,
     }),
     // 失败原因没有独立的列, 沿用旧表格挂在状态徽章上的 title 提示。

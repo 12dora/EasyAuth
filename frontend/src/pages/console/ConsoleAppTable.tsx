@@ -15,7 +15,7 @@ import {
   serverColumn,
   serverSortColumn,
   statusColumn,
-  textColumn,
+  peopleColumn,
   userColumn,
 } from "../../components/antd/columns";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -23,7 +23,6 @@ import { formatAppDisplayName } from "../../lib/appDisplayName";
 import type { AppSummary } from "../../lib/domain";
 import { readinessLabel, readinessTone } from "../../lib/status";
 import type { Translator } from "../../lib/status";
-import { safeJoin } from "./workspace/utils";
 
 export interface AppRowActions {
   togglePending: boolean;
@@ -76,6 +75,7 @@ export function ConsoleAppTable({
  * 排序在后端做(`ordering=app_key|status|updated_at`), 因此三列一律过 `serverSortColumn`:
  * `sorter: true` 只当开关、不带比较函数, 指示器由 useServerTable 的查询状态受控。
  * owners / configuration_status 后端排不了, 不给 sorter。
+ * owners 是 PersonRef[], 单元格走 peopleColumn, 筛选仍按后端 owner_user_id。
  */
 function appColumns(
   t: Translator,
@@ -94,13 +94,14 @@ function appColumns(
       }),
       sort,
     ),
-    // owners 存的是用户 ID, 后端按 owner_user_id 精确过滤; 单元格里显示的是拼接后的
-    // 名字串, 客户端再按它筛一遍会把后端筛出来的行筛掉, 因此必须过 serverColumn。
+    // 后端按 owner_user_id 精确过滤; 单元格展示姓名/部门, 客户端再按展示文案筛一遍
+    // 会把后端筛出来的行筛掉, 因此必须过 serverColumn。
     serverColumn(
-      textColumn<AppSummary>({
+      peopleColumn<AppSummary>({
         key: "owners",
         title: t("appList.column.owners"),
-        getValue: (app) => safeJoin(app.owners),
+        t,
+        getPeople: (app) => app.owners,
         filter: true,
         width: 200,
       }),

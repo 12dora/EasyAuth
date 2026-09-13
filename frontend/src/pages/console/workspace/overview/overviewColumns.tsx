@@ -22,6 +22,7 @@ export function membershipTableColumns({
       getName: (membership) => membership.user_name,
       getUserId: (membership) => membership.user_id,
       getDepartment: (membership) => membership.user_department,
+      getAccountKind: (membership) => membership.user_account_kind,
       filter: true,
     }),
     {

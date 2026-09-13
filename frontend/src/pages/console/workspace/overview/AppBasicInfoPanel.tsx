@@ -2,10 +2,11 @@ import type { ReactNode } from "react";
 
 import { Badge } from "../../../../components/Badge";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
+import { userSecondaryLabel } from "../../../../components/UserCombobox";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../../../lib/appDisplayName";
-import type { AppSummary } from "../../../../lib/domain";
-import { formatDateTime, readinessLabel } from "../../../../lib/status";
+import type { AppSummary, PersonRef } from "../../../../lib/domain";
+import { formatDateTime, readinessLabel, type Translator } from "../../../../lib/status";
 import { safeJoin } from "../utils";
 
 export function AppBasicInfoPanel({ app, status }: { app?: AppSummary; status: string | null | undefined }) {
@@ -33,12 +34,25 @@ function AppBasicInfoRows({ app, status }: { app?: AppSummary; status: string | 
       <BasicInfoItem label={t("console.overview.field.appName")} value={app ? formatAppDisplayName(app) : "-"} />
       <BasicInfoItem label={t("console.overview.field.appAlias")} value={app?.alias || "-"} />
       <BasicInfoItem label={t("console.overview.field.appKey")} value={<code>{app?.app_key || "-"}</code>} />
-      <BasicInfoItem label={t("appList.column.owners")} value={safeJoin(app?.owners)} />
+      <BasicInfoItem label={t("appList.column.owners")} value={formatOwnerList(app?.owners, t)} />
       <BasicInfoItem label={t("console.overview.field.developers")} value={safeJoin(app?.developers)} />
       <BasicInfoItem label={t("common.updatedAt")} value={formatDateTime(app?.updated_at)} />
       <BasicInfoItem label={t("console.overview.field.configStatus")} value={`${readinessLabel(t, status)}`} />
     </dl>
   );
+}
+
+function formatOwnerList(owners: PersonRef[] | undefined, t: Translator): string {
+  if (!owners || owners.length === 0) {
+    return "-";
+  }
+  return owners
+    .map((owner) => {
+      const name = owner.name || owner.user_id;
+      const secondary = userSecondaryLabel(owner, t);
+      return secondary ? `${name} (${secondary})` : name;
+    })
+    .join("、");
 }
 
 function BasicInfoItem({ label, value }: { label: string; value: ReactNode }) {

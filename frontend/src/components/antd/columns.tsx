@@ -2,6 +2,7 @@ import type { ComponentPropsWithoutRef, MouseEvent, ReactNode } from "react";
 
 import { useI18n } from "../../i18n/I18nProvider";
 import { cn } from "../../lib/cn";
+import type { AccountKind, PersonRef } from "../../lib/domain/person";
 import type { BadgeTone, Translator } from "../../lib/status";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
@@ -288,7 +289,9 @@ export interface UserColumnConfig<T> {
   getName: (record: T) => string | null | undefined;
   /**
    * 姓名缺失时的主行回退, 以及未传 `getSecondary` 时的次行(应用 key / 邮箱等标识符)。
-   * 人员列请改用 `personColumn`, 不要把 Authentik UUID 传到这里当次行。
+   *
+   * 人员列必须走 `personColumn` / `peopleColumn`: 不要把 Authentik UUID 或 user_id
+   * 传到这里当次行, 也不要用 `textColumn` + `safeJoin` 拼接 owners / user_ids。
    */
   getUserId?: (record: T) => string | null | undefined;
   /** 次行文案; 传入后覆盖 `getUserId` 作为次行(主行回退仍用 `getUserId`)。 */
@@ -309,7 +312,18 @@ export interface PersonColumnConfig<T> {
   getUserId: (record: T) => string | null | undefined;
   /** 部门路径; 缺省或空串时次行留空(本地账号除外, 见 `userSecondaryLabel`)。 */
   getDepartment?: (record: T) => string | null | undefined;
+  /** 账号类型; `local` 时次行固定为「本地用户」, 即使 user_id 是 UUID。 */
+  getAccountKind?: (record: T) => AccountKind | undefined;
   /** 本地账号次行文案需要 t("user.localAccount")。 */
+  t: Translator;
+  filter?: boolean;
+  width?: number;
+}
+
+export interface PeopleColumnConfig<T> {
+  key?: string;
+  title?: ReactNode;
+  getPeople: (record: T) => readonly PersonRef[] | null | undefined;
   t: Translator;
   filter?: boolean;
   width?: number;
@@ -388,6 +402,7 @@ export function userColumn<T>({
  */
 export function personColumn<T>({
   filter = false,
+  getAccountKind,
   getDepartment,
   getName,
   getUserId,
@@ -405,6 +420,7 @@ export function personColumn<T>({
         {
           user_id: String(getUserId(record) ?? ""),
           department: getDepartment?.(record) ?? "",
+          account_kind: getAccountKind?.(record),
         },
         t,
       ),
@@ -413,6 +429,59 @@ export function personColumn<T>({
     title,
     width,
   });
+}
+
+/**
+ * 多人列: 每人姓名 + 部门路径(或「本地用户」)纵向堆叠, 次行绝不出 UUID。
+ * 应用列表负责人等「一行多个人」的场景走这里, 不要再用 textColumn + safeJoin。
+ */
+export function peopleColumn<T>({
+  filter = false,
+  getPeople,
+  key = "people",
+  t,
+  title,
+  width,
+}: PeopleColumnConfig<T>): ColumnType<T> {
+  const read = (record: T) => getPeople(record) ?? [];
+
+  return {
+    key,
+    title,
+    width,
+    render: (_value: unknown, record: T) => {
+      const people = read(record);
+      if (people.length === 0) {
+        return "-";
+      }
+      return (
+        <div className="flex min-w-0 flex-col gap-2">
+          {people.map((person) => (
+            <PersonStack key={person.user_id} person={person} t={t} />
+          ))}
+        </div>
+      );
+    },
+    ...(filter
+      ? textFilter<T>(key, {
+          getValue: (record) =>
+            read(record)
+              .map((person) => `${person.name || person.user_id} ${userSecondaryLabel(person, t)}`)
+              .join(" "),
+        })
+      : {}),
+  };
+}
+
+function PersonStack({ person, t }: { person: PersonRef; t: Translator }) {
+  const displayName = person.name || person.user_id;
+  const secondary = userSecondaryLabel(person, t);
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <strong className="truncate">{displayName}</strong>
+      {secondary ? <TruncatedText className="text-body leading-5 text-ink-soft" text={secondary} /> : null}
+    </div>
+  );
 }
 
 function UserColumnTitle() {

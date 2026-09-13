@@ -1,11 +1,14 @@
 /** 本模块定义 Operations 与 Audit 领域契约。 */
 
 import type { JsonObject } from "./common";
+import type { AccountKind } from "./person";
 
-/** 访问申请的审批人: 后端在 id 之外一并下发姓名, 界面一律按姓名展示。 */
+/** 访问申请的审批人: 后端 `person_payload`, 界面一律按姓名展示。 */
 export interface OperationApprover {
   user_id: string;
   name: string;
+  department?: string;
+  account_kind?: AccountKind;
 }
 
 export interface OperationRow {
@@ -15,6 +18,7 @@ export interface OperationRow {
   user_name?: string;
   /** 用户部门路径; 未同步或本地账号时缺省/空串。 */
   user_department?: string;
+  user_account_kind?: AccountKind;
   app_key?: string;
   app_name?: string;
   app_alias?: string;

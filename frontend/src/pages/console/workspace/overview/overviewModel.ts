@@ -1,4 +1,4 @@
-import type { AppSummary, ConfigurationIssue, ConfigurationStatus } from "../../../../lib/domain";
+import type { AccountKind, AppSummary, ConfigurationIssue, ConfigurationStatus } from "../../../../lib/domain";
 import type { BadgeTone, Translator } from "../../../../lib/status";
 
 export interface AppPatchPayload {
@@ -20,6 +20,7 @@ export interface MembershipItem {
   user_name: string;
   /** 成员部门路径; 未同步或本地账号时缺省/空串。 */
   user_department?: string;
+  user_account_kind?: AccountKind;
   role: MembershipRole | string;
   is_active?: boolean;
 }

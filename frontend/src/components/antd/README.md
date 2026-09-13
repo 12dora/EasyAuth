@@ -120,6 +120,12 @@ userColumn<T>({ getName, getUserId?, getSecondary?, key? = "user", title?, filte
 // 人员部门请走 personColumn, 不要把 Authentik UUID 传到 getUserId 当次行
 // 仓库里没有表格内头像的先例, 因此不渲染头像
 
+personColumn<T>({ getName, getUserId, getDepartment?, getAccountKind?, t, ... }): ColumnType<T>
+// 姓名 + 部门路径(或「本地用户」); getAccountKind 必须传入, 次行绝不出 UUID
+
+peopleColumn<T>({ getPeople, t, key?, title?, filter?, width? }): ColumnType<T>
+// 多名 PersonRef 纵向堆叠姓名/部门, 应用列表负责人列走这里, 禁止 textColumn + safeJoin
+
 actionsColumn<T>({ render, title?, width? = ACTIONS_COLUMN_DEFAULT_WIDTH, fixed? = "right", key? = "actions" }): ColumnType<T>
 // render: (record, index) => ReactNode, 右对齐 / 不换行 / 点击不冒泡到行
 // ACTIONS_COLUMN_DEFAULT_WIDTH = 180: 三个两字 size="sm" 按钮 + 间距 + 单元格内边距。
