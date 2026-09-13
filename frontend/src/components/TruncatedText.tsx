@@ -42,7 +42,7 @@ export function TruncatedText({
 }: {
   text: string;
   className?: string;
-  as?: "span" | "code";
+  as?: "span" | "code" | "strong";
   /** 可见内容; 缺省渲染 `text`。溢出 Tooltip 展示 `title ?? text`。 */
   children?: ReactNode;
   /** 溢出时 Tooltip 内容; 缺省为 `text`。 */

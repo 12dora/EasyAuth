@@ -5,7 +5,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { AccountKind, PersonRef } from "../../lib/domain/person";
 import type { Translator } from "../../lib/status";
 import { AppTable, type ColumnsType } from "./AppTable";
-import { peopleColumn, personColumn } from "./columns";
+import { appColumn, peopleColumn, personColumn } from "./columns";
 import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "./testing";
 
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
@@ -224,6 +224,60 @@ describe("peopleColumn", () => {
       expect(tips[0]).toHaveTextContent("张三 · 捷发-安环部");
       expect(tips[0]).toHaveTextContent("系统管理员 · 本地用户");
     });
+  });
+});
+
+describe("appColumn", () => {
+  test("超长展示名截断后悬停出全文, 与 app_key 不同时开两个 Tooltip", async () => {
+    const LONG_NAME = "捷发科技-跨部门协同与客户关系管理平台（正式环境）";
+    interface App {
+      id: string;
+      name: string;
+      app_key: string;
+    }
+    const columns: ColumnsType<App> = [
+      appColumn<App>({
+        title: "应用",
+        getDisplayName: (row) => row.name,
+        getAppKey: (row) => row.app_key,
+        width: 200,
+      }),
+    ];
+    const user = userEvent.setup();
+
+    renderWithAntd(
+      <AppTable<App>
+        columns={columns}
+        dataSource={[{ id: "1", name: LONG_NAME, app_key: "easyauth-customer-relationship" }]}
+        pagination={false}
+        rowKey="id"
+      />,
+    );
+
+    const name = screen.getByText(LONG_NAME);
+    expect(name.tagName).toBe("STRONG");
+    expect(name).toHaveClass("truncate");
+    mockLayout(name, 240, 80);
+
+    await user.hover(name);
+    await waitFor(() => {
+      const tips = visibleTooltips();
+      expect(tips).toHaveLength(1);
+      expect(tips[0]).toHaveTextContent(LONG_NAME);
+    });
+
+    await user.unhover(name);
+    await waitFor(() => expect(visibleTooltip()).toBeNull());
+
+    const appKey = screen.getByText("easyauth-customer-relationship");
+    mockLayout(appKey, 240, 80);
+    await user.hover(appKey);
+    await waitFor(() => {
+      const tips = visibleTooltips();
+      expect(tips).toHaveLength(1);
+      expect(tips[0]).toHaveTextContent("easyauth-customer-relationship");
+    });
+    expect(visibleTooltips()[0]).not.toHaveTextContent(LONG_NAME);
   });
 });
 
