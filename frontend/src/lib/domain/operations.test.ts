@@ -36,6 +36,7 @@ const PERSON = {
   name: "李管理员",
   department: "捷发-信息部",
   account_kind: "directory",
+  avatar_url: "",
 } as const;
 
 describe("parsePersonRef", () => {
@@ -47,6 +48,8 @@ describe("parsePersonRef", () => {
     const { department: _dropped, ...withoutDepartment } = PERSON;
     expect(() => parsePersonRef(withoutDepartment)).toThrow(/department/);
     expect(() => parsePersonRef({ ...PERSON, account_kind: "admin" })).toThrow(/account_kind/);
+    const { avatar_url: _avatar, ...withoutAvatar } = PERSON;
+    expect(() => parsePersonRef(withoutAvatar)).toThrow(/avatar_url/);
     expect(() => parsePersonRef(null)).toThrow(OperationContractError);
   });
 });

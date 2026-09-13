@@ -1,7 +1,7 @@
 /** 本模块定义 Lifecycle、Handover 与 Onboarding 领域契约。 */
 
 import type { JsonObject, JsonValue } from "./common";
-import { isAccountKind, type AccountKind, type PersonRef } from "./person";
+import { PersonContractError, readPersonRef, type AccountKind, type PersonRef } from "./person";
 
 /** M4 生命周期: 人员列表行, 对齐后端 users_api._person_item 序列化字段。 */
 export interface PersonRow {
@@ -15,6 +15,8 @@ export interface PersonRow {
   open_handover_kind: "offboard" | "transfer" | "";
   /** 是否控制台管理员; 它决定门户右上角的「管理后台」入口, 由 PUT /users/<id>/console-admin 写入。 */
   is_console_admin: boolean;
+  /** 头像 URL; 无照片时为空串。与 PersonRef.avatar_url 同一口径。 */
+  avatar_url: string;
 }
 
 /** 数据交接 v2: 严格对齐 docs/design/data-handover-v2/01-easyauth-backend.md §6.2 */
@@ -347,30 +349,16 @@ export class HandoverContractError extends Error {
   }
 }
 
-/** PersonRef: 四字段必填; account_kind 必须是三值之一。 */
+/** PersonRef: 五字段必填; account_kind 必须是三值之一; avatar_url 必须是字符串。 */
 export function parseHandoverPersonRef(raw: JsonValue, field = "person"): PersonRef {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new HandoverContractError(field);
+  try {
+    return readPersonRef(raw, field);
+  } catch (error) {
+    if (error instanceof PersonContractError) {
+      throw new HandoverContractError(error.field);
+    }
+    throw error;
   }
-  const source = raw as JsonObject;
-  if (typeof source.user_id !== "string") {
-    throw new HandoverContractError(`${field}.user_id`);
-  }
-  if (typeof source.name !== "string") {
-    throw new HandoverContractError(`${field}.name`);
-  }
-  if (typeof source.department !== "string") {
-    throw new HandoverContractError(`${field}.department`);
-  }
-  if (!isAccountKind(source.account_kind)) {
-    throw new HandoverContractError(`${field}.account_kind`);
-  }
-  return {
-    user_id: source.user_id,
-    name: source.name,
-    department: source.department,
-    account_kind: source.account_kind,
-  };
 }
 
 /** 字段必须存在; 系统/未知身份为 null, 缺失立即失败。 */

@@ -27,6 +27,7 @@ const PEOPLE_PAYLOAD = {
       open_handover_task_id: null,
       open_handover_kind: "",
       is_console_admin: false,
+      avatar_url: "",
     },
     {
       user_id: "u-2",
@@ -37,6 +38,7 @@ const PEOPLE_PAYLOAD = {
       open_handover_task_id: 12,
       open_handover_kind: "offboard",
       is_console_admin: true,
+      avatar_url: "",
     },
   ],
   pagination: { page: 1, page_size: 20, total_items: 2, total_pages: 1 },
@@ -236,6 +238,7 @@ describe("ConsolePeopleList", () => {
             open_handover_task_id: null,
             open_handover_kind: "",
             is_console_admin: false,
+            avatar_url: "",
           },
         ],
         pagination: { page: Number(page), page_size: 20, total_items: 40, total_pages: 2 },

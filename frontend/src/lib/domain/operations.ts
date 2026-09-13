@@ -1,7 +1,7 @@
 /** 本模块定义 Operations 与 Audit 领域契约。 */
 
 import type { JsonObject, JsonValue } from "./common";
-import { isAccountKind, type AccountKind, type PersonRef } from "./person";
+import { isAccountKind, PersonContractError, readPersonRef, type AccountKind, type PersonRef } from "./person";
 
 /** 访问申请的审批人: 后端 `person_payload`, 界面一律按姓名展示。 */
 export interface OperationApprover {
@@ -65,28 +65,14 @@ export function parseOperationAccessRequestRow(raw: JsonValue): OperationRow {
 
 /** 人员对象; 字段与 `PersonRef` 一一对应, 缺任一字段即契约违约。 */
 export function parsePersonRef(raw: JsonValue, field = "person"): PersonRef {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new OperationContractError(field);
+  try {
+    return readPersonRef(raw, field);
+  } catch (error) {
+    if (error instanceof PersonContractError) {
+      throw new OperationContractError(error.field);
+    }
+    throw error;
   }
-  const source = raw as JsonObject;
-  if (typeof source.user_id !== "string") {
-    throw new OperationContractError(`${field}.user_id`);
-  }
-  if (typeof source.name !== "string") {
-    throw new OperationContractError(`${field}.name`);
-  }
-  if (typeof source.department !== "string") {
-    throw new OperationContractError(`${field}.department`);
-  }
-  if (!isAccountKind(source.account_kind)) {
-    throw new OperationContractError(`${field}.account_kind`);
-  }
-  return {
-    user_id: source.user_id,
-    name: source.name,
-    department: source.department,
-    account_kind: source.account_kind,
-  };
 }
 
 /** null 表示系统 / 未解析到 UserMirror; 缺字段或非法值立即失败。 */

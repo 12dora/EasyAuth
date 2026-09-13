@@ -28,7 +28,7 @@ describe("AppOnboardingWizard", () => {
             app_key: "billing",
             name: "Billing",
             alias: "",
-            owners: [{ user_id: "owner-a", name: "owner-a", department: "", account_kind: "directory" }],
+            owners: [{ user_id: "owner-a", name: "owner-a", department: "", account_kind: "directory", avatar_url: "" }],
           },
         });
       }

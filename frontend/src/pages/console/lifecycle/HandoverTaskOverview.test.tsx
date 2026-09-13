@@ -10,6 +10,7 @@ const directoryPerson: PersonRef = {
   name: "李管理员",
   department: "捷发-安环部",
   account_kind: "directory",
+  avatar_url: "",
 };
 
 const actorPerson: PersonRef = {
@@ -17,6 +18,7 @@ const actorPerson: PersonRef = {
   name: "王超管",
   department: "信息技术部",
   account_kind: "directory",
+  avatar_url: "",
 };
 
 function task(patch: Partial<HandoverTaskDetail> = {}): HandoverTaskDetail {

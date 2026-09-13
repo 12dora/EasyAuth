@@ -115,8 +115,8 @@ describe("ConsoleAppList", () => {
               name: "CRM",
               alias: "",
               owners: [
-                { user_id: "u-1", name: "胡玉琴A", department: "捷发-安环部", account_kind: "directory" },
-                { user_id: "u-2", name: "认证系统管理员", department: "", account_kind: "local" },
+                { user_id: "u-1", name: "胡玉琴A", department: "捷发-安环部", account_kind: "directory", avatar_url: "" },
+                { user_id: "u-2", name: "认证系统管理员", department: "", account_kind: "local", avatar_url: "" },
               ],
               is_active: true,
               updated_at: "2026-07-01T09:00:00Z",
@@ -130,7 +130,8 @@ describe("ConsoleAppList", () => {
     renderList();
 
     const row = await screen.findByRole("row", { name: /CRM/ });
-    expect(row).toHaveTextContent("胡玉琴A, 认证系统管理员");
+    expect(within(row).getByText("胡玉琴A")).toBeVisible();
+    expect(within(row).getByText("认证系统管理员")).toBeVisible();
     expect(within(row).queryByText("捷发-安环部")).not.toBeInTheDocument();
     expect(within(row).queryByText("本地用户")).not.toBeInTheDocument();
   });
@@ -347,7 +348,7 @@ function parseJsonBody(init: RequestInit | undefined) {
 }
 
 function ownerRef(userId: string): PersonRef {
-  return { user_id: userId, name: userId, department: "", account_kind: "directory" };
+  return { user_id: userId, name: userId, department: "", account_kind: "directory", avatar_url: "" };
 }
 
 function jsonResponse(payload: unknown, status = 200) {

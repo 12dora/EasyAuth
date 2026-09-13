@@ -111,6 +111,7 @@ describe("OperationsPage", () => {
                 name: "李管理员",
                 department: "捷发-信息部",
                 account_kind: "directory",
+                avatar_url: "",
               },
             }),
           ],

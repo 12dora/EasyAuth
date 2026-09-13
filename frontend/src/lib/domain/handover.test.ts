@@ -15,6 +15,7 @@ const directoryPerson = {
   name: "张三",
   department: "捷发-安环部",
   account_kind: "directory",
+  avatar_url: "",
 } as const;
 
 describe("parseHandoverPersonRef", () => {
@@ -31,6 +32,11 @@ describe("parseHandoverPersonRef", () => {
     expect(() => parseHandoverPersonRef({ user_id: "u-1", name: "张三", account_kind: "directory" })).toThrow(
       /department/,
     );
+  });
+
+  test("缺少 avatar_url 立即失败", () => {
+    const { avatar_url: _dropped, ...withoutAvatar } = directoryPerson;
+    expect(() => parseHandoverPersonRef(withoutAvatar)).toThrow(/avatar_url/);
   });
 });
 
