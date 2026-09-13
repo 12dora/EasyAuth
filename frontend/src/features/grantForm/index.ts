@@ -21,6 +21,18 @@ export type {
 } from "./grantDraft";
 export { GrantForm } from "./GrantForm";
 export type { GrantFormProps } from "./GrantForm";
+export {
+  DepartmentSourcedGrants,
+  departmentSourcedContent,
+  departmentSourcedContentEquals,
+  departmentSourcedContentHasItems,
+  departmentSourcedNoticeStatus,
+} from "./DepartmentSourcedGrants";
+export type {
+  DepartmentSourcedContent,
+  DepartmentSourcedGrantLike,
+  DepartmentSourcedNoticeStatus,
+} from "./DepartmentSourcedGrants";
 export { useGrantCatalog } from "./useGrantCatalog";
 export { useCurrentGrant, parseCurrentGrantPayload } from "./useCurrentGrant";
 export { grantDraftExcludingLockedKeys, grantDraftWithoutGrantee } from "./grantDraftSelection";

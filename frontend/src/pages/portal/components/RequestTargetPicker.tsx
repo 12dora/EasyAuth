@@ -3,6 +3,11 @@ import { useMemo } from "react";
 import type { MouseEvent, ReactNode } from "react";
 
 import { Field, SelectInput } from "../../../components/Field";
+import {
+  DepartmentSourcedGrants,
+  type DepartmentSourcedGrantLike,
+  type DepartmentSourcedNoticeStatus,
+} from "../../../features/grantForm/DepartmentSourcedGrants";
 import { useI18n, localizedField } from "../../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { PortalCatalogApp } from "../../../lib/domain";
@@ -23,6 +28,9 @@ interface RequestTargetPickerProps {
   lockedAuthorizationGroupKeys?: string[];
   lockedKeys?: string[];
   lockedHint?: string;
+  departmentSourcedGrant?: DepartmentSourcedGrantLike | null;
+  departmentSourcedStatus?: DepartmentSourcedNoticeStatus;
+  departmentSourcedFetching?: boolean;
   /**
    * 撤销申请的基础授权快照: 撤销目标是"撤销后保留下来的授权", 后端要求它是基础授权的真子集
    * (submission_validation._validate_revoke_subset), 所以基础授权之外的权限组与权限都不能勾。
@@ -56,6 +64,9 @@ export function RequestTargetPicker({
   lockedAuthorizationGroupKeys = [],
   lockedKeys = [],
   lockedHint,
+  departmentSourcedGrant = null,
+  departmentSourcedStatus = "idle",
+  departmentSourcedFetching = false,
   revokeBaseGrant = null,
   expandedGroupKeys,
   catalogIsLoading,
@@ -151,6 +162,15 @@ export function RequestTargetPicker({
           />
         </Field>
       </div>
+      <DepartmentSourcedGrants
+        identityKey=""
+        grant={departmentSourcedGrant}
+        status={departmentSourcedStatus}
+        isFetching={departmentSourcedFetching}
+        title={t("portal.request.departmentSourced")}
+        hint={t("portal.request.departmentSourcedHint")}
+        loadingLabel={t("portal.request.departmentSourcedLoading")}
+      />
       <Field as="group" label={t("portal.request.directPermissions")}>
         <PermissionSelector
           appKey={appKey}

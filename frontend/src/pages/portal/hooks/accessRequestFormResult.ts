@@ -1,6 +1,7 @@
 import type { UseMutationResult } from "@tanstack/react-query";
 
 import type { MessageKey } from "../../../i18n/messages";
+import type { PortalCurrentGrant } from "../../../lib/domain";
 import type { PortalGrantRow } from "../portalListPayload";
 import { groupCoveredSelectionKeys } from "./accessRequestCatalog";
 import { revokeBaseGrantSnapshot } from "./accessRequestTargetLock";
@@ -27,6 +28,9 @@ export interface AccessRequestFormResultInput {
   prefillErrorMessageKey: MessageKey | "";
   lockedAuthorizationGroupKeys: string[];
   lockedSelectionKeys: string[];
+  departmentSourcedGrant: PortalCurrentGrant | null;
+  departmentSourcedStatus: "idle" | "pending" | "success" | "error";
+  departmentSourcedFetching: boolean;
 }
 
 export function buildAccessRequestFormResult(input: AccessRequestFormResultInput): AccessRequestFormResult {
@@ -43,6 +47,9 @@ export function buildAccessRequestFormResult(input: AccessRequestFormResultInput
     ...formHandlers(input.fields, input.actions),
     lockedAuthorizationGroupKeys: input.lockedAuthorizationGroupKeys,
     lockedSelectionKeys: input.lockedSelectionKeys,
+    departmentSourcedGrant: input.departmentSourcedGrant,
+    departmentSourcedStatus: input.departmentSourcedStatus,
+    departmentSourcedFetching: input.departmentSourcedFetching,
   };
 }
 

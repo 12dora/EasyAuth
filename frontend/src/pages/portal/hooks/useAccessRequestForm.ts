@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { parsePortalCurrentGrant } from "../../../lib/domain";
 import { apiRequest } from "../../../lib/api";
 import { parsePortalGrantList } from "../portalListPayload";
+import { departmentSourcedNoticeStatus } from "../../../features/grantForm/DepartmentSourcedGrants";
 import { departmentSourcedLockedKeys, type PortalCurrentGrantRow } from "./accessRequestLocked";
 import { parsePortalRequestCatalog } from "../requestCatalogContract";
 import { buildAccessRequestActions } from "./accessRequestActions";
@@ -128,6 +129,9 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
     prefillErrorMessageKey,
     lockedAuthorizationGroupKeys: locked.groupKeys,
     lockedSelectionKeys: locked.selectionKeys,
+    departmentSourcedGrant: currentGrantForApp ?? null,
+    departmentSourcedStatus: departmentSourcedNoticeStatus(Boolean(fields.appKey), currentGrantsQuery),
+    departmentSourcedFetching: currentGrantsQuery.isFetching,
   });
 
   // 权限组落地是对用户上一次点击的即时反馈, 占用同一条提示位时优先于"当前应用没有直接权限"这类派生提示。

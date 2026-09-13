@@ -217,6 +217,55 @@ describe("RequestTargetPicker", () => {
     expect(onChange.mock.calls.every((call) => !(call[0] as string[]).includes("sales-reader"))).toBe(true);
   });
 
+  test("有组织授权时展示共用提示框, 切到没有组织授权的应用进入退出态", async () => {
+    const { rerender } = renderWithAntd(
+      <RequestTargetPicker
+        {...pickerProps({
+          lockedAuthorizationGroupKeys: ["sales-reader"],
+          lockedHint: "由组织授权自动获得，无需申请",
+          departmentSourcedStatus: "success",
+          departmentSourcedGrant: {
+            authorization_groups: [{ key: "sales-reader", name: "销售只读", source: "department" }],
+            direct_grants: [
+              {
+                permission: "orders.export",
+                permission_name: "导出订单",
+                scope: "SELF",
+                scope_name: "本人",
+                source: "department",
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "来自组织授权" })).toBeVisible();
+    expect(screen.getByText("由组织授权自动获得，无需申请")).toBeVisible();
+    expect(screen.getByText("销售只读")).toBeVisible();
+    expect(screen.getByText("导出订单 · 本人")).toBeVisible();
+    expect(document.querySelector(".department-sourced-grants")).toHaveClass("department-sourced-grants--open");
+
+    rerender(
+      <RequestTargetPicker
+        {...pickerProps({
+          appKey: "erp",
+          departmentSourcedStatus: "success",
+          departmentSourcedGrant: {
+            authorization_groups: [],
+            direct_grants: [],
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector(".department-sourced-grants--open")).toBeNull();
+    });
+    expect(document.querySelector(".department-sourced-grants")).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: "来自组织授权" })).toBeNull();
+  });
+
   test("续期的只读态把权限组下拉整个禁用", async () => {
     renderWithAntd(
       <RequestTargetPicker

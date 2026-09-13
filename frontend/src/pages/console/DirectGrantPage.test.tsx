@@ -491,7 +491,10 @@ describe("DirectGrantPage", () => {
       await erpArrived;
     });
 
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "来自组织授权" })).toBeNull());
+    await waitFor(() => expect(document.querySelector(".department-sourced-grants--open")).toBeNull());
+    // 退出态内容仍挂载, 只是对读屏隐藏, 避免卸掉再挂上把下面的表单顶得跳一下。
+    expect(document.querySelector(".department-sourced-grants")).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: "来自组织授权" })).toBeNull();
   });
 
   test("切换应用到另一份组织授权时提示框就地换成新条目", async () => {

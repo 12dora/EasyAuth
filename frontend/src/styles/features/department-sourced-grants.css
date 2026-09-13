@@ -1,26 +1,26 @@
 /*
- * 「来自组织授权」提示框的高度收拢。
+ * 「来自组织授权」提示框的进出场。
  *
- * 换应用时现状查询的 data 会短暂变成 undefined, 不能把整块卸掉再挂上(下面的表单会跳一下)。
- * 上一份内容留在格子里, 有新数据就地替换; 新的一对没有组织授权时用 grid 行高 0fr 收起来,
- * 而不是 display:none 或立刻卸载。时长与权限选择器 / 组织树同一套 160ms 令牌。
+ * 高度用 grid 行高 0fr ↔ 1fr(内容高度是自动的, 不能直接 transition height:auto),
+ * 同步做透明度与轻微上移, 约 200ms ease-out。退出时内容保持挂载, 只收起格子,
+ * 换应用时现状查询的 data 短暂变成 undefined 也不会把下面的表单顶得跳一下。
  */
 
 .department-sourced-grants {
   display: grid;
   grid-template-rows: 0fr;
-  opacity: 1;
+  opacity: 0;
   transition:
-    grid-template-rows 160ms var(--ease-out-paper),
-    opacity 120ms var(--ease-press);
+    grid-template-rows 200ms var(--ease-out-paper),
+    opacity 200ms var(--ease-out-paper);
 }
 
 .department-sourced-grants--open {
   grid-template-rows: 1fr;
+  opacity: 1;
 }
 
-/* 换一对还在路上: 上一份内容留着, 只把透明度压低, 高度不动。 */
-.department-sourced-grants--fetching {
+.department-sourced-grants--open.department-sourced-grants--fetching {
   opacity: 0.6;
 }
 
@@ -29,8 +29,18 @@
   overflow: hidden;
 }
 
+.department-sourced-grants__panel {
+  transform: translateY(-4px);
+  transition: transform 200ms var(--ease-out-paper);
+}
+
+.department-sourced-grants--open .department-sourced-grants__panel {
+  transform: translateY(0);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .department-sourced-grants {
+  .department-sourced-grants,
+  .department-sourced-grants__panel {
     transition: none;
   }
 }

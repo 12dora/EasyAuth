@@ -937,6 +937,10 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     expect(view.result.current.selectedPermissionKeys).toEqual([]);
     expect(view.result.current.lockedAuthorizationGroupKeys).toEqual(["reader"]);
     expect(view.result.current.lockedSelectionKeys).toEqual(expect.arrayContaining([READ_KEY, EXPORT_KEY, AUDIT_KEY]));
+    expect(view.result.current.departmentSourcedStatus).toBe("success");
+    expect(view.result.current.departmentSourcedGrant?.authorization_groups.map((group) => group.key)).toEqual([
+      "reader",
+    ]);
 
     act(() => view.result.current.changeAuthorizationGroupKeys(["deleter"]));
     act(() => view.result.current.changeReason("补权限"));

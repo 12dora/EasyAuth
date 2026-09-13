@@ -6,6 +6,7 @@ import type {
   PermissionGroupItem,
   PermissionItem,
   PortalCatalogApp,
+  PortalCurrentGrant,
   PortalRequestCatalog,
 } from "../../../lib/domain";
 import type { PortalGrantRow } from "../portalListPayload";
@@ -181,6 +182,10 @@ export interface AccessRequestFormResult {
   lockedAuthorizationGroupKeys: string[];
   /** 组织授权下发的权限范围选择键(含锁定组覆盖): 交给 PermissionSelector.lockedKeys。 */
   lockedSelectionKeys: string[];
+  /** 当前应用上的生效授权(含组织来源成员关系); 未选应用或没有授权时为 null。 */
+  departmentSourcedGrant: PortalCurrentGrant | null;
+  departmentSourcedStatus: "idle" | "pending" | "success" | "error";
+  departmentSourcedFetching: boolean;
   /**
    * 基础授权是否被所选应用锁定。
    *
