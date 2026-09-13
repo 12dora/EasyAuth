@@ -6,7 +6,8 @@ import { Button } from "../../../components/Button";
 import { Dialog } from "../../../components/Dialog";
 import { Field, TextArea } from "../../../components/Field";
 import { StatusBanner } from "../../../components/StatusBanner";
-import { UserSearchInput } from "../../../components/UserSelect";
+import { UserSearchInput, userSearchFieldHint } from "../../../components/UserSelect";
+import type { UserOption } from "../../../components/UserCombobox";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
@@ -23,6 +24,7 @@ export function ConsoleReassignDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const navigate = useNavigate();
   const [subjectUserId, setSubjectUserId] = useState("");
+  const [resolvedSubject, setResolvedSubject] = useState<UserOption | null>(null);
   const [selectedApps, setSelectedApps] = useState<string[]>([]);
   const [reason, setReason] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -91,7 +93,11 @@ export function ConsoleReassignDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <div className="space-y-4">
-        <Field label={t("handover.portal.reassign.subject")} as="group">
+        <Field
+          label={t("handover.portal.reassign.subject")}
+          hint={userSearchFieldHint(resolvedSubject, t, t("userSelect.searchHint"))}
+          as="group"
+        >
           <UserSearchInput
             value={subjectUserId}
             aria-label={t("handover.portal.reassign.subject")}
@@ -99,6 +105,7 @@ export function ConsoleReassignDialog({ onClose }: { onClose: () => void }) {
               setSubjectUserId(value);
               setSelectedApps([]);
             }}
+            onResolvedOptionChange={setResolvedSubject}
           />
         </Field>
         <Field label={t("handover.portal.reassign.apps")} hint={t("handover.portal.reassign.appsHint")} as="group">

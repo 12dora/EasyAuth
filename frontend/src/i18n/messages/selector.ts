@@ -1,5 +1,6 @@
 export const zhCN = {
   "userSelect.searchPlaceholder": "搜索姓名、拼音或邮箱",
+  "userSelect.searchHint": "输入姓名或用户 ID 搜索",
 
   "userSelect.loading": "搜索中…",
 
@@ -57,6 +58,7 @@ export const zhCN = {
 
 export const en: Record<keyof typeof zhCN, string> = {
   "userSelect.searchPlaceholder": "Search name, pinyin or email",
+  "userSelect.searchHint": "Search by name or user ID",
 
   "userSelect.loading": "Searching…",
 

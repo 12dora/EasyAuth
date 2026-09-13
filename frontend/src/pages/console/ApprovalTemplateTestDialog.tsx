@@ -5,7 +5,8 @@ import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
 import { Field, TextArea, TextInput } from "../../components/Field";
 import { StatusBanner } from "../../components/StatusBanner";
-import { UserSearchInput } from "../../components/UserSelect";
+import { UserSearchInput, userSearchFieldHint } from "../../components/UserSelect";
+import type { UserOption } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
@@ -30,6 +31,7 @@ export function ApprovalTemplateTestDialog({
 }) {
   const { t } = useI18n();
   const [originatorUserId, setOriginatorUserId] = useState("");
+  const [resolvedOriginator, setResolvedOriginator] = useState<UserOption | null>(null);
   const [appKey, setAppKey] = useState("");
   const [formText, setFormText] = useState("");
   const [errors, setErrors] = useState<TestFieldErrors>(NO_TEST_ERRORS);
@@ -86,7 +88,12 @@ export function ApprovalTemplateTestDialog({
     >
       <form id="approval-template-test-form" className="grid gap-4" onSubmit={submit}>
         <p className="text-body leading-5 text-ink-soft">{t("approvalTemplates.test.description")}</p>
-        <Field label={t("approvalTemplates.test.originator")} error={errors.originator} as="group">
+        <Field
+          label={t("approvalTemplates.test.originator")}
+          hint={userSearchFieldHint(resolvedOriginator, t, t("userSelect.searchHint"))}
+          error={errors.originator}
+          as="group"
+        >
           <UserSearchInput
             value={originatorUserId}
             aria-label={t("approvalTemplates.test.originator")}
@@ -96,6 +103,7 @@ export function ApprovalTemplateTestDialog({
                 clearError("originator");
               }
             }}
+            onResolvedOptionChange={setResolvedOriginator}
           />
         </Field>
         {isPlatformTemplate ? (

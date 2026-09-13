@@ -4,7 +4,8 @@ import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../components/Field";
 import { StatusBanner } from "../../components/StatusBanner";
-import { UserSearchInput } from "../../components/UserSelect";
+import { UserSearchInput, userSearchFieldHint } from "../../components/UserSelect";
+import type { UserOption } from "../../components/UserCombobox";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { TeamDetail, TeamMemberItem } from "../../lib/domain";
 import type { TeamInfoFormPayload, TeamMemberCreatePayload, TeamMemberRole } from "./consoleTeamDetailModel";
@@ -77,6 +78,7 @@ export function TeamMemberCreateDialog({
 }) {
   const { t } = useI18n();
   const [userId, setUserId] = useState("");
+  const [resolvedUser, setResolvedUser] = useState<UserOption | null>(null);
   const [role, setRole] = useState<TeamMemberRole>("member");
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -105,8 +107,13 @@ export function TeamMemberCreateDialog({
       }
     >
       <form id="team-member-create-form" className="grid gap-4" onSubmit={submit}>
-        <Field label={t("common.user")}>
-          <UserSearchInput value={userId} onChange={setUserId} required />
+        <Field label={t("common.user")} hint={userSearchFieldHint(resolvedUser, t, t("userSelect.searchHint"))}>
+          <UserSearchInput
+            value={userId}
+            onChange={setUserId}
+            onResolvedOptionChange={setResolvedUser}
+            required
+          />
         </Field>
         <Field label={t("common.role")}>
           <SelectInput value={role} onChange={(event) => setRole(event.currentTarget.value as TeamMemberRole)}>

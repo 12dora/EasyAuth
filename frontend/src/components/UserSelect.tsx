@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
+import type { Translator } from "../lib/status";
 import { TextInput } from "./Field";
 import {
   UserOptionList,
@@ -28,7 +29,14 @@ interface UserSearchInputProps {
    */
   onSelectOption?: (option: UserOption) => void;
   /**
-   * 当前选中的候选项: 有它(且与 value 同一个人)时输入框显示姓名, 部门与 ID 落到次要行。
+   * 解析结果变化时回调: 选中候选、按 ID 解析成功为候选项, 手输/清空为 null。
+   *
+   * 次行(部门路径 / 「本地用户」)由调用方放进 Field hint, 本组件不再自己画一行。
+   * 解析只在这里做一次, 调用方不要再搜一遍。
+   */
+  onResolvedOptionChange?: (option: UserOption | null) => void;
+  /**
+   * 当前选中的候选项: 有它(且与 value 同一个人)时输入框显示姓名。
    *
    * 调用方手输 ID 时应传 null —— 那时没有可信姓名, 只能原样显示 ID。
    */
@@ -39,12 +47,23 @@ interface UserSearchInputProps {
   "aria-describedby"?: string;
 }
 
+/**
+ * Field hint: 已解析到人时用次行(部门路径 / 「本地用户」), 否则用搜索提示。
+ *
+ * 次行不再画在输入框正下方, 避免和 Field hint 挤在一起。
+ */
+export function userSearchFieldHint(option: UserOption | null, t: Translator, emptyHint: string): string {
+  const secondary = option ? userSecondaryLabel(option, t) : "";
+  return secondary || emptyHint;
+}
+
 /** 单个用户 ID 输入: 聚焦即拉取候选, 支持按姓名/邮箱/ID 模糊搜索, 也允许直接输入 ID。 */
 export function UserSearchInput({
   id,
   value,
   onChange,
   onSelectOption,
+  onResolvedOptionChange,
   selectedOption = null,
   placeholder,
   required,
@@ -64,7 +83,6 @@ export function UserSearchInput({
   const resolved =
     selectedOption && selectedOption.user_id === value ? selectedOption : value ? (seenOptions[value] ?? null) : null;
   const inputValue = resolved ? userOptionName(resolved) : value;
-  const secondary = resolved ? userSecondaryLabel(resolved, t) : "";
   /**
    * 本组件最近一次自己发出去的 value(手输 onChange 或 onPick)。
    *
@@ -102,6 +120,10 @@ export function UserSearchInput({
     });
   }, [lookupQuery.data, value]);
 
+  useEffect(() => {
+    onResolvedOptionChange?.(resolved);
+  }, [onResolvedOptionChange, resolved]);
+
   const getOptionId = (option: UserOption) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
 
   return (
@@ -138,7 +160,6 @@ export function UserSearchInput({
           onRetry={() => void optionsQuery.refetch()}
         />
       ) : null}
-      {secondary ? <p className="mt-1 text-xs leading-5 text-ink-faint">{secondary}</p> : null}
     </div>
   );
 }

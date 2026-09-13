@@ -5,9 +5,10 @@ import { useState } from "react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { I18nProvider } from "../i18n/I18nProvider";
+import { I18nProvider, useI18n } from "../i18n/I18nProvider";
+import { Field } from "./Field";
 import type { UserOption } from "./UserCombobox";
-import { UserMultiSelect, UserSearchInput } from "./UserSelect";
+import { UserMultiSelect, UserSearchInput, userSearchFieldHint } from "./UserSelect";
 
 describe("UserSelect", () => {
   afterEach(() => {
@@ -93,31 +94,32 @@ describe("UserSelect", () => {
     });
   });
 
-  test("选中候选后输入框显示姓名, 部门落到次要行, 不再显示用户 ID", async () => {
+  test("选中候选后输入框显示姓名, 部门落到 Field hint, 不再显示用户 ID", async () => {
     const user = userEvent.setup();
     stubUserOptions();
 
     renderWithProviders(<SearchInputHarness />);
 
     const input = screen.getByRole("combobox");
+    expect(screen.getByText("输入姓名或用户 ID 搜索")).toBeVisible();
     await user.type(input, "张");
     await user.click(await screen.findByRole("option", { name: /张三/ }));
 
     // 提交值仍是用户 ID, 但界面上不再出现裸 ID 当作"被选中的人"。
     expect(screen.getByTestId("value")).toHaveTextContent("u-1");
     expect(input).toHaveValue("张三");
-    const secondaryLine = screen.getByText("销售部").closest("p");
-    expect(secondaryLine).toHaveTextContent("销售部");
-    expect(secondaryLine).not.toHaveTextContent("u-1");
+    expect(fieldHint()).toHaveTextContent("销售部");
+    expect(fieldHint()).not.toHaveTextContent("u-1");
+    expect(input.parentElement?.querySelector("p")).toBeNull();
 
-    // 手输覆盖选择: 没有可信姓名, 原样显示输入内容。次行是输入框下的 <p>; 下拉里的部门不算。
+    // 手输覆盖选择: 没有可信姓名, 原样显示输入内容, hint 回到搜索提示。
     await user.clear(input);
     await user.type(input, "u-9");
     expect(input).toHaveValue("u-9");
-    expect(screen.queryByText("销售部", { selector: "p" })).toBeNull();
+    expect(fieldHint()).toHaveTextContent("输入姓名或用户 ID 搜索");
   });
 
-  test("不传 selectedOption 时选中后仍显示姓名与部门", async () => {
+  test("不传 selectedOption 时选中后仍显示姓名, 部门经解析回调进 Field hint", async () => {
     const user = userEvent.setup();
     stubUserOptions();
 
@@ -129,9 +131,8 @@ describe("UserSelect", () => {
 
     expect(screen.getByTestId("value")).toHaveTextContent("u-1");
     expect(input).toHaveValue("张三");
-    const secondaryLine = screen.getByText("销售部").closest("p");
-    expect(secondaryLine).toHaveTextContent("销售部");
-    expect(secondaryLine).not.toHaveTextContent("u-1");
+    expect(fieldHint()).toHaveTextContent("销售部");
+    expect(fieldHint()).not.toHaveTextContent("u-1");
   });
 
   test("手输姓名失焦不按 ID 解析; 回填的 ID 才走 user_ids", async () => {
@@ -161,9 +162,9 @@ describe("UserSelect", () => {
     expect(fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("user_ids="))).toEqual([]);
     typed.unmount();
 
-    renderWithProviders(<UserSearchInput id="owner" value="u-9" onChange={vi.fn()} />);
+    renderWithProviders(<ResolvedSearchInput value="u-9" />);
     await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("王五"));
-    expect(screen.getByText("研发部")).toBeVisible();
+    await waitFor(() => expect(fieldHint()).toHaveTextContent("研发部"));
     expect(
       fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("user_ids=")),
     ).toEqual(["/console/api/v1/user-options?user_ids=u-9&purpose=employee"]);
@@ -181,10 +182,10 @@ describe("UserSelect", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithProviders(<UserSearchInput id="owner" value="u-1" onChange={vi.fn()} />);
+    renderWithProviders(<ResolvedSearchInput value="u-1" />);
 
     await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("张三"));
-    expect(screen.getByText("销售部")).toBeVisible();
+    await waitFor(() => expect(fieldHint()).toHaveTextContent("销售部"));
     expect(screen.queryByText("u-1")).toBeNull();
     expect(
       fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("user_ids=")),
@@ -316,34 +317,61 @@ function MultiSelectHarness() {
   );
 }
 
-/** 多数调用方不传 selectedOption: 组件必须自己记住刚选中的人。 */
-function UncontrolledSearchInputHarness() {
-  const [userId, setUserId] = useState("");
+function fieldHint(): HTMLElement {
+  const hint = document.getElementById("owner-hint");
+  if (!hint) {
+    throw new Error("缺少 Field hint");
+  }
+  return hint;
+}
+
+/** 回填 ID 的最小壳子: 解析结果进 Field hint。 */
+function ResolvedSearchInput({ value }: { value: string }) {
+  const { t } = useI18n();
+  const [option, setOption] = useState<UserOption | null>(null);
   return (
-    <>
-      <span data-testid="value">{userId}</span>
-      <UserSearchInput id="owner" value={userId} onChange={setUserId} />
-    </>
+    <Field label="被授权人" hint={userSearchFieldHint(option, t, t("userSelect.searchHint"))}>
+      <UserSearchInput id="owner" value={value} onChange={vi.fn()} onResolvedOptionChange={setOption} />
+    </Field>
   );
 }
 
-/** 单选输入是受控的: 用例里用最小壳子接住 value 与选中的候选项。 */
-function SearchInputHarness() {
+/** 多数调用方不传 selectedOption: 组件必须自己记住刚选中的人, 解析结果经回调进 hint。 */
+function UncontrolledSearchInputHarness() {
+  const { t } = useI18n();
   const [userId, setUserId] = useState("");
   const [option, setOption] = useState<UserOption | null>(null);
   return (
     <>
       <span data-testid="value">{userId}</span>
-      <UserSearchInput
-        id="owner"
-        value={userId}
-        selectedOption={option}
-        onChange={(value) => {
-          setUserId(value);
-          setOption(null);
-        }}
-        onSelectOption={(picked) => setOption(picked)}
-      />
+      <Field label="被授权人" hint={userSearchFieldHint(option, t, t("userSelect.searchHint"))}>
+        <UserSearchInput id="owner" value={userId} onChange={setUserId} onResolvedOptionChange={setOption} />
+      </Field>
+    </>
+  );
+}
+
+/** 单选输入是受控的: 用例里用最小壳子接住 value 与解析到的候选项。 */
+function SearchInputHarness() {
+  const { t } = useI18n();
+  const [userId, setUserId] = useState("");
+  const [option, setOption] = useState<UserOption | null>(null);
+  return (
+    <>
+      <span data-testid="value">{userId}</span>
+      <Field label="被授权人" hint={userSearchFieldHint(option, t, t("userSelect.searchHint"))}>
+        <UserSearchInput
+          id="owner"
+          value={userId}
+          selectedOption={option}
+          onChange={(value) => {
+            setUserId(value);
+            setOption(null);
+          }}
+          onSelectOption={(picked) => setOption(picked)}
+          onResolvedOptionChange={setOption}
+        />
+      </Field>
     </>
   );
 }

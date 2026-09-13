@@ -6,7 +6,7 @@ import { Button } from "../../components/Button";
 import { Field } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
-import { UserSearchInput } from "../../components/UserSelect";
+import { UserSearchInput, userSearchFieldHint } from "../../components/UserSelect";
 import { userOptionName } from "../../components/UserCombobox";
 import type { UserOption } from "../../components/UserCombobox";
 import { PanelSurface } from "../../components/ui/PanelSurface";
@@ -187,7 +187,10 @@ export function DirectGrantPage() {
           lockedPermissionKeys={lockedPermissionKeys}
           header={
             <div>
-              <Field label={t("directGrant.grantee")} hint={grantee ? undefined : t("directGrant.granteeHint")}>
+              <Field
+                label={t("directGrant.grantee")}
+                hint={userSearchFieldHint(grantee, t, t("userSelect.searchHint"))}
+              >
                 <UserSearchInput
                   value={userId}
                   required
@@ -196,6 +199,11 @@ export function DirectGrantPage() {
                   // 手输 ID 没有可信姓名, 清掉上一次候选带来的展示名。
                   onChange={(value) => changeGrantee(value, null)}
                   onSelectOption={(option) => changeGrantee(option.user_id, option)}
+                  onResolvedOptionChange={(option) => {
+                    if (option) {
+                      setGrantee(option);
+                    }
+                  }}
                 />
               </Field>
               <DepartmentSourcedGrants

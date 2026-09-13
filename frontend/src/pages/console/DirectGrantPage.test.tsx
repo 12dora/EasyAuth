@@ -89,6 +89,7 @@ const CURRENT_GRANT = {
     status: "active",
     user_id: "u-1",
     user_name: "张三",
+    user_account_kind: "directory",
     app_key: "crm",
     app_name: "CRM",
     app_alias: "客户管理",
@@ -136,6 +137,7 @@ const ERP_DEPARTMENT_GRANT = {
     status: "active",
     user_id: "u-1",
     user_name: "张三",
+    user_account_kind: "directory",
     app_key: "erp",
     app_name: "ERP",
     app_alias: "企业资源",
@@ -222,7 +224,7 @@ describe("DirectGrantPage", () => {
     });
     // 成功提示用姓名而不是用户 ID。
     expect(await screen.findByText("已授予 张三 客户管理 (CRM) 的权限")).toBeVisible();
-    // 被授权人保留(输入框显示姓名, 部门在次要行, 不显示 ID), 目标草稿清空。
+    // 被授权人保留(输入框显示姓名, 部门在 Field hint, 不显示 ID), 目标草稿清空。
     expect(screen.getByLabelText("被授权人")).toHaveValue("张三");
     expect(screen.getByText("销售部")).toBeVisible();
     await waitFor(() => expect(screen.getByLabelText("应用")).toHaveValue(""));

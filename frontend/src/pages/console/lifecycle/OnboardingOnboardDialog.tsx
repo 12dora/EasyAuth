@@ -5,7 +5,8 @@ import { Button } from "../../../components/Button";
 import { Dialog } from "../../../components/Dialog";
 import { Field, SelectInput } from "../../../components/Field";
 import { useToast } from "../../../components/ui/Toast";
-import { UserSearchInput } from "../../../components/UserSelect";
+import { UserSearchInput, userSearchFieldHint } from "../../../components/UserSelect";
+import type { UserOption } from "../../../components/UserCombobox";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import type { JsonObject } from "../../../lib/api";
@@ -22,6 +23,7 @@ export function OnboardDialog({
   const { t } = useI18n();
   const toast = useToast();
   const [userId, setUserId] = useState("");
+  const [resolvedUser, setResolvedUser] = useState<UserOption | null>(null);
   const [templateId, setTemplateId] = useState("");
   const selectedTemplate = templates.find((template) => String(template.id) === templateId);
 
@@ -73,8 +75,17 @@ export function OnboardDialog({
     >
       <form id="onboard-form" className="grid gap-4" onSubmit={submit}>
         <p className="text-body leading-5 text-ink-soft">{t("onboarding.onboard.description")}</p>
-        <Field label={t("onboarding.onboard.user")} as="group">
-          <UserSearchInput value={userId} aria-label={t("onboarding.onboard.user")} onChange={setUserId} />
+        <Field
+          label={t("onboarding.onboard.user")}
+          hint={userSearchFieldHint(resolvedUser, t, t("userSelect.searchHint"))}
+          as="group"
+        >
+          <UserSearchInput
+            value={userId}
+            aria-label={t("onboarding.onboard.user")}
+            onChange={setUserId}
+            onResolvedOptionChange={setResolvedUser}
+          />
         </Field>
         <Field label={t("onboarding.onboard.template")}>
           <SelectInput value={templateId} onChange={(event) => setTemplateId(event.currentTarget.value)}>

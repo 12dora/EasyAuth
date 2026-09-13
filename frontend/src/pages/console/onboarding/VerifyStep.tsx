@@ -7,7 +7,8 @@ import { CodeBlock } from "../../../components/CodeBlock";
 import { Field, TextInput } from "../../../components/Field";
 import { InfoTip } from "../../../components/InfoTip";
 import { StatusBanner } from "../../../components/StatusBanner";
-import { UserSearchInput } from "../../../components/UserSelect";
+import { UserSearchInput, userSearchFieldHint } from "../../../components/UserSelect";
+import type { UserOption } from "../../../components/UserCombobox";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import type { QueryTestResult } from "../../../lib/domain";
@@ -17,6 +18,7 @@ import type { QueryTestRequest } from "./types";
 export function VerifyStep({ appKey, onBack, onContinue }: { appKey: string; onBack: () => void; onContinue: () => void }) {
   const { t } = useI18n();
   const [userId, setUserId] = useState("");
+  const [resolvedUser, setResolvedUser] = useState<UserOption | null>(null);
   const [token, setToken] = useState("");
   const [result, setResult] = useState<QueryTestResult | null>(null);
   const requestIdRef = useRef(0);
@@ -52,13 +54,18 @@ export function VerifyStep({ appKey, onBack, onContinue }: { appKey: string; onB
   return (
     <StepPanel title={t("wizard.verify.title")} description={t("wizard.verify.description")}>
       <div className="grid max-w-3xl items-end gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-        <Field label={t("wizard.verify.userId")} labelExtra={<InfoTip text={t("wizard.verify.userIdHint")} />}>
+        <Field
+          label={t("wizard.verify.userId")}
+          labelExtra={<InfoTip text={t("wizard.verify.userIdHint")} />}
+          hint={userSearchFieldHint(resolvedUser, t, t("userSelect.searchHint"))}
+        >
           <UserSearchInput
             value={userId}
             onChange={(value) => {
               setUserId(value);
               invalidateResult();
             }}
+            onResolvedOptionChange={setResolvedUser}
           />
         </Field>
         <Field label={t("wizard.verify.token")}>
