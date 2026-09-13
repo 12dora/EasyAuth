@@ -4,8 +4,8 @@ import { AppTable, type ColumnsType } from "../../../components/antd/AppTable";
 import {
   RowActionButton,
   actionsColumn,
+  activeStatusColumn,
   dateTimeColumn,
-  statusColumn,
   textColumn,
 } from "../../../components/antd/columns";
 import { useI18n } from "../../../i18n/I18nProvider";
@@ -70,16 +70,9 @@ function templateColumns(t: Translator, actions: TemplateRowActions): ColumnsTyp
       }),
       sorter: (a: OnboardingTemplateRow, b: OnboardingTemplateRow) => a.items.length - b.items.length,
     },
-    statusColumn<OnboardingTemplateRow>({
-      key: "status",
-      title: t("common.status"),
-      getValue: (template) => (template.is_active ? "active" : "inactive"),
-      options: [
-        { value: "active", label: t("common.enabled"), tone: "evergreen" },
-        { value: "inactive", label: t("common.disabled"), tone: "neutral" },
-      ],
-      sorter: true,
-      width: 120,
+    activeStatusColumn<OnboardingTemplateRow>({
+      t,
+      getActive: (template) => template.is_active,
     }),
     dateTimeColumn<OnboardingTemplateRow>({ key: "updated_at", title: t("common.updatedAt") }),
     actionsColumn<OnboardingTemplateRow>({

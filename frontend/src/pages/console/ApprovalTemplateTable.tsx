@@ -5,8 +5,8 @@ import {
   MONO_TEXT_CLASS,
   RowActionButton,
   actionsColumn,
+  activeStatusColumn,
   dateTimeColumn,
-  statusColumn,
   textColumn,
 } from "../../components/antd/columns";
 import { Badge } from "../../components/Badge";
@@ -64,16 +64,9 @@ function templateColumns(t: Translator, actions: ApprovalTemplateRowActions): Co
       sorter: true,
     }),
     appColumn(t),
-    statusColumn<ApprovalTemplateItem>({
-      key: "status",
-      title: t("common.status"),
-      getValue: (template) => (template.is_active ? "active" : "inactive"),
-      options: [
-        { value: "active", label: t("common.enabled"), tone: "evergreen" },
-        { value: "inactive", label: t("common.disabled"), tone: "neutral" },
-      ],
-      sorter: true,
-      width: 120,
+    activeStatusColumn<ApprovalTemplateItem>({
+      t,
+      getActive: (template) => template.is_active,
     }),
     dateTimeColumn<ApprovalTemplateItem>({ key: "updated_at", title: t("common.updatedAt") }),
     actionsColumn<ApprovalTemplateItem>({

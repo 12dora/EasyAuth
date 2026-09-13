@@ -17,9 +17,9 @@ import {
   RowActionButton,
   RowActionLink,
   actionsColumn,
+  activeStatusColumn,
   dateTimeColumn,
   serverSortColumn,
-  statusColumn,
   textColumn,
 } from "../../components/antd/columns";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
@@ -139,15 +139,10 @@ export function ConsoleTeamList() {
         sort,
       ),
       serverSortColumn(
-        statusColumn<TeamSummary>({
-          key: "status",
-          title: t("common.status"),
-          getValue: (team) => (team.is_active ? "active" : "inactive"),
+        activeStatusColumn<TeamSummary>({
+          t,
+          getActive: (team) => team.is_active,
           filter: false,
-          options: [
-            { value: "active", label: t("common.enabled"), tone: "evergreen" },
-            { value: "inactive", label: t("common.disabled"), tone: "neutral" },
-          ],
           width: 110,
         }),
         sort,

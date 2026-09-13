@@ -1,14 +1,12 @@
 import {
   dateRangeFilter,
-  textFilter,
-  type ColumnType,
   type ColumnsType,
   type ServerSortState,
 } from "../../../components/antd/AppTable";
 import {
-  MONO_TEXT_CLASS,
   RowActionButton,
   actionsColumn,
+  appColumn,
   dateTimeColumn,
   personColumn,
   serverColumn,
@@ -162,37 +160,6 @@ function auditColumns(
 }
 
 /**
- * 应用列: 展示名(`别名 (技术名)`)在上、app_key 在下。
- *
- * 与 userColumn 同构 —— 管理员按名字找应用, 但排查问题时又要能一眼读到 key,
- * 因此两行都给, 而不是只留一个裸 key。筛选仍按 app_key 走服务端。
- */
-function appColumn<T>({
-  getAppKey,
-  getDisplayName,
-  title,
-  width = 200,
-}: {
-  getAppKey: (record: T) => string;
-  getDisplayName: (record: T) => string;
-  title: string;
-  width?: number;
-}): ColumnType<T> {
-  return {
-    key: "app_key",
-    title,
-    width,
-    render: (_value: unknown, record: T) => (
-      <div className="flex min-w-0 flex-col gap-1">
-        <strong className="truncate">{getDisplayName(record)}</strong>
-        <code className={`${MONO_TEXT_CLASS} truncate`}>{getAppKey(record)}</code>
-      </div>
-    ),
-    ...textFilter<T>("app_key", { getValue: getAppKey }),
-  };
-}
-
-/**
  * 授权明细列。
  *
  * 行由 `parseAccessGrantRow` 按后端共享序列化器解析, 因此这里的字段都是必填的:
@@ -227,9 +194,11 @@ export function accessGrantColumns(
     serverSortColumn(
       serverColumn(
         appColumn<AccessGrantRow>({
+          key: "app_key",
           title: t("common.app"),
           getDisplayName: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
           getAppKey: (row) => row.app_key,
+          filter: true,
         }),
         filters.app_key,
       ),
@@ -330,9 +299,11 @@ function accessRequestColumns(
     serverSortColumn(
       serverColumn(
         appColumn<OperationRow>({
+          key: "app_key",
           title: t("common.app"),
           getDisplayName: operationAppDisplayName,
           getAppKey: (row) => row.app_key ?? "",
+          filter: true,
         }),
         filters.app_key,
       ),

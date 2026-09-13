@@ -12,9 +12,9 @@ import {
   type ColumnsType,
 } from "../../components/antd/AppTable";
 import {
-  MONO_TEXT_CLASS,
   RowActionButton,
   actionsColumn,
+  appColumn,
   serverSortColumn,
   textColumn,
 } from "../../components/antd/columns";
@@ -125,17 +125,13 @@ function PortalGrantSection({
       // 排序在后端(ordering=app_key): 原来挂在这列上的 localeCompare 只会重排当前页,
       // 表头写着按应用排序, 实际只是把这 20 行内部换了个顺序。
       serverSortColumn(
-        {
+        appColumn<PortalGrantRow>({
           key: "app",
           title: t("common.app"),
           width: 200,
-          render: (_value: unknown, row: PortalGrantRow) => (
-            <div className="flex min-w-0 flex-col gap-1">
-              <strong className="truncate">{formatAppDisplayName({ name: row.app_name, alias: row.app_alias })}</strong>
-              <code className={MONO_TEXT_CLASS}>{row.app_key ?? "-"}</code>
-            </div>
-          ),
-        },
+          getDisplayName: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
+          getAppKey: (row) => row.app_key ?? "-",
+        }),
         sort,
       ),
       serverSortColumn(

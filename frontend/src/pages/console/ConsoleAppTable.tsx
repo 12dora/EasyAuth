@@ -11,12 +11,13 @@ import {
   RowActionButton,
   RowActionLink,
   actionsColumn,
+  activeStatusColumn,
+  appColumn,
   dateTimeColumn,
   serverColumn,
   serverSortColumn,
   statusColumn,
   peopleColumn,
-  userColumn,
 } from "../../components/antd/columns";
 import { useI18n } from "../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
@@ -32,8 +33,6 @@ export interface AppRowActions {
   onNavigate: (path: string) => void;
 }
 
-/** 后端 `_filter_app_status` 只认 active / inactive 两个值。 */
-const APP_STATUS_VALUES = ["active", "inactive"] as const;
 /** configuration_readiness 的三个状态; 后端不支持按它过滤, 因此只做展示。 */
 const READINESS_VALUES = ["ready", "warning", "blocking"] as const;
 
@@ -85,11 +84,11 @@ function appColumns(
   return [
     // 应用名 + app_key 两行, 与成员单元格同一套排版; 排序按后端默认序的 app_key。
     serverSortColumn(
-      userColumn<AppSummary>({
+      appColumn<AppSummary>({
         key: "app",
         title: t("appList.column.app"),
-        getName: (app) => formatAppDisplayName(app),
-        getUserId: (app) => app.app_key,
+        getDisplayName: (app) => formatAppDisplayName(app),
+        getAppKey: (app) => app.app_key,
       }),
       sort,
     ),
@@ -125,16 +124,9 @@ function appColumns(
     // 不给用户多选却只有一个生效的错觉。
     serverSortColumn(
       serverColumn(
-        statusColumn<AppSummary>({
-          key: "status",
-          title: t("common.status"),
-          getValue: (app) => (app.is_active ? "active" : "inactive"),
-          options: APP_STATUS_VALUES.map((status) => ({
-            value: status,
-            label: status === "active" ? t("common.enabled") : t("common.disabled"),
-            tone: status === "active" ? "evergreen" : "neutral",
-          })),
-          width: 120,
+        activeStatusColumn<AppSummary>({
+          t,
+          getActive: (app) => app.is_active,
         }),
         filters.status,
       ),

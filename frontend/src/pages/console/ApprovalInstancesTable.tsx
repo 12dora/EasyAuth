@@ -9,10 +9,9 @@ import {
   type ColumnsType,
   type ServerSortState,
 } from "../../components/antd/AppTable";
-import { textFilter } from "../../components/antd/AppTable";
 import {
-  MONO_TEXT_CLASS,
   RowActionButton,
+  appColumn,
   dateTimeColumn,
   serverColumn,
   serverSortColumn,
@@ -78,18 +77,14 @@ function instanceColumns(
     // 应用按展示名(别名 + 技术名)呈现, app_key 退到第二行: 筛选与排序仍按 app_key 走后端。
     serverSortColumn(
       serverColumn(
-        {
+        appColumn<ApprovalInstanceRow>({
           key: "app_key",
           title: t("approvalInstances.column.app"),
           width: 190,
-          render: (_value: unknown, row: ApprovalInstanceRow) => (
-            <div className="flex min-w-0 flex-col gap-1">
-              <strong className="truncate">{formatAppDisplayName({ name: row.app_name, alias: row.app_alias })}</strong>
-              <code className={`${MONO_TEXT_CLASS} truncate`}>{row.app_key}</code>
-            </div>
-          ),
-          ...textFilter<ApprovalInstanceRow>("app_key", { getValue: (row) => row.app_key }),
-        },
+          getDisplayName: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
+          getAppKey: (row) => row.app_key,
+          filter: true,
+        }),
         filters.app_key,
       ),
       sort,

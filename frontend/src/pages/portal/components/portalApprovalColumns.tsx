@@ -2,9 +2,9 @@ import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionD
 import { Badge } from "../../../components/Badge";
 import type { ColumnsType, ColumnType, ServerSortState } from "../../../components/antd/AppTable";
 import {
-  MONO_TEXT_CLASS,
   RowActionButton,
   actionsColumn,
+  appColumn,
   dateTimeColumn,
   personColumn,
   serverSortColumn,
@@ -78,19 +78,13 @@ function requestColumns(t: Translator, sort: ServerSortState): ColumnsType<Porta
       sort,
     ),
     serverSortColumn(
-      {
+      appColumn<PortalApprovalRow>({
         key: "app",
         title: t("common.app"),
         width: 160,
-        render: (_value: unknown, approval: PortalApprovalRow) => (
-          <div className="flex min-w-0 flex-col gap-1">
-            <strong className="truncate">
-              {formatAppDisplayName({ name: approval.app_name, alias: approval.app_alias })}
-            </strong>
-            <code className={MONO_TEXT_CLASS}>{approval.app_key}</code>
-          </div>
-        ),
-      },
+        getDisplayName: (approval) => formatAppDisplayName({ name: approval.app_name, alias: approval.app_alias }),
+        getAppKey: (approval) => approval.app_key,
+      }),
       sort,
     ),
     serverSortColumn(

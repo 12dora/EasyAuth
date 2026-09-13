@@ -218,6 +218,38 @@ export function statusColumn<T>({
   };
 }
 
+/**
+ * 启用/停用状态列。工作区、应用列表、团队、模板表共用这一份徽章与筛选项。
+ */
+export function activeStatusColumn<T>({
+  filter = true,
+  getActive,
+  key = "status",
+  sorter = true,
+  t,
+  width = 120,
+}: {
+  t: Translator;
+  getActive: (record: T) => boolean | undefined;
+  key?: string;
+  width?: number;
+  filter?: boolean;
+  sorter?: boolean;
+}): ColumnType<T> {
+  return statusColumn<T>({
+    filter,
+    getValue: (record) => (getActive(record) ? "active" : "inactive"),
+    key,
+    options: [
+      { value: "active", label: t("common.enabled"), tone: "evergreen" },
+      { value: "inactive", label: t("common.disabled"), tone: "neutral" },
+    ],
+    sorter,
+    title: t("common.status"),
+    width,
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* 时间列                                                              */
 /* ------------------------------------------------------------------ */
@@ -587,6 +619,37 @@ function PersonStack({ person, t }: { person: PersonRef; t: Translator }) {
 function UserColumnTitle() {
   const { t } = useI18n();
   return <>{t("table.column.user")}</>;
+}
+
+export interface AppColumnConfig<T> {
+  key?: string;
+  title: ReactNode;
+  getDisplayName: (record: T) => string;
+  getAppKey: (record: T) => string | null | undefined;
+  filter?: boolean;
+  width?: number;
+}
+
+/**
+ * 应用列: 展示名在上、app_key 等宽在下, 截断后悬停才出全文。
+ * 人员列不要走这里。
+ */
+export function appColumn<T>({
+  filter = false,
+  getAppKey,
+  getDisplayName,
+  key = "app",
+  title,
+  width = 200,
+}: AppColumnConfig<T>): ColumnType<T> {
+  return userColumn<T>({
+    filter,
+    getName: getDisplayName,
+    getUserId: (record) => getAppKey(record) ?? "",
+    key,
+    title,
+    width,
+  });
 }
 
 /* ------------------------------------------------------------------ */
