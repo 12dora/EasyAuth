@@ -863,6 +863,40 @@ describe("OperationsPage", () => {
     });
   });
 
+  test("改其他筛选时未提交的用户搜索不会被 URL 同步冲掉", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        return jsonResponse({ data: [], pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 1 } });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage("access-grants");
+    const search = await screen.findByPlaceholderText("搜索姓名 / 拼音 / 用户 ID");
+    await user.type(search, "张三");
+    expect(search).toHaveValue("张三");
+    expect(screen.getByTestId("location-search")).not.toHaveTextContent("user_query");
+
+    await user.click(screen.getByRole("checkbox", { name: "包含历史版本" }));
+
+    expect(search).toHaveValue("张三");
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).toHaveTextContent("user_query");
+      expect(screen.getByTestId("location-search")).toHaveTextContent("include_history=1");
+    });
+    expect(search).toHaveValue("张三");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/user_query=.*current_only=false|current_only=false.*user_query=/),
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+  });
+
   test("撤销目标不存在时显示冲突并刷新授权列表", async () => {
     document.body.dataset.currentUserRole = "admin";
     let listCalls = 0;

@@ -1,5 +1,5 @@
 import { Activity, RefreshCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { DateRangeControl } from "../../components/antd/AppTable";
@@ -187,18 +187,34 @@ function GrantFilters({
   const { t } = useI18n();
   const urlQuery = searchParams.get(USER_QUERY_PARAM) ?? "";
   const [userQuery, setUserQuery] = useState(urlQuery);
+  // 去抖未提交时不要用 URL 回写输入, 否则改其他筛选会丢掉正在输入的关键字。
+  const dirtyRef = useRef(false);
+  const debounceTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
+    if (dirtyRef.current) {
+      return;
+    }
     setUserQuery(urlQuery);
   }, [urlQuery]);
 
   useEffect(() => {
     const trimmed = userQuery.trim();
     if (trimmed === urlQuery) {
+      dirtyRef.current = false;
       return;
     }
-    const timer = window.setTimeout(() => onChange(USER_QUERY_PARAM, trimmed), 250);
-    return () => window.clearTimeout(timer);
+    dirtyRef.current = true;
+    debounceTimerRef.current = window.setTimeout(() => {
+      debounceTimerRef.current = undefined;
+      onChange(USER_QUERY_PARAM, trimmed);
+    }, 250);
+    return () => {
+      if (debounceTimerRef.current !== undefined) {
+        window.clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = undefined;
+      }
+    };
   }, [onChange, urlQuery, userQuery]);
 
   return (
@@ -209,7 +225,10 @@ function GrantFilters({
         className="w-64"
         placeholder={t("console.operations.userQueryPlaceholder")}
         value={userQuery}
-        onChange={(event) => setUserQuery(event.currentTarget.value)}
+        onChange={(event) => {
+          dirtyRef.current = true;
+          setUserQuery(event.currentTarget.value);
+        }}
       />
       <DateRangeControl
         ariaLabel={t("console.operations.grants.createdRange")}
