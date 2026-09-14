@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from http import HTTPStatus
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
+from easyauth.accounts.authentik_provisioning import ensure_user_mirror_for_permission_query
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, build_error_response
 from easyauth.api.permission_query_auth import (
@@ -29,6 +30,9 @@ from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceeded
 from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.grants.query import PermissionSnapshot, resolve_user_permissions
+
+if TYPE_CHECKING:
+    from easyauth.audit.models import JsonObject
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +64,7 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
     if app is None:
         # 凭据校验后 App 行被并发删除; 按认证失败处理而非 500。
         return _authentication_failed_response()
+    provisioned = ensure_user_mirror_for_permission_query(user_id)
     try:
         snapshot = resolve_user_permissions(user=user_id, app=app)
     except ManagedUsersResolutionUnavailableError as error:
@@ -99,7 +104,7 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
             status=HTTPStatus.INTERNAL_SERVER_ERROR,
         )
 
-    _record_permission_query(principal=principal, snapshot=snapshot)
+    _record_permission_query(principal=principal, snapshot=snapshot, provisioned=provisioned)
     return JsonResponse(serializer.data, status=HTTPStatus.OK)
 
 
@@ -169,7 +174,25 @@ def _permission_query_expires_at(snapshot: PermissionSnapshot) -> datetime:
     return min(ttl_expires_at, *membership_expirations)
 
 
-def _record_permission_query(*, principal: AppPrincipal, snapshot: PermissionSnapshot) -> None:
+def _record_permission_query(
+    *,
+    principal: AppPrincipal,
+    snapshot: PermissionSnapshot,
+    provisioned: bool,
+) -> None:
+    metadata: JsonObject = {
+        "app_key": snapshot.app_key,
+        "user_id": snapshot.user_id,
+        "group_count": len(snapshot.groups),
+        "grant_count": len(snapshot.grants),
+        "grant_version": snapshot.grant_version,
+        "catalog_version": snapshot.catalog_version,
+        "snapshot_version": snapshot.snapshot_version,
+        "credential_type": principal.credential_type,
+        "credential_id": principal.credential_id,
+    }
+    if provisioned:
+        metadata["provisioned"] = True
     _ = AuditService.record(
         AuditRecord(
             actor_type="app",
@@ -177,17 +200,7 @@ def _record_permission_query(*, principal: AppPrincipal, snapshot: PermissionSna
             action=PERMISSION_QUERY_EVENT,
             target_type=PERMISSION_QUERY_TARGET_TYPE,
             target_id=f"{snapshot.user_id}:{snapshot.app_key}",
-            metadata={
-                "app_key": snapshot.app_key,
-                "user_id": snapshot.user_id,
-                "group_count": len(snapshot.groups),
-                "grant_count": len(snapshot.grants),
-                "grant_version": snapshot.grant_version,
-                "catalog_version": snapshot.catalog_version,
-                "snapshot_version": snapshot.snapshot_version,
-                "credential_type": principal.credential_type,
-                "credential_id": principal.credential_id,
-            },
+            metadata=metadata,
         ),
     )
 

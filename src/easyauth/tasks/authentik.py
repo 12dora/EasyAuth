@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from celery import shared_task
 
+from easyauth.accounts.authentik_provisioning import mirror_missing_authentik_users
 from easyauth.accounts.services import AuthentikSyncService
+from easyauth.integrations.authentik.admin_client import (
+    AuthentikAdminClient,
+    AuthentikAdminNotConfiguredError,
+)
 from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
     AuthentikDirectoryError,
@@ -16,6 +22,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from easyauth.integrations.authentik.payloads import AuthentikPayloadInput
+
+logger = logging.getLogger(__name__)
 
 
 class AuthentikPayloadSource(Protocol):
@@ -65,7 +73,7 @@ def sync_authentik_users_from_source(
 )
 def sync_dingtalk_directory_task() -> dict[str, int]:
     result = sync_authentik_dingtalk_directory(AuthentikDirectoryClient.from_settings())
-    return {
+    counts = {
         "department_count": result.department_count,
         "user_count": result.user_count,
         "org_context_count": result.org_context_count,
@@ -79,3 +87,14 @@ def sync_dingtalk_directory_task() -> dict[str, int]:
         "org_fetch_failed_count": result.org_fetch_failed_count,
         "offboarding_deferred_count": result.offboarding_deferred_count,
     }
+    try:
+        client = AuthentikAdminClient.from_settings()
+    except AuthentikAdminNotConfiguredError:
+        logger.warning("Authentik 管理 API 未配置, 跳过 UserMirror 补齐。")
+        return counts
+    mirrored = mirror_missing_authentik_users(client)
+    counts["scanned"] = mirrored.scanned
+    counts["created"] = mirrored.created
+    counts["skipped_no_directory_identity"] = mirrored.skipped_no_directory_identity
+    counts["skipped_existing"] = mirrored.skipped_existing
+    return counts
