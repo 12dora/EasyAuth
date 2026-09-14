@@ -444,7 +444,7 @@ def _permanent_grant(user: UserMirror, app: App) -> AccessGrant:
     return grant
 
 
-def test_first_login_of_bound_active_user_schedules_department_grant_reconcile() -> None:
+def test_first_login_of_bound_active_user_does_not_schedule_when_scoped_reconcile_runs() -> None:
     payload: AuthentikPayloadInput = {
         "user": {
             "uid": "s10-first-login-dept-reconcile",
@@ -468,10 +468,10 @@ def test_first_login_of_bound_active_user_schedules_department_grant_reconcile()
     with TestCase.captureOnCommitCallbacks(execute=True):
         created = AuthentikSyncService.sync_payload(payload)
     assert created.created is True
-    assert events.count() == 1
+    # 锁空闲时同步跑完单用户对账, 不再入队全量。本用例无部门策略, 对账为空操作。
+    assert events.count() == 0
 
-    # 同一用户再次同步(普通登录)不再触发对账。
     with TestCase.captureOnCommitCallbacks(execute=True):
         updated = AuthentikSyncService.sync_payload(payload)
     assert updated.created is False
-    assert events.count() == 1
+    assert events.count() == 0

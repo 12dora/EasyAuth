@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Final, cast, final
 
@@ -11,13 +12,18 @@ from easyauth.accounts.models import UserMirror
 from easyauth.accounts.status import UserStatus, is_non_active_status
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.connectors.dispatch import dispatch_user_offboarded
-from easyauth.grants.department_reconcile import schedule_department_grant_reconcile
+from easyauth.grants.department_reconcile import (
+    reconcile_department_grants_for_user,
+    schedule_department_grant_reconcile,
+)
 from easyauth.grants.services import GrantService
 from easyauth.integrations.authentik.payloads import (
     AuthentikPayloadInput,
     AuthentikUserProfile,
     parse_authentik_payload,
 )
+
+logger = logging.getLogger(__name__)
 
 AUTHENTIK_DEPARTURE_REASON: Final = "authentik_departure"
 
@@ -49,14 +55,17 @@ class AuthentikSyncService:
                 # 连接器离职快路径(秒级 block); 只在新检出离职时触发,
                 # 避免周期目录同步对既有离职用户反复出站调用。
                 dispatch_user_offboarded(upsert.user)
-            if _should_reconcile_department_grants(upsert):
-                # 首次登录建档或重新启用的在职员工, 立即补齐部门预授权, 不等下一轮目录同步。
-                schedule_department_grant_reconcile(trigger="user-sync")
-            return AuthentikSyncResult(
+            should_reconcile = _should_reconcile_department_grants(upsert)
+            result = AuthentikSyncResult(
                 user=upsert.user,
                 created=upsert.created,
                 revoked_count=revoked_count,
             )
+        if should_reconcile:
+            # 用户行已提交到当前连接可见; 调用方可能仍处于外层事务, 因此不走 on_commit,
+            # 以便同一请求随后的权限查询能读到刚物化的部门预授权。
+            _reconcile_or_schedule_department_grants(upsert.user)
+        return result
 
     @staticmethod
     def apply_directory_status(user: UserMirror, status: UserStatus) -> AuthentikSyncResult:
@@ -73,7 +82,11 @@ class AuthentikSyncService:
             if _should_record_departure_event(upsert=upsert, revoked_count=revoked_count):
                 _record_departure_event(locked, revoked_count=revoked_count)
                 dispatch_user_offboarded(locked)
-            return AuthentikSyncResult(user=locked, created=False, revoked_count=revoked_count)
+            should_reconcile = _should_reconcile_department_grants(upsert)
+            result = AuthentikSyncResult(user=locked, created=False, revoked_count=revoked_count)
+        if should_reconcile:
+            _reconcile_or_schedule_department_grants(locked)
+        return result
 
 
 def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
@@ -134,6 +147,15 @@ def _should_reconcile_department_grants(upsert: _UserUpsertResult) -> bool:
     if is_non_active_status(user.status) or not has_directory_identity(user):
         return False
     return upsert.created or upsert.was_non_active
+
+
+def _reconcile_or_schedule_department_grants(user: UserMirror) -> None:
+    # 对账失败不得回滚用户建档; 锁繁忙时 scoped 入口已入队全量对账。
+    try:
+        _ = reconcile_department_grants_for_user(user)
+    except Exception:
+        logger.exception("用户 %s 的部门预授权对账失败, 回退到全量对账", user.id)
+        schedule_department_grant_reconcile(trigger="user-sync")
 
 
 def _revoke_current_grants_for_departed_user(user: UserMirror) -> int:
