@@ -239,6 +239,74 @@ def test_s10_parse_departed_attribute_overrides_active_flag() -> None:
     assert profile.status == "departed"
 
 
+def test_s10_parse_payload_treats_empty_optional_strings_as_absent() -> None:
+    payload: AuthentikPayloadInput = {
+        "user": {
+            "uid": "s10-empty-optional",
+            "name": "",
+            "email": "",
+            "attributes": {
+                "department": "",
+                "status": "",
+                "avatar": "",
+                "dingtalk": {
+                    "source_slug": "dingtalk",
+                    "corp_id": "corp-1",
+                    "user_id": "user-1",
+                    "union_id": "",
+                    "job_number": "",
+                    "name": "钉钉陈柠",
+                    "nick": "",
+                    "avatar": "",
+                    "title": "",
+                },
+            },
+        },
+        "is_active": True,
+    }
+
+    profile = parse_authentik_payload(payload)
+
+    assert profile.authentik_user_id == "s10-empty-optional"
+    assert profile.name == "钉钉陈柠"
+    assert profile.email == ""
+    assert profile.department == ""
+    assert profile.status == "active"
+    assert profile.dingtalk_union_id == ""
+    assert profile.employee_number == ""
+    assert profile.avatar_url == ""
+
+
+@pytest.mark.parametrize(
+    ("identity_field", "error_field"),
+    [
+        ("source_slug", "user.attributes.dingtalk.source_slug"),
+        ("corp_id", "user.attributes.dingtalk.corp_id"),
+        ("user_id", "user.attributes.dingtalk.user_id"),
+    ],
+)
+def test_s10_parse_payload_rejects_empty_required_dingtalk_identity(
+    identity_field: str,
+    error_field: str,
+) -> None:
+    dingtalk = {
+        "source_slug": "dingtalk",
+        "corp_id": "corp-1",
+        "user_id": "user-1",
+        identity_field: "",
+    }
+    payload: AuthentikPayloadInput = {
+        "user": {
+            "uid": "s10-empty-identity",
+            "attributes": {"dingtalk": dingtalk},
+        },
+        "is_active": True,
+    }
+
+    with pytest.raises(AuthentikPayloadError, match=error_field):
+        _ = parse_authentik_payload(payload)
+
+
 def test_s10_parse_payload_rejects_empty_payload_without_subject() -> None:
     # Given
     payload: AuthentikPayloadInput = {}

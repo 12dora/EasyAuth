@@ -142,9 +142,14 @@ def _parse_section(
     key: Literal["user", "context"],
 ) -> AuthentikPayloadSection:
     parsed: AuthentikPayloadSection = {}
-    for field in ("uid", "name", "email", "sub"):
+    for field in ("uid", "sub"):
         if field in section:
             parsed[field] = _required_string(section[field], f"{key}.{field}")
+    for field in ("name", "email"):
+        if field in section:
+            optional = _optional_nonempty_string(section[field], f"{key}.{field}")
+            if optional is not None:
+                parsed[field] = optional
     if "attributes" in section:
         parsed["attributes"] = _parse_attributes(section["attributes"], f"{key}.attributes")
     return parsed
@@ -161,9 +166,16 @@ def _parse_attributes(
     match value:
         case dict() as attributes:
             parsed: AuthentikAttributes = {}
-            for field in ("uid", "department", "status"):
+            if "uid" in attributes:
+                parsed["uid"] = _required_string(attributes["uid"], f"{field_name}.uid")
+            for field in ("department", "status"):
                 if field in attributes:
-                    parsed[field] = _required_string(attributes[field], f"{field_name}.{field}")
+                    optional = _optional_nonempty_string(
+                        attributes[field],
+                        f"{field_name}.{field}",
+                    )
+                    if optional is not None:
+                        parsed[field] = optional
             if "avatar" in attributes:
                 parsed["avatar"] = _optional_nullable_string(
                     attributes["avatar"],
@@ -257,6 +269,14 @@ def _required_string(value: AuthentikPayloadValue, field_name: str) -> str:
             raise AuthentikPayloadError(field_name, "must be a string")
 
 
+def _optional_nonempty_string(value: AuthentikPayloadValue, field_name: str) -> str | None:
+    match value:
+        case str() as string_value:
+            return None if string_value == "" else string_value
+        case _:
+            raise AuthentikPayloadError(field_name, "must be a string")
+
+
 def _first_string(
     user: AuthentikPayloadSection,
     context: AuthentikPayloadSection,
@@ -280,17 +300,17 @@ def _parse_dingtalk(
     match value:
         case dict() as attributes:
             parsed: AuthentikDingTalkAttributes = {}
-            for field in (
-                "source_slug",
-                "corp_id",
-                "user_id",
-                "union_id",
-                "job_number",
-                "name",
-                "nick",
-            ):
+            for field in ("source_slug", "corp_id", "user_id"):
                 if field in attributes:
                     parsed[field] = _required_string(attributes[field], f"{field_name}.{field}")
+            for field in ("union_id", "job_number", "name", "nick"):
+                if field in attributes:
+                    optional = _optional_nonempty_string(
+                        attributes[field],
+                        f"{field_name}.{field}",
+                    )
+                    if optional is not None:
+                        parsed[field] = optional
             if "avatar" in attributes:
                 parsed["avatar"] = _optional_nullable_string(
                     attributes["avatar"],

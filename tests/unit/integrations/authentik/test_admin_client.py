@@ -11,6 +11,7 @@ from easyauth.integrations.authentik.admin_client import (
     AuthentikAdminClient,
     AuthentikAdminError,
     AuthentikAdminPaginationLimitError,
+    AuthentikAdminUserNotFoundError,
 )
 
 if TYPE_CHECKING:
@@ -80,10 +81,33 @@ def _client(*, monotonic: Callable[[], float] | None = None) -> AuthentikAdminCl
     )
 
 
-def _user_page() -> dict[str, object]:
+_USER_UUID = "fdac7e94-a7ab-4311-9b57-436f3a35f3cb"
+_USER_LOOKUP_URL = f"https://authentik.test/api/v3/core/users/?uuid={_USER_UUID}&page_size=2"
+
+
+def _user_page(
+    *,
+    uuid: str = _USER_UUID,
+    pk: int = 7,
+    count: int | None = 1,
+    extra_results: tuple[dict[str, object], ...] = (),
+) -> dict[str, object]:
+    results: list[dict[str, object]] = [{"uuid": uuid, "pk": pk, "uid": "hash-not-sub"}]
+    results.extend(extra_results)
+    pagination: dict[str, object] = {"total_pages": 1, "current": 1, "next": 0}
+    if count is not None:
+        pagination["count"] = count
+    return {"results": results, "pagination": pagination}
+
+
+def _active_user_page(
+    *entries: dict[str, object],
+    current: int,
+    total_pages: int,
+) -> dict[str, object]:
     return {
-        "results": [{"uid": "user-uid", "pk": 7}],
-        "pagination": {"total_pages": 1},
+        "results": list(entries),
+        "pagination": {"current": current, "total_pages": total_pages, "next": 0},
     }
 
 
@@ -123,9 +147,10 @@ def test_disable_user_revokes_every_session_page(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
 
-    result = _client().disable_user_and_revoke_sessions("user-uid")
+    result = _client().disable_user_and_revoke_sessions(_USER_UUID)
 
     assert result.revoked_session_count == _EXPECTED_SESSION_COUNT
+    assert seen_urls[0] == _USER_LOOKUP_URL
     session_list_urls = [url for url in seen_urls if "authenticated_sessions/?" in url]
     assert session_list_urls == [
         "https://authentik.test/api/v3/core/authenticated_sessions/?user=7&page=1&page_size=500",
@@ -163,11 +188,11 @@ def test_user_group_names_by_uid_reads_current_user_detail(
 
     monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
 
-    groups = _client().user_group_names_by_uid("user-uid")
+    groups = _client().user_group_names_by_uid(_USER_UUID)
 
     assert groups == ("Developers", "EasyAuth Admins")
     assert seen_urls == [
-        "https://authentik.test/api/v3/core/users/?page=1&page_size=500",
+        _USER_LOOKUP_URL,
         "https://authentik.test/api/v3/core/users/7/",
     ]
 
@@ -184,7 +209,7 @@ def test_user_group_names_by_uid_rejects_missing_groups(
     monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
 
     with pytest.raises(AuthentikAdminError, match="响应格式"):
-        _ = _client().user_group_names_by_uid("user-uid")
+        _ = _client().user_group_names_by_uid(_USER_UUID)
 
 
 @pytest.mark.parametrize(
@@ -216,20 +241,102 @@ def test_session_revoke_rejects_malformed_envelope(
     monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
 
     with pytest.raises(AuthentikAdminError, match="响应格式"):
-        _ = _client().disable_user_and_revoke_sessions("user-uid")
+        _ = _client().disable_user_and_revoke_sessions(_USER_UUID)
 
 
-def test_user_lookup_distinguishes_pagination_limit_from_not_found(
+def test_get_user_by_uuid_returns_the_core_user_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry = {"uuid": _USER_UUID, "pk": 7, "name": "陈柠", "is_active": True}
+
+    def fake_urlopen(request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        assert request.full_url == _USER_LOOKUP_URL
+        return _json_response(_user_page())
+
+    monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
+
+    found = _client().get_user_by_uuid(_USER_UUID)
+
+    assert found["uuid"] == entry["uuid"]
+    assert found["pk"] == entry["pk"]
+
+
+def test_get_user_by_uuid_raises_not_found_for_empty_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
         _ = timeout
-        return _json_response({"results": [], "pagination": {"total_pages": 41}})
+        return _json_response({"results": [], "pagination": {"count": 0, "total_pages": 1}})
+
+    monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikAdminUserNotFoundError, match="找不到"):
+        _ = _client().get_user_by_uuid(_USER_UUID)
+
+
+def test_get_user_by_uuid_rejects_ambiguous_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    duplicate = {"uuid": _USER_UUID, "pk": 8, "uid": "other-hash"}
+
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _json_response(_user_page(count=2, extra_results=(duplicate,)))
+
+    monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikAdminError, match="多个用户"):
+        _ = _client().get_user_by_uuid(_USER_UUID)
+
+
+def test_iter_active_users_walks_bounded_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    first = {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "pk": 1, "is_active": True}
+    second = {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "pk": 2, "is_active": True}
+    responses = iter(
+        [
+            _json_response(_active_user_page(first, current=1, total_pages=2)),
+            _json_response(_active_user_page(second, current=2, total_pages=2)),
+        ],
+    )
+    seen_urls: list[str] = []
+
+    def fake_urlopen(request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        seen_urls.append(request.full_url)
+        return next(responses)
+
+    monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
+
+    users = list(_client().iter_active_users())
+
+    assert [entry["pk"] for entry in users] == [1, 2]
+    assert seen_urls == [
+        "https://authentik.test/api/v3/core/users/?is_active=true&page=1&page_size=100",
+        "https://authentik.test/api/v3/core/users/?is_active=true&page=2&page_size=100",
+    ]
+
+
+def test_iter_active_users_rejects_missing_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _json_response(
+            _active_user_page({"pk": 1, "is_active": True}, current=1, total_pages=1),
+        )
+
+    monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikAdminError, match="响应格式"):
+        _ = list(_client().iter_active_users())
+
+
+def test_iter_active_users_raises_when_page_bound_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _json_response(_active_user_page(current=1, total_pages=201))
 
     monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
 
     with pytest.raises(AuthentikAdminPaginationLimitError, match="分页超过上限"):
-        _ = _client().disable_user_and_revoke_sessions("user-uid")
+        _ = list(_client().iter_active_users())
 
 
 def test_request_rejects_declared_oversized_response(monkeypatch: pytest.MonkeyPatch) -> None:

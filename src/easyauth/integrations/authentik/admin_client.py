@@ -11,14 +11,17 @@ from urllib.request import Request, urlopen
 from easyauth.applications.integration_settings import authentik_runtime_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from types import TracebackType
 
 ADMIN_API_NOT_CONFIGURED_MESSAGE: Final = "Authentik 管理 API 未配置。"
 ADMIN_API_UNAVAILABLE_MESSAGE: Final = "Authentik 管理 API 暂不可用。"
 USER_NOT_FOUND_MESSAGE: Final = "Authentik 中找不到对应用户。"
-_USERS_PAGE_SIZE: Final = 500
-_MAX_USER_PAGES: Final = 40
+AMBIGUOUS_UUID_LOOKUP_MESSAGE: Final = "Authentik 管理 API 按 uuid 查到多个用户。"
+_SESSION_PAGE_SIZE: Final = 500
+_UUID_LOOKUP_PAGE_SIZE: Final = 2
+_ACTIVE_USERS_PAGE_SIZE: Final = 100
+_MAX_ACTIVE_USER_PAGES: Final = 200
 _MAX_SESSION_PAGES: Final = 40
 _MAX_RESPONSE_BYTES: Final = 1024 * 1024
 _READ_CHUNK_BYTES: Final = 64 * 1024
@@ -104,10 +107,10 @@ class AuthentikAdminClient:
             timeout_seconds=config.timeout_seconds,
         )
 
-    def disable_user_and_revoke_sessions(self, authentik_user_uid: str) -> AccountDisableResult:
-        """按 uid(OIDC sub)禁用 Authentik 账号并吊销其全部会话。"""
+    def disable_user_and_revoke_sessions(self, authentik_user_uuid: str) -> AccountDisableResult:
+        """按 uuid(OIDC sub)禁用 Authentik 账号并吊销其全部会话。"""
         deadline = self._monotonic() + _TOTAL_OPERATION_SECONDS
-        user_pk = self._find_user_pk_by_uid(authentik_user_uid, deadline=deadline)
+        user_pk = _required_user_pk(self._get_user_by_uuid(authentik_user_uuid, deadline=deadline))
         _ = self._request_json(
             "PATCH",
             f"/api/v3/core/users/{user_pk}/",
@@ -121,10 +124,10 @@ class AuthentikAdminClient:
             revoked_session_count=revoked,
         )
 
-    def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
-        """按 uid(OIDC sub)读取 Authentik 当前权威组名。"""
+    def user_group_names_by_uid(self, authentik_user_uuid: str) -> tuple[str, ...]:
+        """按 uuid(OIDC sub)读取 Authentik 当前权威组名。"""
         deadline = self._monotonic() + _TOTAL_OPERATION_SECONDS
-        user_pk = self._find_user_pk_by_uid(authentik_user_uid, deadline=deadline)
+        user_pk = _required_user_pk(self._get_user_by_uuid(authentik_user_uuid, deadline=deadline))
         payload = self._request_json(
             "GET",
             f"/api/v3/core/users/{user_pk}/",
@@ -132,30 +135,43 @@ class AuthentikAdminClient:
         )
         return _user_group_names(payload)
 
-    def _find_user_pk_by_uid(self, uid: str, *, deadline: float) -> int:
-        # uid 是只读散列, core users API 不支持按它过滤; 离职是低频操作,
-        # 分页拉取后本地匹配, 避免为此给 fork 加自定义端点。
+    def get_user_by_uuid(self, sub: str) -> AdminJson:
+        # OIDC sub 与 UserMirror.authentik_user_id 都是核心用户 uuid, 不是 uid 散列。
+        deadline = self._monotonic() + _TOTAL_OPERATION_SECONDS
+        return self._get_user_by_uuid(sub, deadline=deadline)
+
+    def iter_active_users(self) -> Iterator[AdminJson]:
         page = 1
-        while page <= _MAX_USER_PAGES:
+        while page <= _MAX_ACTIVE_USER_PAGES:
             payload = self._request_json(
                 "GET",
                 "/api/v3/core/users/",
-                query={"page": str(page), "page_size": str(_USERS_PAGE_SIZE)},
-                deadline=deadline,
+                query={
+                    "is_active": "true",
+                    "page": str(page),
+                    "page_size": str(_ACTIVE_USERS_PAGE_SIZE),
+                },
             )
-            results = payload.get("results")
-            if not isinstance(results, list):
-                raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-            user_pk = _user_pk_in_results(cast("list[object]", results), uid=uid)
-            if user_pk is not None:
-                return user_pk
+            for entry in _user_results(payload):
+                _ = _required_user_uuid(entry)
+                yield entry
             total_pages = _user_total_pages(payload, current_page=page)
             if page == total_pages:
-                break
+                return
             page += 1
-        else:
-            raise AuthentikAdminPaginationLimitError
-        raise AuthentikAdminUserNotFoundError
+        raise AuthentikAdminPaginationLimitError
+
+    def _get_user_by_uuid(self, sub: str, *, deadline: float) -> AdminJson:
+        payload = self._request_json(
+            "GET",
+            "/api/v3/core/users/",
+            query={"uuid": sub, "page_size": str(_UUID_LOOKUP_PAGE_SIZE)},
+            deadline=deadline,
+        )
+        entry = _exactly_one_user(payload)
+        if _required_user_uuid(entry) != sub:
+            raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+        return entry
 
     def _revoke_sessions(self, user_pk: int, *, deadline: float) -> int:
         # 先完整物化全部页再开始 DELETE; 分页中途失败时不产生“只撤了一半”的假成功。
@@ -169,7 +185,7 @@ class AuthentikAdminClient:
                 query={
                     "user": str(user_pk),
                     "page": str(page),
-                    "page_size": str(_USERS_PAGE_SIZE),
+                    "page_size": str(_SESSION_PAGE_SIZE),
                 },
                 deadline=deadline,
             )
@@ -314,18 +330,51 @@ def _validated_session_next_page(
     return next_page
 
 
-def _user_pk_in_results(results: list[object], *, uid: str) -> int | None:
-    for item in results:
-        if not isinstance(item, dict):
-            raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-        entry = cast("AdminJson", item)
-        entry_uid = entry.get("uid")
-        entry_pk = entry.get("pk")
-        if not isinstance(entry_uid, str) or type(entry_pk) is not int:
-            raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-        if entry_uid == uid:
-            return cast("int", entry["pk"])
-    return None
+def _user_results(payload: AdminJson) -> list[AdminJson]:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    return _mapping_entries(cast("list[object]", results))
+
+
+def _exactly_one_user(payload: AdminJson) -> AdminJson:
+    entries = _user_results(payload)
+    observed = _uuid_lookup_count(payload, result_len=len(entries))
+    if observed == 0:
+        raise AuthentikAdminUserNotFoundError
+    if observed > 1:
+        raise AuthentikAdminError(AMBIGUOUS_UUID_LOOKUP_MESSAGE)
+    if len(entries) != 1:
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    return entries[0]
+
+
+def _uuid_lookup_count(payload: AdminJson, *, result_len: int) -> int:
+    pagination = payload.get("pagination")
+    if pagination is None:
+        return result_len
+    if not isinstance(pagination, dict):
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    count = cast("AdminJson", pagination).get("count")
+    if count is None:
+        return result_len
+    if type(count) is not int or count < 0:
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    return count
+
+
+def _required_user_uuid(entry: AdminJson) -> str:
+    uuid = entry.get("uuid")
+    if not isinstance(uuid, str) or uuid == "":
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    return uuid
+
+
+def _required_user_pk(entry: AdminJson) -> int:
+    pk = entry.get("pk")
+    if type(pk) is not int:
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    return pk
 
 
 def _user_total_pages(payload: AdminJson, *, current_page: int) -> int:
