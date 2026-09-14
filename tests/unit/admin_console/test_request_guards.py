@@ -171,8 +171,8 @@ def _patch_authentik_groups(
     groups: tuple[str, ...],
 ) -> None:
     class FakeAuthentikClient:
-        def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
-            assert authentik_user_uid == "root"
+        def user_group_names_by_uuid(self, authentik_user_uuid: str) -> tuple[str, ...]:
+            assert authentik_user_uuid == "root"
             return groups
 
     monkeypatch.setattr(

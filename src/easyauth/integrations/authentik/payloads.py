@@ -9,6 +9,7 @@ from easyauth.accounts.models import (
     USER_STATUS_DEPARTED,
     USER_STATUS_DISABLED,
 )
+from easyauth.accounts.org_context import primary_department_name
 
 type AuthentikPayloadValue = (
     None
@@ -330,25 +331,12 @@ def _parse_dingtalk_org(
             org_attributes = cast("dict[str, AuthentikPayloadValue]", attributes)
             return {
                 "source_slug": _optional_mapping_string(org_attributes, "source_slug"),
-                "department": _first_department_name(org_attributes.get("departments")),
+                "department": primary_department_name(org_attributes.get("departments")),
                 "manager_userid": _manager_user_id(org_attributes.get("manager")),
                 "name": _optional_mapping_string(org_attributes, "name"),
             }
         case _:
             raise AuthentikPayloadError(field_name, "must be an object")
-
-
-def _first_department_name(value: object) -> str:
-    if not isinstance(value, list):
-        return ""
-    departments = cast("list[object]", value)
-    for item in departments:
-        if isinstance(item, dict):
-            department = cast("dict[str, AuthentikPayloadValue]", item)
-            name = department.get("name")
-            if isinstance(name, str) and name:
-                return name
-    return ""
 
 
 def _manager_user_id(value: object) -> str:

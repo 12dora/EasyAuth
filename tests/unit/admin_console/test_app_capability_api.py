@@ -38,8 +38,8 @@ _AUTHORITY_GROUPS_BY_UID: dict[str, tuple[str, ...]] = {}
 
 
 class _FakeAuthentikAuthority:
-    def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
-        return _AUTHORITY_GROUPS_BY_UID.get(authentik_user_uid, ())
+    def user_group_names_by_uuid(self, authentik_user_uuid: str) -> tuple[str, ...]:
+        return _AUTHORITY_GROUPS_BY_UID.get(authentik_user_uuid, ())
 
 
 @override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))

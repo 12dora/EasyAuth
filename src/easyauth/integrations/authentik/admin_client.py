@@ -124,7 +124,7 @@ class AuthentikAdminClient:
             revoked_session_count=revoked,
         )
 
-    def user_group_names_by_uid(self, authentik_user_uuid: str) -> tuple[str, ...]:
+    def user_group_names_by_uuid(self, authentik_user_uuid: str) -> tuple[str, ...]:
         """按 uuid(OIDC sub)读取 Authentik 当前权威组名。"""
         deadline = self._monotonic() + _TOTAL_OPERATION_SECONDS
         user_pk = _required_user_pk(self._get_user_by_uuid(authentik_user_uuid, deadline=deadline))
@@ -141,6 +141,7 @@ class AuthentikAdminClient:
         return self._get_user_by_uuid(sub, deadline=deadline)
 
     def iter_active_users(self) -> Iterator[AdminJson]:
+        deadline = self._monotonic() + _TOTAL_OPERATION_SECONDS
         page = 1
         while page <= _MAX_ACTIVE_USER_PAGES:
             payload = self._request_json(
@@ -150,7 +151,9 @@ class AuthentikAdminClient:
                     "is_active": "true",
                     "page": str(page),
                     "page_size": str(_ACTIVE_USERS_PAGE_SIZE),
+                    "ordering": "pk",
                 },
+                deadline=deadline,
             )
             for entry in _user_results(payload):
                 _ = _required_user_uuid(entry)

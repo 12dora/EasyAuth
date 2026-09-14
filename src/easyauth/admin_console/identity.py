@@ -83,7 +83,7 @@ def _is_console_superuser(request: HttpRequest, user: UserMirror) -> bool:
     try:
         authority_groups = frozenset(
             _string_values(
-                AuthentikAdminClient.from_settings().user_group_names_by_uid(
+                AuthentikAdminClient.from_settings().user_group_names_by_uuid(
                     user.authentik_user_id,
                 )
             ),

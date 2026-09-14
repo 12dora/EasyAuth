@@ -432,17 +432,17 @@ def _logged_in_console_user(
 
 
 class _FakeAuthentikAuthority:
-    def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
-        return _AUTHENTIK_GROUPS_BY_UID.get(authentik_user_uid, ())
+    def user_group_names_by_uuid(self, authentik_user_uuid: str) -> tuple[str, ...]:
+        return _AUTHENTIK_GROUPS_BY_UID.get(authentik_user_uuid, ())
 
 
 def _mock_authentik_current_groups(
     monkeypatch: pytest.MonkeyPatch,
-    authentik_user_uid: str,
+    authentik_user_uuid: str,
     groups: tuple[str, ...],
 ) -> None:
     _AUTHENTIK_GROUPS_BY_UID.clear()
-    _AUTHENTIK_GROUPS_BY_UID[authentik_user_uid] = groups
+    _AUTHENTIK_GROUPS_BY_UID[authentik_user_uuid] = groups
     monkeypatch.setattr(
         "easyauth.admin_console.identity.AuthentikAdminClient.from_settings",
         lambda: _FakeAuthentikAuthority(),

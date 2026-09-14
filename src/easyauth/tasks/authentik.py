@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
+from urllib.error import URLError
 
 from celery import shared_task
 
@@ -10,6 +11,7 @@ from easyauth.accounts.authentik_provisioning import mirror_missing_authentik_us
 from easyauth.accounts.services import AuthentikSyncService
 from easyauth.integrations.authentik.admin_client import (
     AuthentikAdminClient,
+    AuthentikAdminError,
     AuthentikAdminNotConfiguredError,
 )
 from easyauth.integrations.authentik.directory_client import (
@@ -72,8 +74,10 @@ def sync_authentik_users_from_source(
     acks_late=True,
 )
 def sync_dingtalk_directory_task() -> dict[str, int]:
+    # 先补齐 UserMirror, 再跑目录同步, 使本轮新建的镜像能拿到头像与部门摘要。
+    mirrored_counts = _mirror_missing_authentik_users_counts()
     result = sync_authentik_dingtalk_directory(AuthentikDirectoryClient.from_settings())
-    counts = {
+    return {
         "department_count": result.department_count,
         "user_count": result.user_count,
         "org_context_count": result.org_context_count,
@@ -86,15 +90,24 @@ def sync_dingtalk_directory_task() -> dict[str, int]:
         "revoked_count": result.revoked_count,
         "org_fetch_failed_count": result.org_fetch_failed_count,
         "offboarding_deferred_count": result.offboarding_deferred_count,
+        **mirrored_counts,
     }
+
+
+def _mirror_missing_authentik_users_counts() -> dict[str, int]:
     try:
         client = AuthentikAdminClient.from_settings()
     except AuthentikAdminNotConfiguredError:
         logger.warning("Authentik 管理 API 未配置, 跳过 UserMirror 补齐。")
-        return counts
-    mirrored = mirror_missing_authentik_users(client)
-    counts["scanned"] = mirrored.scanned
-    counts["created"] = mirrored.created
-    counts["skipped_no_directory_identity"] = mirrored.skipped_no_directory_identity
-    counts["skipped_existing"] = mirrored.skipped_existing
-    return counts
+        return {}
+    try:
+        mirrored = mirror_missing_authentik_users(client)
+    except (AuthentikAdminError, URLError) as error:
+        logger.warning("Authentik UserMirror 补齐失败, 继续目录同步: error=%s", error)
+        return {}
+    return {
+        "scanned": mirrored.scanned,
+        "created": mirrored.created,
+        "skipped_no_directory_identity": mirrored.skipped_no_directory_identity,
+        "skipped_existing": mirrored.skipped_existing,
+    }

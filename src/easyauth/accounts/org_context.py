@@ -45,12 +45,12 @@ def parse_org_context(org: object) -> DingTalkOrgSummary:
         source_slug=_string(org_mapping.get("source_slug")),
         corp_id=_string(org_mapping.get("corp_id")),
         user_id=_string(org_mapping.get("user_id")),
-        primary_department_name=_primary_department_name(org_mapping.get("departments")),
+        primary_department_name=primary_department_name(org_mapping.get("departments")),
         manager_user_id=_manager_user_id(org_mapping.get("manager")),
     )
 
 
-def _primary_department_name(value: object) -> str:
+def primary_department_name(value: object) -> str:
     if not isinstance(value, list):
         return ""
     departments = cast("list[object]", value)

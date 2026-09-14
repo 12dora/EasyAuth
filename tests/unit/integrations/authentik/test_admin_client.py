@@ -162,7 +162,7 @@ def test_disable_user_revokes_every_session_page(monkeypatch: pytest.MonkeyPatch
     )
 
 
-def test_user_group_names_by_uid_reads_current_user_detail(
+def test_user_group_names_by_uuid_reads_current_user_detail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     responses = iter(
@@ -188,7 +188,7 @@ def test_user_group_names_by_uid_reads_current_user_detail(
 
     monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
 
-    groups = _client().user_group_names_by_uid(_USER_UUID)
+    groups = _client().user_group_names_by_uuid(_USER_UUID)
 
     assert groups == ("Developers", "EasyAuth Admins")
     assert seen_urls == [
@@ -197,7 +197,7 @@ def test_user_group_names_by_uid_reads_current_user_detail(
     ]
 
 
-def test_user_group_names_by_uid_rejects_missing_groups(
+def test_user_group_names_by_uuid_rejects_missing_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     responses = iter([_json_response(_user_page()), _json_response({})])
@@ -209,7 +209,7 @@ def test_user_group_names_by_uid_rejects_missing_groups(
     monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
 
     with pytest.raises(AuthentikAdminError, match="响应格式"):
-        _ = _client().user_group_names_by_uid(_USER_UUID)
+        _ = _client().user_group_names_by_uuid(_USER_UUID)
 
 
 @pytest.mark.parametrize(
@@ -308,9 +308,47 @@ def test_iter_active_users_walks_bounded_pages(monkeypatch: pytest.MonkeyPatch) 
 
     assert [entry["pk"] for entry in users] == [1, 2]
     assert seen_urls == [
-        "https://authentik.test/api/v3/core/users/?is_active=true&page=1&page_size=100",
-        "https://authentik.test/api/v3/core/users/?is_active=true&page=2&page_size=100",
+        "https://authentik.test/api/v3/core/users/?is_active=true&page=1&page_size=100&ordering=pk",
+        "https://authentik.test/api/v3/core/users/?is_active=true&page=2&page_size=100&ordering=pk",
     ]
+
+
+def test_iter_active_users_shares_one_deadline_across_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "pk": 1, "is_active": True}
+    second = {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "pk": 2, "is_active": True}
+    clock = {"now": 0.0}
+
+    @final
+    class _DeadlineResponse(_Response):
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_value: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            del exc_type, exc_value, traceback
+            clock["now"] = 61.0
+
+    responses = iter(
+        [
+            _DeadlineResponse(dumps(_active_user_page(first, current=1, total_pages=2)).encode()),
+            _DeadlineResponse(dumps(_active_user_page(second, current=2, total_pages=2)).encode()),
+        ],
+    )
+
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return next(responses)
+
+    monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
+
+    def monotonic() -> float:
+        return clock["now"]
+
+    with pytest.raises(AuthentikAdminError, match=OPERATION_TIMEOUT_MESSAGE):
+        _ = list(_client(monotonic=monotonic).iter_active_users())
 
 
 def test_iter_active_users_rejects_missing_uuid(monkeypatch: pytest.MonkeyPatch) -> None:

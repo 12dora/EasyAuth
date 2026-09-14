@@ -53,7 +53,10 @@ def test_s10_parse_payload_maps_dingtalk_summary_fields() -> None:
                     "raw": {"ignored": True},
                 },
                 "dingtalk_org": {
-                    "departments": [{"name": "销售部"}],
+                    "departments": [
+                        {"dept_id": "990739069", "name": "外贸部"},
+                        {"dept_id": "1", "name": "捷发"},
+                    ],
                     "manager": {"user_id": "manager-1", "name": "主管"},
                     "email": "manager@example.test",
                 },
@@ -70,7 +73,7 @@ def test_s10_parse_payload_maps_dingtalk_summary_fields() -> None:
     assert profile.dingtalk_userid == "user-1"
     assert profile.dingtalk_union_id == "union-1"
     assert profile.employee_number == "E001"
-    assert profile.department == "销售部"
+    assert profile.department == "捷发"
     assert profile.manager_userid == "manager-1"
     assert profile.avatar_url == ""
 

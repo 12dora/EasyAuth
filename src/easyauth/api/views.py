@@ -10,7 +10,10 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
-from easyauth.accounts.authentik_provisioning import ensure_user_mirror_for_permission_query
+from easyauth.accounts.authentik_provisioning import (
+    UserProvisionUnavailableError,
+    ensure_user_mirror_for_permission_query,
+)
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, build_error_response
 from easyauth.api.permission_query_auth import (
@@ -50,7 +53,9 @@ _QUERY_RATE_WINDOW_SECONDS: Final = 60
 
 
 @require_http_methods(["GET"])
-def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> JsonResponse:
+def query_user_permissions(  # noqa: PLR0911
+    request: HttpRequest, app_key: str, user_id: str
+) -> JsonResponse:
     match _authenticate_and_throttle(request):
         case AppPrincipal() as principal:
             pass
@@ -64,7 +69,17 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
     if app is None:
         # 凭据校验后 App 行被并发删除; 按认证失败处理而非 500。
         return _authentication_failed_response()
-    provisioned = ensure_user_mirror_for_permission_query(user_id)
+    try:
+        provisioned = ensure_user_mirror_for_permission_query(user_id)
+    except UserProvisionUnavailableError as error:
+        # Authentik 瞬时故障不得返回空快照, 下游会按 300s TTL 缓存成真实无授权。
+        return JsonResponse(
+            build_error_response(ErrorCode.DEPENDENCY_UNAVAILABLE, str(error)),
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+    except Exception:
+        logger.exception("权限查询即时供给失败, 继续查询既有授权: user_id=%s", user_id)
+        provisioned = False
     try:
         snapshot = resolve_user_permissions(user=user_id, app=app)
     except ManagedUsersResolutionUnavailableError as error:

@@ -94,8 +94,8 @@ def _patch_authentik_groups(
     groups: tuple[str, ...],
 ) -> None:
     class FakeAuthentikClient:
-        def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
-            assert authentik_user_uid == authentik_user_id
+        def user_group_names_by_uuid(self, authentik_user_uuid: str) -> tuple[str, ...]:
+            assert authentik_user_uuid == authentik_user_id
             return groups
 
     monkeypatch.setattr(
@@ -106,8 +106,8 @@ def _patch_authentik_groups(
 
 def _patch_authentik_error(monkeypatch: pytest.MonkeyPatch) -> None:
     class RaisingAuthentikClient:
-        def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
-            del authentik_user_uid
+        def user_group_names_by_uuid(self, authentik_user_uuid: str) -> tuple[str, ...]:
+            del authentik_user_uuid
             raise AuthentikAdminError
 
     monkeypatch.setattr(
