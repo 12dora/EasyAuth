@@ -53,9 +53,7 @@ _QUERY_RATE_WINDOW_SECONDS: Final = 60
 
 
 @require_http_methods(["GET"])
-def query_user_permissions(  # noqa: PLR0911
-    request: HttpRequest, app_key: str, user_id: str
-) -> JsonResponse:
+def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> JsonResponse:
     match _authenticate_and_throttle(request):
         case AppPrincipal() as principal:
             pass
@@ -69,25 +67,41 @@ def query_user_permissions(  # noqa: PLR0911
     if app is None:
         # 凭据校验后 App 行被并发删除; 按认证失败处理而非 500。
         return _authentication_failed_response()
-    try:
-        provisioned = ensure_user_mirror_for_permission_query(user_id)
-    except UserProvisionUnavailableError as error:
-        # Authentik 瞬时故障不得返回空快照, 下游会按 300s TTL 缓存成真实无授权。
-        return JsonResponse(
-            build_error_response(ErrorCode.DEPENDENCY_UNAVAILABLE, str(error)),
-            status=HTTPStatus.SERVICE_UNAVAILABLE,
-        )
-    except Exception:
-        logger.exception("权限查询即时供给失败, 继续查询既有授权: user_id=%s", user_id)
-        provisioned = False
+    match _provision_for_query(user_id):
+        case bool() as provisioned:
+            pass
+        case JsonResponse() as response:
+            return response
     try:
         snapshot = resolve_user_permissions(user=user_id, app=app)
     except ManagedUsersResolutionUnavailableError as error:
         # 目录瞬时故障必须显式失败, 下游不能把缺失的 MANAGED_USERS 当成真实撤权。
-        return JsonResponse(
-            build_error_response(ErrorCode.DEPENDENCY_UNAVAILABLE, str(error)),
-            status=HTTPStatus.SERVICE_UNAVAILABLE,
-        )
+        return _dependency_unavailable_response(str(error))
+    return _snapshot_response(principal=principal, snapshot=snapshot, provisioned=provisioned)
+
+
+def _provision_for_query(user_id: str) -> bool | JsonResponse:
+    # 首次出现的 sub 先按 Authentik 建档(含部门预授权); 供给失败不得把有效查询变成 500。
+    try:
+        return ensure_user_mirror_for_permission_query(user_id)
+    except UserProvisionUnavailableError as error:
+        # Authentik 瞬时故障不得返回空快照, 下游会按 300s TTL 缓存成真实无授权。
+        return _dependency_unavailable_response(str(error))
+    except Exception:
+        logger.exception("权限查询即时供给失败, 继续查询既有授权: user_id=%s", user_id)
+        return False
+
+
+def _dependency_unavailable_response(message: str) -> JsonResponse:
+    return JsonResponse(
+        build_error_response(ErrorCode.DEPENDENCY_UNAVAILABLE, message),
+        status=HTTPStatus.SERVICE_UNAVAILABLE,
+    )
+
+
+def _snapshot_response(
+    *, principal: AppPrincipal, snapshot: PermissionSnapshot, provisioned: bool
+) -> JsonResponse:
     expires_at: datetime = _permission_query_expires_at(snapshot)
     groups: list[PermissionQueryGroupPayload] = [
         {"key": group.key, "kind": group.kind, "name": group.name} for group in snapshot.groups
