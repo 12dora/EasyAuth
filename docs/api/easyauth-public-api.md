@@ -124,7 +124,9 @@ credential capability；App owner 必须对每条 credential 显式授予所需 
 | `expires_at` | 下游缓存过期建议时间 |
 | `grants[].resolved` | 当 scope 为 `MANAGED_USERS` 时可能附带解析结果 |
 
-目录瞬时故障时返回 `503 DEPENDENCY_UNAVAILABLE`，下游**不得**把缺失结果当作真实撤权。
+目录瞬时故障或权限查询即时供给遇 Authentik 管理 API 瞬时故障时返回
+`503 DEPENDENCY_UNAVAILABLE`，下游**不得**把缺失结果当作真实撤权。
+用户在 Authentik 中不存在、无钉钉目录身份或载荷无效时返回空快照（对该 `sub` 负缓存 60 秒）。
 
 ---
 

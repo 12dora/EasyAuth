@@ -603,7 +603,7 @@ PUT 不得变更策略所属部门或应用，否则 422。
 
 对账触发：目录同步结束（`trigger=directory-sync`）、策略 CRUD
 （`trigger=policy`）、以及定时 beat（默认 30 分钟）。UserMirror 还会由权限查询即时供给
-或 `dingtalk-directory-sync` 之后的周期镜像创建（`python manage.py mirror_authentik_users`
+或 `dingtalk-directory-sync` **先于**目录同步的周期镜像创建（`python manage.py mirror_authentik_users`
 可运维回填），建档后对账才能把部门预授权物化到「只登录过下游、从未打开门户」的员工。
 查找 Authentik 用户必须用 `?uuid=`（OIDC `sub`），不能用 `uid` 散列。
 首次见到在职钉钉用户时（`AuthentikSyncService.sync_payload` 建档），

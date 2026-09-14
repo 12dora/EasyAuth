@@ -85,12 +85,17 @@ UserMirror 由以下三条路径创建，避免把「只登录过下游、从未
 1. **门户登录**：OIDC 回调 `accounts/auth.py::bind_oidc_session`
 2. **权限查询即时供给**：`GET /api/v1/apps/{app}/users/{sub}/permissions` 在
    `resolve_user_permissions` 之前，若尚无镜像则按 `?uuid=` 拉取核心用户；仅当
-   `attributes.dingtalk` 存在（有目录身份）才 `AuthentikSyncService.sync_payload` 建档。
-   管理 API 未配置、用户不存在或网络错误记警告并保持空快照，对该 `sub` 负缓存 60 秒，
-   避免每次权限查询打爆 Authentik；编程错误与载荷契约破坏仍快速失败。
-3. **周期补齐**：beat `dingtalk-directory-sync`（默认 300 秒）在目录同步之后调用
-   `mirror_missing_authentik_users`，分页遍历 `/api/v3/core/users/?is_active=true`，
+   `attributes.dingtalk` 含非空 `source_slug` / `corp_id` / `user_id` 才
+   `AuthentikSyncService.sync_payload` 建档（建档时同步跑该用户的部门预授权对账）。
+   Authentik 管理 API 瞬时故障（HTTP 5xx、网络/超时）返回 **503 `DEPENDENCY_UNAVAILABLE`**，
+   并设置全局熔断 `authentik-provision-unavailable` 30 秒，避免把空快照交给下游缓存 300 秒；
+   用户不存在、无目录身份、载荷无效或管理 API 未配置则保持空快照，对该 `sub` 负缓存 60 秒。
+   即时供给的数据问题只记错误日志，不得把权限查询打成 500。
+3. **周期补齐**：beat `dingtalk-directory-sync`（默认 300 秒）**先**调用
+   `mirror_missing_authentik_users` 补齐缺失镜像，**再**跑目录同步，使本轮新建行能拿到头像与部门摘要。
+   分页遍历 `/api/v3/core/users/?is_active=true&ordering=pk`，
    为有钉钉目录身份且尚无镜像的用户建档。**不覆盖**已有镜像——画像更新仍由目录同步负责。
+   扫描中途 Authentik 失败只记警告并继续目录同步，不丢本轮目录计数。
 
 无 `attributes.dingtalk` 的账号（`akadmin`、服务账号）不建镜像。运维回填：
 `python manage.py mirror_authentik_users`（打印 `scanned` / `created` /
@@ -208,7 +213,7 @@ sequenceDiagram
 ```text
 1. 认证类解析 Bearer token（静态 token 或 OAuth2 access token）→ AppPrincipal
 2. 校验路径 app_key == AppPrincipal.app_key，否则 403
-3. 若尚无 UserMirror，按 uuid=sub 从 Authentik 即时建档（无目录身份则跳过）
+3. 若尚无 UserMirror，按 uuid=sub 从 Authentik 即时建档（无目录身份则跳过；瞬时故障 503）
 4. resolve_user_permissions() 读 UserMirror、App、AccessGrant 及展开的权限
 5. 过滤 disabled/departed 用户、revoked/expired 授权、过期成员
 6. 解析 MANAGED_USERS（目录故障时显式 503，不返回空集）
@@ -220,7 +225,7 @@ sequenceDiagram
 ### 4.4 离职与目录同步
 
 Authentik 的组织事实通过 `dingtalk-directory-sync`（默认 300 秒）回灌钉钉目录镜像，并在同一拍
-补齐缺失的 UserMirror（见 §3 身份）。钉钉 Stream 事件用于把延迟从"轮询间隔之和"压到秒级，
+**先**补齐缺失的 UserMirror、**再**回灌头像与部门（见 §3 身份）。钉钉 Stream 事件用于把延迟从"轮询间隔之和"压到秒级，
 beat 轮询作为断连兜底。详见[钉钉 Stream 事件集成](easyauth-dingtalk-stream-design.md)。
 
 检出离职后：更新 `UserMirror.status` → 撤销全部当前授权（逐条递增 version）→ 建交接单 →
@@ -228,8 +233,9 @@ beat 轮询作为断连兜底。详见[钉钉 Stream 事件集成](easyauth-ding
 后续权限查询返回空结果。禁号按 `uuid`（OIDC `sub`）查找 Authentik 用户，不再扫描 `uid`。
 
 只登录过下游、从未打开 EasyAuth 门户的钉钉员工，会由权限查询即时供给或 5 分钟周期镜像得到
-UserMirror，部门预授权才能对账到他们。仍无镜像的（无钉钉目录身份，或 Authentik 中不存在）
-权限查询返回空快照；从未被建档的一线员工离职时，仍只从目录镜像和他人管理范围中消失。
+UserMirror，部门预授权才能对账到他们。Authentik 瞬时故障时权限查询返回 503，不得缓存空快照；
+仍无镜像的（无钉钉目录身份，或 Authentik 中不存在）返回空快照。从未被建档的一线员工离职时，
+仍只从目录镜像和他人管理范围中消失。
 
 ### 4.5 授权过期
 
