@@ -158,29 +158,32 @@ def _sync_core_user(sub: str, entry: AdminJson, *, cache_key: str) -> ProvisionO
     return ProvisionOutcome(kind=ProvisionKind.CREATED, user=user)
 
 
-def _mirror_missing_entry(entry: AdminJson, *, existing: set[str]) -> str:  # noqa: PLR0911
+def _mirror_missing_entry(entry: AdminJson, *, existing: set[str]) -> str:
+    uuid = _core_user_uuid(entry)
+    if uuid in existing or _mirror_already_exists(uuid, existing=existing):
+        return "existing"
+    if not _core_user_has_directory_identity(entry):
+        return "no_directory"
     try:
-        uuid = _core_user_uuid(entry)
-        if uuid in existing:
-            return "existing"
-        if not _core_user_has_directory_identity(entry):
-            return "no_directory"
-        if UserMirror.objects.filter(authentik_user_id=uuid).exists():
-            existing.add(uuid)
-            return "existing"
         user = AuthentikSyncService.sync_payload(authentik_payload_from_core_user(entry)).user
     except AuthentikPayloadError:
-        logger.exception("Authentik 周期镜像载荷无效")
+        logger.exception("Authentik 周期镜像载荷无效: uuid=%s", uuid)
         return "no_directory"
     except IntegrityError:
-        uuid = _core_user_uuid(entry)
-        if UserMirror.objects.filter(authentik_user_id=uuid).exists():
-            existing.add(uuid)
+        # 与登录/JIT 建档并发: 行已存在则按既有处理, 否则是绑定冲突, 记录后跳过。
+        if _mirror_already_exists(uuid, existing=existing):
             return "existing"
         logger.exception("Authentik 周期镜像写入冲突: uuid=%s", uuid)
         return "no_directory"
     existing.add(user.authentik_user_id)
     return "created"
+
+
+def _mirror_already_exists(uuid: str, *, existing: set[str]) -> bool:
+    if not UserMirror.objects.filter(authentik_user_id=uuid).exists():
+        return False
+    existing.add(uuid)
+    return True
 
 
 def _fetch_core_user_for_provision(sub: str) -> AdminJson | ProvisionKind:
