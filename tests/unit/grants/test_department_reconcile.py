@@ -319,6 +319,20 @@ def test_cycle_anywhere_aborts_before_writes(catalog: Catalog) -> None:
     assert not AuditLog.objects.exists()
 
 
+def test_user_scoped_reconcile_ignores_unrelated_department_cycle(catalog: Catalog) -> None:
+    user, _mirror = _user("healthy")
+    _policy(catalog)
+    for dept, parent in [("8", "9"), ("9", "8")]:
+        DingTalkDepartmentMirror.objects.create(
+            source_slug="dingtalk", corp_id="corp", dept_id=dept, parent_id=parent, name=dept
+        )
+    result = reconcile_department_grants_for_user(user)
+    assert result.grants_created == 1
+    assert AccessGrant.objects.filter(user=user, is_current=True).exists()
+    with pytest.raises(DepartmentTreeCycleError):
+        reconcile_department_grants()
+
+
 def test_pair_failure_rolls_back_only_failed_pair_and_raises_summary(
     catalog: Catalog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -626,7 +640,7 @@ def test_user_scoped_reconcile_materialises_only_matching_user(
 
 
 def test_user_scoped_reconcile_defers_and_schedules_when_lock_held(
-    catalog: Catalog, monkeypatch: pytest.MonkeyPatch
+    catalog: Catalog, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     user, _mirror = _user("scoped-busy")
     _policy(catalog)
@@ -636,12 +650,16 @@ def test_user_scoped_reconcile_defers_and_schedules_when_lock_held(
         event_key__startswith="department-grant-reconcile:user-sync:"
     )
     try:
-        with TestCase.captureOnCommitCallbacks(execute=True):
+        with (
+            caplog.at_level("WARNING", logger="easyauth.grants.department_reconcile"),
+            TestCase.captureOnCommitCallbacks(execute=True),
+        ):
             result = reconcile_department_grants_for_user(user)
         assert result.deferred is True
         assert result.grants_created == 0
         assert not AccessGrant.objects.exists()
         assert events.count() == 1
+        assert any("锁繁忙" in record.message for record in caplog.records)
     finally:
         cache.delete(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY)
 
@@ -671,3 +689,23 @@ def test_user_scoped_reconcile_waits_then_runs_when_lock_releases(
     assert attempts["count"] >= 2
     assert AccessGrant.objects.filter(user=user, is_current=True).exists()
     assert cache.get(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY) is None
+
+
+def test_user_scoped_reconcile_keeps_user_sourced_rows_when_department_membership_removed(
+    catalog: Catalog,
+) -> None:
+    user, mirror = _user("mixed-source")
+    _policy(catalog, dept_id="2")
+    reconcile_department_grants_for_user(user)
+    grant = AccessGrant.objects.get(user=user, is_current=True)
+    AccessGrantPermission.objects.create(grant=grant, permission=catalog.permission, source="user")
+    mirror.department_ids = ["4"]
+    mirror.save()
+    result = reconcile_department_grants_for_user(user)
+    grant.refresh_from_db()
+    assert grant.version == 2
+    assert not AccessGrantGroup.objects.filter(grant=grant, source="department").exists()
+    assert not AccessGrantPermission.objects.filter(grant=grant, source="department").exists()
+    assert grant.is_current is True
+    assert result.grants_changed == 1
+    assert AccessGrantPermission.objects.filter(grant=grant, source="user").exists()

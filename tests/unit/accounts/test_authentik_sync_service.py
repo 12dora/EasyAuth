@@ -178,13 +178,17 @@ def test_sync_payload_existing_active_user_does_not_reconcile_again() -> None:
 
 def test_sync_payload_lock_busy_creates_user_and_schedules_full_pass(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     _department_catalog()
     _directory_mirror()
     monkeypatch.setattr(department_reconcile, "DEPARTMENT_GRANT_USER_LOCK_WAIT_SECONDS", 0)
     assert cache.add(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY, "1", timeout=30)
     try:
-        with TestCase.captureOnCommitCallbacks(execute=True):
+        with (
+            caplog.at_level("WARNING", logger="easyauth.accounts.services"),
+            TestCase.captureOnCommitCallbacks(execute=True),
+        ):
             created = AuthentikSyncService.sync_payload(
                 _payload(subject=_SUBJECT, user_id=_USER_ID)
             )
@@ -192,6 +196,7 @@ def test_sync_payload_lock_busy_creates_user_and_schedules_full_pass(
         assert UserMirror.objects.filter(authentik_user_id=_SUBJECT).exists()
         assert not AccessGrant.objects.exists()
         assert _user_sync_events() == 1
+        assert any("已推迟到全量" in record.message for record in caplog.records)
     finally:
         cache.delete(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY)
 
@@ -215,8 +220,8 @@ def test_sync_payload_reconcile_failure_still_creates_user(
     assert _user_sync_events() == 1
 
 
-def test_apply_directory_status_reactivation_materialises_department_grant() -> None:
-    app, group = _department_catalog()
+def test_apply_directory_status_reactivation_does_not_run_scoped_reconcile() -> None:
+    app, _group = _department_catalog()
     _directory_mirror()
     user = UserMirror.objects.create(
         authentik_user_id=_SUBJECT,
@@ -229,7 +234,8 @@ def test_apply_directory_status_reactivation_materialises_department_grant() -> 
     result = AuthentikSyncService.apply_directory_status(user, USER_STATUS_ACTIVE)
 
     assert result.created is False
-    grant = AccessGrant.objects.get(user=result.user, app=app, is_current=True)
-    assert AccessGrantGroup.objects.get(grant=grant).authorization_group == group
-    snapshot = resolve_user_permissions(user=_SUBJECT, app=app)
-    assert group.key in {item.key for item in snapshot.groups}
+    result.user.refresh_from_db()
+    assert result.user.status == USER_STATUS_ACTIVE
+    # 目录同步整轮事务结束后才入队全量对账, 此处不得持锁物化。
+    assert not AccessGrant.objects.filter(user=result.user, app=app).exists()
+    assert _user_sync_events() == 0

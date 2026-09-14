@@ -62,7 +62,7 @@ class AuthentikSyncService:
                 revoked_count=revoked_count,
             )
         if should_reconcile:
-            # 用户行已提交到当前连接可见; 调用方可能仍处于外层事务, 因此不走 on_commit,
+            # 用户行对当前连接可见; 调用方可能仍处于外层事务, 因此不走 on_commit,
             # 以便同一请求随后的权限查询能读到刚物化的部门预授权。
             _reconcile_or_schedule_department_grants(upsert.user)
         return result
@@ -70,6 +70,8 @@ class AuthentikSyncService:
     @staticmethod
     def apply_directory_status(user: UserMirror, status: UserStatus) -> AuthentikSyncResult:
         # 按目录事实回灌用户状态; 离职/停用用户立即撤销 current 授权。
+        # 不在此跑单用户对账: 唯一调用方处于目录同步整轮 transaction.atomic() 内,
+        # 本轮结束已入队全量对账。
         with transaction.atomic():
             locked = UserMirror.objects.select_for_update().get(pk=cast("int", user.pk))
             was_non_active = is_non_active_status(locked.status)
@@ -82,11 +84,7 @@ class AuthentikSyncService:
             if _should_record_departure_event(upsert=upsert, revoked_count=revoked_count):
                 _record_departure_event(locked, revoked_count=revoked_count)
                 dispatch_user_offboarded(locked)
-            should_reconcile = _should_reconcile_department_grants(upsert)
-            result = AuthentikSyncResult(user=locked, created=False, revoked_count=revoked_count)
-        if should_reconcile:
-            _reconcile_or_schedule_department_grants(locked)
-        return result
+            return AuthentikSyncResult(user=locked, created=False, revoked_count=revoked_count)
 
 
 def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
@@ -152,10 +150,13 @@ def _should_reconcile_department_grants(upsert: _UserUpsertResult) -> bool:
 def _reconcile_or_schedule_department_grants(user: UserMirror) -> None:
     # 对账失败不得回滚用户建档; 锁繁忙时 scoped 入口已入队全量对账。
     try:
-        _ = reconcile_department_grants_for_user(user)
+        result = reconcile_department_grants_for_user(user)
     except Exception:
         logger.exception("用户 %s 的部门预授权对账失败, 回退到全量对账", user.id)
         schedule_department_grant_reconcile(trigger="user-sync")
+        return
+    if result.deferred:
+        logger.warning("用户 %s 的部门预授权对账因锁繁忙已推迟到全量", user.id)
 
 
 def _revoke_current_grants_for_departed_user(user: UserMirror) -> int:

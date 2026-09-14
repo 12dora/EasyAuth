@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from time import monotonic, sleep
 from typing import TYPE_CHECKING, Protocol, cast, final
@@ -42,6 +43,8 @@ DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS = 1800
 # 单用户对账与全量共用一把锁; 锁被占用时最多等待这么久, 超时则入队全量对账。
 DEPARTMENT_GRANT_USER_LOCK_WAIT_SECONDS = 2.0
 DEPARTMENT_GRANT_USER_LOCK_RETRY_INTERVAL_SECONDS = 0.05
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEPARTMENT_GRANT_RECONCILE_TASK_NAME",
@@ -283,10 +286,15 @@ def reconcile_department_grants_for_user(
     now: datetime | None = None,
     trigger: str = "user-sync",
 ) -> DepartmentGrantReconcileResult:
-    """只物化一名用户的部门预授权; 与全量对账共用锁, 锁忙则短暂等待后入队全量。"""
+    """只物化一名用户的部门预授权; 与全量对账共用锁, 锁忙则短暂等待后入队全量。
+
+    调用方必须处于 autocommit: 每人/应用对在锁内独立提交, 不能套在外层
+    ``transaction.atomic()`` 里, 否则会持锁等待且写入对其它连接不可见。
+    """
     user_id = user.id
     release_before = _acquire_reconcile_lock_waiting()
     if release_before is None:
+        logger.warning("部门预授权对账锁繁忙, 用户 %s 回退全量对账", user_id)
         schedule_department_grant_reconcile(trigger=trigger)
         return DepartmentGrantReconcileResult(
             users_considered=0,
@@ -347,10 +355,12 @@ def _reconcile_department_grants(
     policies = _load_policies()
     corps = {(policy.model.source_slug, policy.model.corp_id) for policy in policies}
     trees = {key: DepartmentTree.load(source_slug=key[0], corp_id=key[1]) for key in sorted(corps)}
-    # 写入前验证所有部门, 包括没有在职员工引用的孤立环; 数据损坏不能部分成功。
-    for tree in trees.values():
-        for dept_id in tree.nodes:
-            _ = tree.ancestors_or_self(dept_id)
+    if user_filter is None:
+        # 全量对账写入前验证所有部门, 包括没有在职员工引用的孤立环; 数据损坏不能部分成功。
+        # 单用户路径只走 ancestors_or_self_for, 只校验该用户自己的部门链。
+        for tree in trees.values():
+            for dept_id in tree.nodes:
+                _ = tree.ancestors_or_self(dept_id)
     users, bindings = _directory_users(corps, user_filter=user_filter)
     current = _load_current_grants(
         (*users, *extra_user_ids),

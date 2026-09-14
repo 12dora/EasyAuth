@@ -603,10 +603,12 @@ PUT 不得变更策略所属部门或应用，否则 422。
 
 对账触发：目录同步结束（`trigger=directory-sync`）、策略 CRUD
 （`trigger=policy`）、以及定时 beat（默认 30 分钟）。
-首次见到在职钉钉用户时（`AuthentikSyncService.sync_payload` 建档，或
-`apply_directory_status` 重新启用），**同步**执行该用户的部门预授权对账，
-使同一请求内随后的权限查询即可读到 `source=department` 成员；若全量对账锁
-被占用，短暂等待后经 outbox 回退到全量对账（`trigger=user-sync`）。
+首次见到在职钉钉用户时（`AuthentikSyncService.sync_payload` 建档），
+**同步**执行该用户的部门预授权对账，使同一请求内随后的权限查询即可读到
+`source=department` 成员；若全量对账锁被占用，短暂等待后经 outbox 回退到
+全量对账（`trigger=user-sync`）。调用方须处于 autocommit，每人/应用对在锁内
+独立提交。目录同步内的状态回灌（`apply_directory_status`）不走单用户对账：
+整轮写入共用同一事务，对账由本轮结束时入队的全量任务完成。
 对账失败只记日志并入队全量，不得回滚用户建档。
 
 ---
