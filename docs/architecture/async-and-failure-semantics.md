@@ -36,9 +36,10 @@ Webhook 投递。
 | `disabled` | 已禁用并吊销会话，记 `lifecycle_account_disabled` 审计 |
 | `failed_retryable` | 管理 API 未配置、分页超上限、用户查找失败、网络或契约错误 |
 
-未配置、用户查不到、分页超过 `_MAX_USER_PAGES` 都抛类型化异常走 Celery 重试，**不返回
-`not_configured` / `user_not_found` 这类"成功字符串"**。失败审计只记类型化 `detail`，
-不记 token 或响应正文。
+查找用户走 `GET /api/v3/core/users/?uuid=<sub>`（`sub` 是核心用户 uuid，不是 `uid` 散列）：
+0 条为找不到，多于 1 条为契约错误。未配置、用户查不到、会话分页超过 `_MAX_SESSION_PAGES`
+都抛类型化异常走 Celery 重试，**不返回 `not_configured` / `user_not_found` 这类"成功字符串"**。
+失败审计只记类型化 `detail`，不记 token 或响应正文。
 
 ## 连接器对账
 

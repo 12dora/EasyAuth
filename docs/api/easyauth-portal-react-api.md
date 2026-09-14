@@ -46,7 +46,7 @@
 
 - `directory`：有钉钉绑定的目录用户。
 - `local`：已有 UserMirror 但无钉钉绑定（本地管理员、Authentik 内建用户）。
-- `unresolved`：只存用户 ID、尚无 UserMirror（例如从未登录）；不得推断为 `local`。
+- `unresolved`：只存用户 ID、尚无 UserMirror；不得推断为 `local`。
 
 `avatar_url` 为 `UserMirror.avatar_url`；无照片时为空字符串。有钉钉照片时为 https 地址；
 Authentik 生成的首字母图为 `data:image/svg+xml;base64,...` 内联图。写入时真实照片始终优先，
