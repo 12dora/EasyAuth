@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from time import monotonic
+from time import monotonic, sleep
 from typing import TYPE_CHECKING, Protocol, cast, final
 
 from django.core.cache import cache
@@ -34,11 +34,14 @@ if TYPE_CHECKING:
     from easyauth.applications.models import App
     from easyauth.grants.operations import DepartmentMembershipState
 
-# 部门预授权对账任务, 由目录同步完成、策略增删改与 beat 定时触发。
+# 部门预授权对账任务, 由目录同步完成、策略增删改、首次见到在职目录用户与 beat 定时触发。
 DEPARTMENT_GRANT_RECONCILE_TASK_NAME = "easyauth.grants.reconcile_department_grants"
 _ENQUEUE_COUNTDOWN_SECONDS = 2
 DEPARTMENT_GRANT_RECONCILE_LOCK_KEY = "department-grant-reconcile:lock"
 DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS = 1800
+# 单用户对账与全量共用一把锁; 锁被占用时最多等待这么久, 超时则入队全量对账。
+DEPARTMENT_GRANT_USER_LOCK_WAIT_SECONDS = 2.0
+DEPARTMENT_GRANT_USER_LOCK_RETRY_INTERVAL_SECONDS = 0.05
 
 __all__ = [
     "DEPARTMENT_GRANT_RECONCILE_TASK_NAME",
@@ -46,6 +49,7 @@ __all__ = [
     "DepartmentGrantReconcileError",
     "DepartmentGrantReconcileResult",
     "reconcile_department_grants",
+    "reconcile_department_grants_for_user",
     "schedule_department_grant_reconcile",
 ]
 
@@ -83,6 +87,7 @@ class DepartmentGrantReconcileResult:
     grants_changed: int
     grants_revoked: int
     unchanged: int
+    deferred: bool = False
 
 
 @final
@@ -166,14 +171,18 @@ def _load_policies() -> list[_Policy]:
 
 def _directory_users(
     corps: set[tuple[str, str]],
+    *,
+    user_filter: Q | None = None,
 ) -> tuple[dict[int, UserMirror], dict[int, DingTalkUserMirror]]:
     if not corps:
         return {}, {}
-    user_filter = Q(pk__in=[])
+    identity_filter = Q(pk__in=[])
     mirror_filter = Q(pk__in=[])
     for source, corp in sorted(corps):
-        user_filter |= Q(dingtalk_source_slug=source, dingtalk_corp_id=corp)
+        identity_filter |= Q(dingtalk_source_slug=source, dingtalk_corp_id=corp)
         mirror_filter |= Q(source_slug=source, corp_id=corp)
+    if user_filter is not None:
+        identity_filter &= user_filter
     mirrors = {
         (row.source_slug, row.corp_id, row.user_id): row
         for row in DingTalkUserMirror.objects.filter(
@@ -182,7 +191,7 @@ def _directory_users(
     }
     users: dict[int, UserMirror] = {}
     bindings: dict[int, DingTalkUserMirror] = {}
-    for user in UserMirror.objects.filter(user_filter, status="active"):
+    for user in UserMirror.objects.filter(identity_filter, status="active"):
         mirror = mirrors.get(
             (user.dingtalk_source_slug, user.dingtalk_corp_id, user.dingtalk_userid)
         )
@@ -213,25 +222,30 @@ def _desired_memberships(policies: Iterable[_Policy]) -> _Desired:
     return _Desired(tuple(groups.values()), tuple(permissions.values()))
 
 
-def _load_current_grants(user_ids: Iterable[int]) -> dict[tuple[int, int], AccessGrant]:
+def _load_current_grants(
+    user_ids: Iterable[int],
+    *,
+    restrict_to_user_ids: bool = False,
+) -> dict[tuple[int, int], AccessGrant]:
+    membership = Q(user_id__in=user_ids)
+    if not restrict_to_user_ids:
+        membership |= Q(
+            Exists(
+                AccessGrantGroup.objects.filter(
+                    grant_id=OuterRef("pk"), source=MEMBERSHIP_SOURCE_DEPARTMENT
+                )
+            )
+        ) | Q(
+            Exists(
+                AccessGrantPermission.objects.filter(
+                    grant_id=OuterRef("pk"), source=MEMBERSHIP_SOURCE_DEPARTMENT
+                )
+            )
+        )
     return {
         (grant.user_id, grant.app_id): grant
         for grant in AccessGrant.objects.filter(
-            Q(user_id__in=user_ids)
-            | Q(
-                Exists(
-                    AccessGrantGroup.objects.filter(
-                        grant_id=OuterRef("pk"), source=MEMBERSHIP_SOURCE_DEPARTMENT
-                    )
-                )
-            )
-            | Q(
-                Exists(
-                    AccessGrantPermission.objects.filter(
-                        grant_id=OuterRef("pk"), source=MEMBERSHIP_SOURCE_DEPARTMENT
-                    )
-                )
-            ),
+            membership,
             is_current=True,
             status=GRANT_STATUS_ACTIVE,
         )
@@ -254,22 +268,81 @@ def _current_state(grant: AccessGrant | None) -> DepartmentMembershipState:
 
 def reconcile_department_grants(*, now: datetime | None = None) -> DepartmentGrantReconcileResult:
     # 所有读取与写入共用同一把锁, 防止旧快照晚于新批次落地。
-    release_before = monotonic() + DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS - 3
-    if not cache.add(
-        DEPARTMENT_GRANT_RECONCILE_LOCK_KEY,
-        "1",
-        timeout=DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS,
-    ):
+    release_before = _try_acquire_reconcile_lock()
+    if release_before is None:
         raise DepartmentGrantReconcileBusyError
     try:
         return _reconcile_department_grants(now=now)
     finally:
-        # 锁过期后可能已属于另一批次, 此时不可删除。
-        if monotonic() < release_before:
-            _ = cache.delete(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY)
+        _release_reconcile_lock(release_before)
 
 
-def _reconcile_department_grants(*, now: datetime | None) -> DepartmentGrantReconcileResult:
+def reconcile_department_grants_for_user(
+    user: UserMirror,
+    *,
+    now: datetime | None = None,
+    trigger: str = "user-sync",
+) -> DepartmentGrantReconcileResult:
+    """只物化一名用户的部门预授权; 与全量对账共用锁, 锁忙则短暂等待后入队全量。"""
+    user_id = user.id
+    release_before = _acquire_reconcile_lock_waiting()
+    if release_before is None:
+        schedule_department_grant_reconcile(trigger=trigger)
+        return DepartmentGrantReconcileResult(
+            users_considered=0,
+            grants_created=0,
+            grants_changed=0,
+            grants_revoked=0,
+            unchanged=0,
+            deferred=True,
+        )
+    try:
+        return _reconcile_department_grants(
+            now=now,
+            user_filter=Q(pk=user_id),
+            extra_user_ids=(user_id,),
+            restrict_to_user_ids=True,
+        )
+    finally:
+        _release_reconcile_lock(release_before)
+
+
+def _try_acquire_reconcile_lock() -> float | None:
+    release_before = monotonic() + DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS - 3
+    if cache.add(
+        DEPARTMENT_GRANT_RECONCILE_LOCK_KEY,
+        "1",
+        timeout=DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS,
+    ):
+        return release_before
+    return None
+
+
+def _release_reconcile_lock(release_before: float) -> None:
+    # 锁过期后可能已属于另一批次, 此时不可删除。
+    if monotonic() < release_before:
+        _ = cache.delete(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY)
+
+
+def _acquire_reconcile_lock_waiting() -> float | None:
+    deadline = monotonic() + DEPARTMENT_GRANT_USER_LOCK_WAIT_SECONDS
+    while True:
+        release_before = _try_acquire_reconcile_lock()
+        if release_before is not None:
+            return release_before
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return None
+        sleep(min(DEPARTMENT_GRANT_USER_LOCK_RETRY_INTERVAL_SECONDS, remaining))
+
+
+def _reconcile_department_grants(
+    *,
+    now: datetime | None,
+    user_filter: Q | None = None,
+    extra_user_ids: tuple[int, ...] = (),
+    restrict_to_user_ids: bool = False,
+) -> DepartmentGrantReconcileResult:
     cutoff = timezone.now() if now is None else now
     policies = _load_policies()
     corps = {(policy.model.source_slug, policy.model.corp_id) for policy in policies}
@@ -278,8 +351,11 @@ def _reconcile_department_grants(*, now: datetime | None) -> DepartmentGrantReco
     for tree in trees.values():
         for dept_id in tree.nodes:
             _ = tree.ancestors_or_self(dept_id)
-    users, bindings = _directory_users(corps)
-    current = _load_current_grants(users)
+    users, bindings = _directory_users(corps, user_filter=user_filter)
+    current = _load_current_grants(
+        (*users, *extra_user_ids),
+        restrict_to_user_ids=restrict_to_user_ids,
+    )
     desired, apps = _desired_by_pair(policies, users, bindings, trees, cutoff)
     for pair, grant in current.items():
         state = _current_state(grant)
@@ -326,7 +402,13 @@ def _sync_pairs(
                 counts["grants_created"] += 1
             else:
                 counts["grants_changed"] += 1
-    summary = DepartmentGrantReconcileResult(users_considered=len(users), **counts)
+    summary = DepartmentGrantReconcileResult(
+        users_considered=len(users),
+        grants_created=counts["grants_created"],
+        grants_changed=counts["grants_changed"],
+        grants_revoked=counts["grants_revoked"],
+        unchanged=counts["unchanged"],
+    )
     if failures:
         raise DepartmentGrantReconcileError(summary, failures) from ExceptionGroup(
             "department grant failures", failures

@@ -24,6 +24,7 @@ from easyauth.grants.department_reconcile import (
     DepartmentGrantReconcileBusyError,
     DepartmentGrantReconcileError,
     reconcile_department_grants,
+    reconcile_department_grants_for_user,
     schedule_department_grant_reconcile,
 )
 from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
@@ -593,3 +594,80 @@ def _extra_catalog(key: str) -> Catalog:
         app=app, key="read", name="读取", supported_scopes=["GLOBAL"]
     )
     return Catalog(app, group, permission)
+
+
+def test_user_scoped_reconcile_materialises_only_matching_user(
+    catalog: Catalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target, _mirror = _user("scoped-target")
+    other, _mirror = _user("scoped-other")
+    policy = _policy(catalog)
+    notifications: list[int] = []
+    monkeypatch.setattr(
+        "easyauth.grants.services.notify_grant_mutation",
+        lambda grant: notifications.append(grant.version),
+    )
+
+    result = reconcile_department_grants_for_user(target)
+
+    assert result.deferred is False
+    assert result.users_considered == 1
+    assert result.grants_created == 1
+    grant = AccessGrant.objects.get(user=target, is_current=True)
+    group_row = AccessGrantGroup.objects.get(grant=grant)
+    permission_row = AccessGrantPermission.objects.get(grant=grant)
+    assert group_row.source == "department"
+    assert group_row.authorization_group == catalog.group
+    assert group_row.department_policy == policy
+    assert permission_row.source == "department"
+    assert permission_row.permission == catalog.permission
+    assert not AccessGrant.objects.filter(user=other).exists()
+    assert notifications == [1]
+
+
+def test_user_scoped_reconcile_defers_and_schedules_when_lock_held(
+    catalog: Catalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user, _mirror = _user("scoped-busy")
+    _policy(catalog)
+    monkeypatch.setattr(department_reconcile, "DEPARTMENT_GRANT_USER_LOCK_WAIT_SECONDS", 0)
+    assert cache.add(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY, "1", timeout=30)
+    events = OutboxEvent.objects.filter(
+        event_key__startswith="department-grant-reconcile:user-sync:"
+    )
+    try:
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            result = reconcile_department_grants_for_user(user)
+        assert result.deferred is True
+        assert result.grants_created == 0
+        assert not AccessGrant.objects.exists()
+        assert events.count() == 1
+    finally:
+        cache.delete(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY)
+
+
+def test_user_scoped_reconcile_waits_then_runs_when_lock_releases(
+    catalog: Catalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user, _mirror = _user("scoped-wait")
+    _policy(catalog)
+    attempts = {"count": 0}
+    original_add = cache.add
+
+    def fail_once(key: str, *args: object, **kwargs: object) -> bool:
+        if key == DEPARTMENT_GRANT_RECONCILE_LOCK_KEY:
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                return False
+        return original_add(key, *args, **kwargs)
+
+    monkeypatch.setattr(cache, "add", fail_once)
+    monkeypatch.setattr(department_reconcile, "sleep", lambda _seconds: None)
+
+    result = reconcile_department_grants_for_user(user)
+
+    assert result.deferred is False
+    assert result.grants_created == 1
+    assert attempts["count"] >= 2
+    assert AccessGrant.objects.filter(user=user, is_current=True).exists()
+    assert cache.get(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY) is None
