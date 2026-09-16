@@ -5,12 +5,14 @@
 
 ## [Unreleased]
 
-### Breaking
+### Changed
 
-- 工作通知改为钉钉 OA：`send_notification` 不再接受 `template` /
-  `deeplink_title`，`title` 改为必填。新增可选 `fields`、`app_display_name`、
-  `author`。已删除 `NOTIFY_TEMPLATE_TEXT` / `NOTIFY_TEMPLATE_MARKDOWN` /
-  `NOTIFY_TEMPLATE_ACTION_CARD`。
+- 工作通知改为钉钉 OA：`send_notification` 新增可选 `fields`、`app_display_name`、
+  `author`。`title` 为必填。`template` / `deeplink_title` 仍可作为关键字传入,
+  服务端忽略并映射为 OA(markdown 剥成纯文本); 已部署旧 SDK 无需改代码。
+  移除条件: EasyLearning 等下游升级到不再发送这两个字段之后, SDK 再从签名里拿掉。
+  已删除 `NOTIFY_TEMPLATE_TEXT` / `NOTIFY_TEMPLATE_MARKDOWN` /
+  `NOTIFY_TEMPLATE_ACTION_CARD` 常量(请不要再按 markdown/text/action_card 理解通道)。
 
 ## [0.5.0] - 2026-09-08
 

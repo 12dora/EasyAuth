@@ -91,6 +91,7 @@ describe("ConsoleSettingsPage", () => {
       dingtalk_notify_app_key: "svc-key",
       dingtalk_notify_app_secret_configured: true,
       dingtalk_notify_agent_id: "9001",
+      dingtalk_notify_app_secret: "must-never-render",
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -136,7 +137,7 @@ function renderSettings() {
   );
 }
 
-function settingsFetchMock(overrides: Partial<typeof SETTINGS> = {}) {
+function settingsFetchMock(overrides: Partial<typeof SETTINGS> & Record<string, unknown> = {}) {
   const payload = { ...SETTINGS, ...overrides };
   return vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input);

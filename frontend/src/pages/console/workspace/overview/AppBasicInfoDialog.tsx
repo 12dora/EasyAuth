@@ -26,12 +26,14 @@ export function AppBasicInfoDialog({
   const [name, setName] = useState(app?.name ?? "");
   const [alias, setAlias] = useState(app?.alias ?? "");
   const [description, setDescription] = useState(app?.description ?? "");
+  const [notifyHeadBgcolor, setNotifyHeadBgcolor] = useState(app?.notify_head_bgcolor ?? "");
 
   useEffect(() => {
     setName(app?.name ?? "");
     setAlias(app?.alias ?? "");
     setDescription(app?.description ?? "");
-  }, [app?.alias, app?.description, app?.name]);
+    setNotifyHeadBgcolor(app?.notify_head_bgcolor ?? "");
+  }, [app?.alias, app?.description, app?.name, app?.notify_head_bgcolor]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -39,6 +41,7 @@ export function AppBasicInfoDialog({
       name: name.trim(),
       alias: alias.trim(),
       description: description.trim(),
+      notify_head_bgcolor: notifyHeadBgcolor.trim(),
     });
   };
 
@@ -71,6 +74,13 @@ export function AppBasicInfoDialog({
         </Field>
         <Field label={t("common.description")}>
           <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
+        </Field>
+        <Field label={t("console.overview.field.notifyHeadBgcolor")} hint={t("console.overview.field.notifyHeadBgcolorHint")}>
+          <TextInput
+            value={notifyHeadBgcolor}
+            placeholder="#1A7F4C"
+            onChange={(event) => setNotifyHeadBgcolor(event.currentTarget.value)}
+          />
         </Field>
         <MutationErrorBanner title={t("console.overview.saveFailed")} error={errorMessage} />
       </form>

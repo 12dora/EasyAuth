@@ -1,4 +1,8 @@
-"""工作通知 OA 头: 应用中文展示名与色带。"""
+"""工作通知 OA 头: 调用应用中文名与色带。
+
+钉钉发送工作通知时会把 oa.head.text 改写成服务号名称, 调用方中文名不能靠页眉传达。
+head.text 仍按登记名填写(非工作通知场景才看得见); 用户可见身份走 body.title 前缀与色带。
+"""
 
 from __future__ import annotations
 
@@ -29,11 +33,25 @@ def easyauth_notify_head_text() -> str:
     return configured or EASYAUTH_DEFAULT_HEAD_TEXT
 
 
-def resolve_notify_head(*, app: App, app_display_name: str = "") -> tuple[str, str]:
-    """返回 (head.text, head.bgcolor)。展示名永不回落到 app_key。"""
+def resolve_notify_display_name(*, app: App, app_display_name: str = "") -> str:
+    """调用方中文名: 供 body.title 前缀。永不回落到 app_key。"""
+    if is_easyauth_notify_identity(app):
+        return easyauth_notify_head_text()
+    text = app_display_name.strip() or app.name.strip()
+    if not text:
+        raise NotifyAcceptError(
+            kind="validation_error",
+            message=HEAD_TEXT_REQUIRED_MESSAGE,
+            field="app_display_name",
+        )
+    return text
+
+
+def resolve_notify_head(*, app: App) -> tuple[str, str]:
+    """返回 (head.text, head.bgcolor)。head.text 不含 app_display_name 覆盖。"""
     if is_easyauth_notify_identity(app):
         return easyauth_notify_head_text(), EASYAUTH_NOTIFY_HEAD_BGCOLOR
-    text = app_display_name.strip() or app.name.strip()
+    text = app.name.strip()
     if not text:
         raise NotifyAcceptError(
             kind="validation_error",

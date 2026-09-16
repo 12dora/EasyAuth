@@ -12,9 +12,27 @@ from easyauth.applications.notify_appearance import (
     normalize_notify_head_bgcolor,
     palette_notify_head_bgcolor,
 )
-from easyauth.notify.head import resolve_notify_head
-from easyauth.notify.messages import DingTalkMsgSource, build_dingtalk_msg
-from easyauth.notify.oa import OA_FORM_TIME_KEY, OA_MSGTYPE, markdown_to_plain_text
+from easyauth.notify.contracts import (
+    FIELDS_TIME_KEY_RESERVED_MESSAGE,
+    FIELDS_TOO_MANY_MESSAGE,
+    NOTIFY_FORM_FIELD_MAX_ITEMS,
+    OA_BODY_TITLE_MAX_CHARS,
+    OA_BODY_TITLE_SEPARATOR,
+    NotifyAcceptError,
+)
+from easyauth.notify.head import resolve_notify_display_name, resolve_notify_head
+from easyauth.notify.messages import (
+    DingTalkMsgSource,
+    NotifyMessageInput,
+    build_dingtalk_msg,
+    normalize_and_validate,
+)
+from easyauth.notify.oa import (
+    OA_FORM_TIME_KEY,
+    OA_MSGTYPE,
+    compose_oa_body_title,
+    markdown_to_plain_text,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -31,7 +49,7 @@ def _oa_body(msg: dict[str, object]) -> dict[str, object]:
 
 def test_build_oa_payload_head_body_form_and_time() -> None:
     app = App.objects.create(app_key="easylearning", name="学习工作台")
-    sent_at = datetime(2026, 9, 16, 10, 5, tzinfo=SHANGHAI)
+    sent_at = datetime(2026, 9, 16, 10, 5, 7, tzinfo=SHANGHAI)
     msg = build_dingtalk_msg(
         app=app,
         source=DingTalkMsgSource(
@@ -52,11 +70,11 @@ def test_build_oa_payload_head_body_form_and_time() -> None:
     assert head["text"] == "学习工作台"
     assert head["bgcolor"] == palette_notify_head_bgcolor(app.id)
     body = _oa_body(msg)
-    assert body["title"] == "课程提醒"
+    assert body["title"] == "学习工作台 · 课程提醒"
     assert body["content"] == "请完成本周学习\n必修课"
     assert body["author"] == "张三"
     assert body["form"] == [
-        {"key": OA_FORM_TIME_KEY, "value": "10:05"},
+        {"key": OA_FORM_TIME_KEY, "value": "2026-09-16 10:05:07"},
         {"key": "来自", "value": "张三"},
     ]
 
@@ -70,9 +88,10 @@ def test_easyauth_identity_uses_site_title_and_fixed_blue() -> None:
     text, color = resolve_notify_head(app=app)
     assert text == "统一身份认证"
     assert color == EASYAUTH_NOTIFY_HEAD_BGCOLOR
+    assert resolve_notify_display_name(app=app, app_display_name="应被忽略") == "统一身份认证"
 
 
-def test_app_display_name_override_never_uses_slug() -> None:
+def test_app_display_name_feeds_title_prefix_not_head() -> None:
     app = App.objects.create(app_key="easylearning", name="EasyLearning")
     msg = build_dingtalk_msg(
         app=app,
@@ -81,14 +100,49 @@ def test_app_display_name_override_never_uses_slug() -> None:
             content="正文",
             app_display_name="学习工作台",
         ),
-        sent_at=datetime(2026, 9, 16, 9, 0, tzinfo=SHANGHAI),
+        sent_at=datetime(2026, 9, 16, 9, 0, 0, tzinfo=SHANGHAI),
     )
     oa = msg["oa"]
     assert isinstance(oa, dict)
     head = oa["head"]
     assert isinstance(head, dict)
-    assert head["text"] == "学习工作台"
+    assert head["text"] == "EasyLearning"
+    assert head["bgcolor"] == palette_notify_head_bgcolor(app.id)
+    body = _oa_body(msg)
+    assert body["title"] == "学习工作台 · 提醒"
     assert app.app_key not in str(msg)
+
+
+def test_compose_oa_body_title_truncates_title_never_app_name() -> None:
+    prefix = "学习工作台"
+    long_title = "标" * 50
+    composed = compose_oa_body_title(app_name=prefix, title=long_title)
+    assert composed.startswith(f"{prefix}{OA_BODY_TITLE_SEPARATOR}")
+    assert len(composed) == OA_BODY_TITLE_MAX_CHARS
+    assert composed == f"{prefix}{OA_BODY_TITLE_SEPARATOR}{'标' * 32}"
+    oversized = "甲" * (OA_BODY_TITLE_MAX_CHARS + 5)
+    assert compose_oa_body_title(app_name=oversized, title="提醒") == oversized
+
+
+def test_same_minute_form_values_differ_by_second() -> None:
+    app = App.objects.create(app_key="clock-app", name="时钟应用")
+    first = build_dingtalk_msg(
+        app=app,
+        source=DingTalkMsgSource(title="同一正文", content="相同内容"),
+        sent_at=datetime(2026, 9, 16, 10, 5, 1, tzinfo=SHANGHAI),
+    )
+    second = build_dingtalk_msg(
+        app=app,
+        source=DingTalkMsgSource(title="同一正文", content="相同内容"),
+        sent_at=datetime(2026, 9, 16, 10, 5, 2, tzinfo=SHANGHAI),
+    )
+    first_form = _oa_body(first)["form"]
+    second_form = _oa_body(second)["form"]
+    assert isinstance(first_form, list)
+    assert isinstance(second_form, list)
+    assert first_form[0]["value"] == "2026-09-16 10:05:01"
+    assert second_form[0]["value"] == "2026-09-16 10:05:02"
+    assert first_form[0]["value"] != second_form[0]["value"]
 
 
 def test_custom_color_normalizes_and_palette_is_stable() -> None:
@@ -108,12 +162,12 @@ def test_custom_color_normalizes_and_palette_is_stable() -> None:
 
 def test_markdown_stripped_to_plain_text_keeps_line_breaks() -> None:
     plain = markdown_to_plain_text("### 标题\n**加粗** 与 `代码`\n- 列表")
-    assert "###" not in plain
-    assert "**" not in plain
-    assert "`" not in plain
-    assert "\n" in plain
-    assert "标题" in plain
-    assert "加粗" in plain
+    assert plain == "标题\n加粗 与 代码\n列表"
+
+
+def test_markdown_underscore_in_chinese_filename_is_kept() -> None:
+    assert markdown_to_plain_text("文件_名称_备份") == "文件_名称_备份"
+    assert markdown_to_plain_text("*斜体* 与 文件_名称_备份") == "斜体 与 文件_名称_备份"
 
 
 def test_markdown_msgtype_path_is_gone() -> None:
@@ -121,9 +175,32 @@ def test_markdown_msgtype_path_is_gone() -> None:
     msg = build_dingtalk_msg(
         app=app,
         source=DingTalkMsgSource(title="标题", content="正文"),
-        sent_at=datetime(2026, 9, 16, 8, 0, tzinfo=SHANGHAI),
+        sent_at=datetime(2026, 9, 16, 8, 0, 0, tzinfo=SHANGHAI),
     )
     assert msg["msgtype"] == "oa"
     assert "markdown" not in msg
     assert "text" not in msg
     assert "action_card" not in msg
+
+
+def test_normalize_rejects_more_than_five_caller_fields() -> None:
+    too_many = tuple((f"k{index}", "v") for index in range(NOTIFY_FORM_FIELD_MAX_ITEMS + 1))
+    with pytest.raises(NotifyAcceptError) as exc:
+        _ = normalize_and_validate(
+            NotifyMessageInput(title="t", content="c", fields=too_many),
+        )
+    assert exc.value.field == "fields"
+    assert exc.value.message == FIELDS_TOO_MANY_MESSAGE
+
+
+def test_normalize_rejects_reserved_time_form_key() -> None:
+    with pytest.raises(NotifyAcceptError) as exc:
+        _ = normalize_and_validate(
+            NotifyMessageInput(
+                title="t",
+                content="c",
+                fields=((OA_FORM_TIME_KEY, "应被拒绝"),),
+            ),
+        )
+    assert exc.value.field == "fields"
+    assert exc.value.message == FIELDS_TIME_KEY_RESERVED_MESSAGE

@@ -33,7 +33,7 @@ def test_build_always_oa() -> None:
     body = oa["body"]
     assert isinstance(body, dict)
     assert body["content"] == "你好"
-    assert body["title"] == "问候"
+    assert body["title"] == "消息组装 · 问候"
 
 
 def test_msg_utf8_size_counts_multibyte() -> None:

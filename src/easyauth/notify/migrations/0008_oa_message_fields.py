@@ -17,6 +17,13 @@ def _rewrite_templates_to_oa(apps: object, _schema_editor: object) -> None:
     _ = notify_message.objects.exclude(template="oa").update(template="oa")
 
 
+def _restore_oa_templates_to_markdown(apps: object, _schema_editor: object) -> None:
+    # 正向把历史 text/markdown/action_card 一律写成 oa, 无法还原原始类型。
+    # 回滚只能把 oa 映回 markdown, 使旧 choices 合法; 这是不可逆的数据近似。
+    notify_message = apps.get_model("notify", "NotifyMessage")  # type: ignore[attr-defined]
+    _ = notify_message.objects.filter(template="oa").update(template="markdown")
+
+
 class Migration(migrations.Migration):
     dependencies: ClassVar[Sequence[tuple[str, str]]] = [
         ("notify", "0007_remove_legacy_recipient_identity"),
@@ -38,7 +45,7 @@ class Migration(migrations.Migration):
             name="author",
             field=models.CharField(blank=True, max_length=64),
         ),
-        migrations.RunPython(_rewrite_templates_to_oa, migrations.RunPython.noop),
+        migrations.RunPython(_rewrite_templates_to_oa, _restore_oa_templates_to_markdown),
         migrations.AlterField(
             model_name="notifymessage",
             name="template",

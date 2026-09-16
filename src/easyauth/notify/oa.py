@@ -8,18 +8,24 @@ from typing import TYPE_CHECKING, Final
 
 from django.utils import timezone
 
-from easyauth.notify.contracts import SHANGHAI_TZ
+from easyauth.notify.contracts import (
+    OA_BODY_TITLE_MAX_CHARS,
+    OA_BODY_TITLE_SEPARATOR,
+    SHANGHAI_TZ,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime
 
 OA_MSGTYPE: Final = "oa"
 OA_FORM_TIME_KEY: Final = "时间"
+OA_FORM_TIME_FORMAT: Final = "%Y-%m-%d %H:%M:%S"
 _HEADING = re.compile(r"^#{1,6}\s+", re.MULTILINE)
 _FENCE = re.compile(r"```[\w+-]*\n?(.*?)```", re.DOTALL)
 _IMAGE_OR_LINK = re.compile(r"!\[([^\]]*)\]\([^)]+\)|\[([^\]]+)\]\([^)]+\)")
 _BOLD = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
-_ITALIC = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)")
+# 只剥 *斜体*, 不用 _..._ : 会把「文件_名称_备份」中的中文片段吃掉。
+_ITALIC = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 _INLINE_CODE = re.compile(r"`([^`]+)`")
 _LIST_MARKER = re.compile(r"^(\s*)(?:[-*+]|\d+\.)\s+", re.MULTILINE)
 _EXTRA_NEWLINES = re.compile(r"\n{3,}")
@@ -55,7 +61,24 @@ def shanghai_clock(sent_at: datetime) -> str:
     if sent_at.tzinfo is None:
         message = "通知发送时间必须带时区。"
         raise ValueError(message)
-    return sent_at.astimezone(SHANGHAI_TZ).strftime("%H:%M")
+    return sent_at.astimezone(SHANGHAI_TZ).strftime(OA_FORM_TIME_FORMAT)
+
+
+def compose_oa_body_title(*, app_name: str, title: str) -> str:
+    """body.title = 「应用中文名 · 通知标题」。只截标题, 永不截应用名。
+
+    钉钉建议 50 字以内; 这里把合成标题压到 OA_BODY_TITLE_MAX_CHARS(40)。
+    应用名本身超过上限时保留全名, 宁可超长也不截断身份。
+    """
+    prefix = app_name.strip()
+    if not prefix:
+        message = "应用名称不能为空。"
+        raise ValueError(message)
+    clipped_title = title.strip()
+    remaining = OA_BODY_TITLE_MAX_CHARS - len(prefix) - len(OA_BODY_TITLE_SEPARATOR)
+    if remaining <= 0 or not clipped_title:
+        return prefix
+    return f"{prefix}{OA_BODY_TITLE_SEPARATOR}{clipped_title[:remaining]}"
 
 
 def build_oa_msg(parts: OaBuildInput) -> dict[str, object]:

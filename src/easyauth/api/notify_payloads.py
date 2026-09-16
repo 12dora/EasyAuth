@@ -7,9 +7,17 @@ from django.http import JsonResponse
 
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import error_response
-from easyauth.notify.contracts import FIELDS_INVALID_MESSAGE, NOTIFY_FORM_FIELD_MAX_ITEMS
+from easyauth.notify.contracts import (
+    FIELDS_INVALID_MESSAGE,
+    FIELDS_TOO_MANY_MESSAGE,
+    NOTIFY_FORM_FIELD_MAX_ITEMS,
+)
 
 _INVALID_JSON_FIELD: Final = "body"
+
+# 旧 SDK(46cd486 之前) 每次 POST 都带 template, 可选 deeplink_title。
+# 这些字段以及其它未知键一律忽略, 不得 422; 工作通知只发 OA。
+# 移除条件: EasyLearning 等下游升级到不再发送旧字段的 SDK 之后, 再考虑收紧。
 
 
 class NotifyFormFieldPayload(TypedDict):
@@ -30,24 +38,6 @@ class NotifyCreatePayload(TypedDict):
 
 
 def notify_create_payload(body: dict[str, object]) -> NotifyCreatePayload | JsonResponse:
-    allowed_fields = {
-        "recipients",
-        "title",
-        "content",
-        "deeplink_url",
-        "dedup_key",
-        "biz_tag",
-        "fields",
-        "app_display_name",
-        "author",
-    }
-    unknown_fields = sorted(set(body) - allowed_fields)
-    if unknown_fields:
-        return validation_error(
-            "请求字段不受支持。",
-            _INVALID_JSON_FIELD,
-            {"fields": cast("JsonValue", unknown_fields)},
-        )
     try:
         recipients = as_string_list(body.get("recipients"))
     except TypeError:
@@ -75,7 +65,7 @@ def parse_notify_fields(raw: object) -> list[NotifyFormFieldPayload] | JsonRespo
     if not isinstance(raw, list):
         return validation_error(FIELDS_INVALID_MESSAGE, "fields")
     if len(cast("list[object]", raw)) > NOTIFY_FORM_FIELD_MAX_ITEMS:
-        return validation_error(FIELDS_INVALID_MESSAGE, "fields")
+        return validation_error(FIELDS_TOO_MANY_MESSAGE, "fields")
     result: list[NotifyFormFieldPayload] = []
     for item in cast("list[object]", raw):
         parsed = _parse_field_item(item)

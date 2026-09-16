@@ -15,6 +15,8 @@ from easyauth.notify.contracts import (
     DEEPLINK_URL_INVALID_MESSAGE,
     DINGTALK_LINK_PREFIX,
     FIELDS_INVALID_MESSAGE,
+    FIELDS_TIME_KEY_RESERVED_MESSAGE,
+    FIELDS_TOO_MANY_MESSAGE,
     HTTPS_PREFIX,
     NOTIFY_APP_DISPLAY_NAME_MAX_CHARS,
     NOTIFY_AUTHOR_MAX_CHARS,
@@ -29,8 +31,8 @@ from easyauth.notify.contracts import (
     TITLE_TOO_LONG_MESSAGE,
     NotifyAcceptError,
 )
-from easyauth.notify.head import resolve_notify_head
-from easyauth.notify.oa import OaBuildInput, build_oa_msg
+from easyauth.notify.head import resolve_notify_display_name, resolve_notify_head
+from easyauth.notify.oa import OA_FORM_TIME_KEY, OaBuildInput, build_oa_msg, compose_oa_body_title
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -55,13 +57,14 @@ def build_dingtalk_msg(
     sent_at: datetime | None = None,
 ) -> dict[str, object]:
     """组装钉钉工作通知 OA msg JSON(不含字节校验)。"""
-    head_text, head_bgcolor = resolve_notify_head(
+    head_text, head_bgcolor = resolve_notify_head(app=app)
+    display_name = resolve_notify_display_name(
         app=app,
         app_display_name=source.app_display_name,
     )
     return build_oa_msg(
         OaBuildInput(
-            title=source.title,
+            title=compose_oa_body_title(app_name=display_name, title=source.title),
             content=source.content,
             head_text=head_text,
             head_bgcolor=head_bgcolor,
@@ -195,10 +198,16 @@ def _validate_form_fields(fields: tuple[tuple[str, str], ...]) -> None:
     if len(fields) > NOTIFY_FORM_FIELD_MAX_ITEMS:
         raise NotifyAcceptError(
             kind="validation_error",
-            message=FIELDS_INVALID_MESSAGE,
+            message=FIELDS_TOO_MANY_MESSAGE,
             field="fields",
         )
     for key, value in fields:
+        if key.strip() == OA_FORM_TIME_KEY:
+            raise NotifyAcceptError(
+                kind="validation_error",
+                message=FIELDS_TIME_KEY_RESERVED_MESSAGE,
+                field="fields",
+            )
         if not key or len(key) > NOTIFY_FORM_KEY_MAX_CHARS:
             raise NotifyAcceptError(
                 kind="validation_error",

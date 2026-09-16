@@ -37,6 +37,22 @@ def test_dingtalk_notify_credential_migration_adds_blank_columns() -> None:
     _ = MigrationExecutor(connection).migrate(_AFTER)
     assert _NOTIFY_COLUMNS.issubset(_column_names(table))
 
+    _ = MigrationExecutor(connection).migrate(_BEFORE)
+    assert _column_names(table).isdisjoint(_NOTIFY_COLUMNS)
+
+
+def test_notify_head_bgcolor_migration_reversible() -> None:
+    color_after = [("applications", "0036_app_notify_head_bgcolor")]
+    table = "applications_app"
+    _ = MigrationExecutor(connection).migrate(_AFTER)
+    assert "notify_head_bgcolor" not in _column_names(table)
+
+    _ = MigrationExecutor(connection).migrate(color_after)
+    assert "notify_head_bgcolor" in _column_names(table)
+
+    _ = MigrationExecutor(connection).migrate(_AFTER)
+    assert "notify_head_bgcolor" not in _column_names(table)
+
 
 def _column_names(table: str) -> set[str]:
     with connection.cursor() as cursor:

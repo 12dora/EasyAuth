@@ -9,8 +9,10 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
+from easyauth.applications.integration_settings import IntegrationSettings
 from easyauth.applications.models import App, AppNotificationChannel
 from easyauth.integrations.dingtalk.api_client import DingTalkApiUnavailableError
+from easyauth.notify.channel_config import dingtalk_client_and_agent
 from easyauth.notify.contracts import NOTIFY_RECONCILE_WINDOW_HOURS
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
@@ -38,14 +40,18 @@ class _FakeDingTalkClient:
         self.progress = progress
         self.result = result
         self.progress_calls = 0
+        self.progress_agent_ids: list[str | int] = []
+        self.result_agent_ids: list[str | int] = []
 
     def get_send_progress(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
-        _ = (agent_id, task_id)
+        self.progress_agent_ids.append(agent_id)
+        _ = task_id
         self.progress_calls += 1
         return self.progress
 
     def get_send_result(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
-        _ = (agent_id, task_id)
+        self.result_agent_ids.append(agent_id)
+        _ = task_id
         return self.result
 
 
@@ -134,7 +140,7 @@ def test_reconcile_maps_four_list_types(monkeypatch: pytest.MonkeyPatch) -> None
         userids=["ok1", "bad1", "dup1", "limit1"],
         task_id="task-map",
     )
-    _ = _patch_reconcile_client(
+    client = _patch_reconcile_client(
         monkeypatch,
         progress={"status": 2, "progress_in_percent": 100},
         result={
@@ -152,6 +158,8 @@ def test_reconcile_maps_four_list_types(monkeypatch: pytest.MonkeyPatch) -> None
 
     processed = reconcile_send_results()
     assert processed == 1
+    assert client.progress_agent_ids == [1001]
+    assert client.result_agent_ids == [1001]
 
     by_uid = {row.dingtalk_userid: row for row in NotifyRecipient.objects.filter(message=message)}
     assert by_uid["ok1"].status == NOTIFY_RECIPIENT_STATUS_DELIVERED
@@ -423,3 +431,45 @@ def test_reconcile_dependency_failure_is_not_marked_reconciled(
     row = NotifyRecipient.objects.get(message=message)
     assert row.last_reconciled_at is None
     assert row.error == RECONCILE_DEPENDENCY_DOWN_MESSAGE
+
+
+def test_reconcile_uses_notify_agent_id_not_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = IntegrationSettings.load()
+    row.dingtalk_app_key = "main-key"
+    row.dingtalk_app_secret = "main-secret"
+    row.dingtalk_agent_id = "1001"
+    row.dingtalk_notify_app_key = "svc-key"
+    row.dingtalk_notify_app_secret = "svc-secret"
+    row.dingtalk_notify_agent_id = "9001"
+    row.save()
+    message = _message_with_sent(
+        app_key="notify-rc-agent",
+        userids=["ok1"],
+        task_id="task-agent",
+    )
+    channel = message.channel
+    assert channel.agent_id == "1001"
+    captured: list[tuple[str, str | int]] = []
+
+    class RecordingClient:
+        def get_send_progress(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
+            captured.append(("progress", agent_id))
+            _ = task_id
+            return {"status": 2, "progress_in_percent": 100}
+
+        def get_send_result(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
+            captured.append(("result", agent_id))
+            _ = task_id
+            return _receipt_result(read_user_id_list=["ok1"])
+
+    def fake(bound_channel: object) -> tuple[RecordingClient, str | int]:
+        _client, agent_id = dingtalk_client_and_agent(
+            bound_channel,  # type: ignore[arg-type]
+        )
+        return RecordingClient(), agent_id
+
+    monkeypatch.setattr("easyauth.notify.channel_config.dingtalk_client_and_agent", fake)
+    assert reconcile_send_results() == 1
+    assert captured == [("progress", 9001), ("result", 9001)]

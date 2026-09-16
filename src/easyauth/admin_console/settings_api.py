@@ -120,11 +120,7 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
             dingtalk_secret_changed=applied.dingtalk_secret_changed,
             notify_secret_changed=applied.notify_secret_changed,
         )
-        _invalidate_changed_dingtalk_tokens(
-            previous_dingtalk,
-            dingtalk_credentials_changed=applied.dingtalk_credentials_changed,
-            notify_credentials_changed=applied.notify_credentials_changed,
-        )
+        _invalidate_changed_dingtalk_tokens(previous_dingtalk)
     return _settings_response()
 
 
@@ -133,9 +129,7 @@ class _SettingsPatchResult:
     update_fields: tuple[str, ...]
     api_token_changed: bool
     dingtalk_secret_changed: bool
-    dingtalk_credentials_changed: bool
     notify_secret_changed: bool
-    notify_credentials_changed: bool
 
 
 def _apply_settings_patch(
@@ -158,16 +152,13 @@ def _apply_settings_patch(
         update_fields=tuple(update_fields),
         api_token_changed=api_token_changed,
         dingtalk_secret_changed=dingtalk.secret_changed,
-        dingtalk_credentials_changed=dingtalk.credentials_changed,
         notify_secret_changed=notify.secret_changed,
-        notify_credentials_changed=notify.credentials_changed,
     )
 
 
 @dataclass(frozen=True, slots=True)
 class _CredentialPatchFlags:
     secret_changed: bool
-    credentials_changed: bool
 
 
 def _apply_dingtalk_fields(
@@ -177,23 +168,17 @@ def _apply_dingtalk_fields(
 ) -> _CredentialPatchFlags:
     fields_set = payload.model_fields_set
     secret_changed = False
-    credentials_changed = False
     if "dingtalk_app_key" in fields_set:
-        credentials_changed = payload.dingtalk_app_key != row.dingtalk_app_key
         row.dingtalk_app_key = payload.dingtalk_app_key
         update_fields.append("dingtalk_app_key")
     if "dingtalk_app_secret" in fields_set:
         secret_changed = payload.dingtalk_app_secret != row.dingtalk_app_secret
-        credentials_changed = credentials_changed or secret_changed
         row.dingtalk_app_secret = payload.dingtalk_app_secret
         update_fields.append("dingtalk_app_secret")
     if "dingtalk_agent_id" in fields_set:
         row.dingtalk_agent_id = payload.dingtalk_agent_id
         update_fields.append("dingtalk_agent_id")
-    return _CredentialPatchFlags(
-        secret_changed=secret_changed,
-        credentials_changed=credentials_changed,
-    )
+    return _CredentialPatchFlags(secret_changed=secret_changed)
 
 
 def _apply_notify_fields(
@@ -203,45 +188,46 @@ def _apply_notify_fields(
 ) -> _CredentialPatchFlags:
     fields_set = payload.model_fields_set
     secret_changed = False
-    credentials_changed = False
     if "dingtalk_notify_app_key" in fields_set:
-        credentials_changed = payload.dingtalk_notify_app_key != row.dingtalk_notify_app_key
         row.dingtalk_notify_app_key = payload.dingtalk_notify_app_key
         update_fields.append("dingtalk_notify_app_key")
     if "dingtalk_notify_app_secret" in fields_set:
         secret_changed = payload.dingtalk_notify_app_secret != row.dingtalk_notify_app_secret
-        credentials_changed = credentials_changed or secret_changed
         row.dingtalk_notify_app_secret = payload.dingtalk_notify_app_secret
         update_fields.append("dingtalk_notify_app_secret")
     if "dingtalk_notify_agent_id" in fields_set:
         row.dingtalk_notify_agent_id = payload.dingtalk_notify_agent_id
         update_fields.append("dingtalk_notify_agent_id")
-    return _CredentialPatchFlags(
-        secret_changed=secret_changed,
-        credentials_changed=credentials_changed,
-    )
+    return _CredentialPatchFlags(secret_changed=secret_changed)
 
 
-def _invalidate_changed_dingtalk_tokens(
-    previous: DingTalkRuntimeConfig,
-    *,
-    dingtalk_credentials_changed: bool,
-    notify_credentials_changed: bool,
-) -> None:
-    if dingtalk_credentials_changed:
-        transaction.on_commit(
-            lambda: invalidate_access_token(
-                app_key=previous.app_key,
-                app_secret=previous.app_secret,
-            ),
-        )
-    if notify_credentials_changed:
-        transaction.on_commit(
-            lambda: invalidate_access_token(
-                app_key=previous.notify.app_key,
-                app_secret=previous.notify.app_secret,
-            ),
-        )
+def _token_fingerprint(app_key: str, app_secret: str) -> tuple[str, str]:
+    return (app_key, app_secret)
+
+
+def _invalidate_changed_dingtalk_tokens(previous: DingTalkRuntimeConfig) -> None:
+    current = dingtalk_runtime_config()
+    stale: set[tuple[str, str]] = set()
+    previous_main = _token_fingerprint(previous.app_key, previous.app_secret)
+    current_main = _token_fingerprint(current.app_key, current.app_secret)
+    previous_notify = _token_fingerprint(previous.notify.app_key, previous.notify.app_secret)
+    current_notify = _token_fingerprint(current.notify.app_key, current.notify.app_secret)
+    if previous_main != current_main:
+        stale.add(previous_main)
+    if previous_notify != current_notify:
+        stale.add(previous_notify)
+    for app_key, app_secret in stale:
+        _schedule_token_invalidation(app_key, app_secret)
+
+
+def _schedule_token_invalidation(app_key: str, app_secret: str) -> None:
+    if not app_key or not app_secret:
+        return
+
+    def _invalidate() -> None:
+        invalidate_access_token(app_key=app_key, app_secret=app_secret)
+
+    transaction.on_commit(_invalidate)
 
 
 def console_dingtalk_connectivity_test(request: HttpRequest) -> JsonResponse:
@@ -254,12 +240,24 @@ def console_dingtalk_connectivity_test(request: HttpRequest) -> JsonResponse:
     if response := require_method(request, "POST"):
         return response
     try:
-        _ = DingTalkApiClient.from_settings().get_access_token(force_refresh=True)
+        _probe_dingtalk_access_tokens()
     except DingTalkApiError as error:
         _record_dingtalk_test(actor_id=actor_id, ok=False, error=str(error))
         return json_response({"ok": False, "message": str(error)})
     _record_dingtalk_test(actor_id=actor_id, ok=True, error="")
     return json_response({"ok": True, "message": "钉钉凭证有效, 已成功获取访问令牌。"})
+
+
+def _probe_dingtalk_access_tokens() -> None:
+    _ = DingTalkApiClient.from_settings().get_access_token(force_refresh=True)
+    config = dingtalk_runtime_config()
+    notify = config.notify
+    if _token_fingerprint(notify.app_key, notify.app_secret) == _token_fingerprint(
+        config.app_key,
+        config.app_secret,
+    ):
+        return
+    _ = DingTalkApiClient.from_notify_settings().get_access_token(force_refresh=True)
 
 
 def _record_dingtalk_test(*, actor_id: str, ok: bool, error: str) -> None:

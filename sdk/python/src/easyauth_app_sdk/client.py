@@ -271,14 +271,17 @@ class EasyAuthAppClient:
         author: str | None = None,
         dedup_key: str | None = None,
         biz_tag: str | None = None,
+        template: str | None = None,
+        deeplink_title: str | None = None,
     ) -> dict[str, Any]:
         """发送钉钉工作通知(异步受理)。POST {app_base}/notify/messages。
 
-        钉钉通道固定为 OA: head 为调用应用中文名, body.title 为通知标题,
+        钉钉通道固定为 OA: 色带按调用应用, body.title 为「应用中文名 · 通知标题」,
         content 为纯文本, form 始终含 Asia/Shanghai 的「时间」。
         recipients 元素必须使用目录响应返回并由业务后端保存的 opaque user_ref。
         返回 {"message_id", "accepted", ...}。
         幂等: 相同 dedup_key 重复调用返回同一 message_id 且 accepted=False。
+        template / deeplink_title 为旧 SDK 兼容参数, 服务端忽略, 不发送 markdown。
         """
         url = f"{self._app_base()}/notify/messages"
         body: dict[str, Any] = {
@@ -298,6 +301,10 @@ class EasyAuthAppClient:
             body["dedup_key"] = dedup_key
         if biz_tag is not None:
             body["biz_tag"] = biz_tag
+        if template is not None:
+            body["template"] = template
+        if deeplink_title is not None:
+            body["deeplink_title"] = deeplink_title
         return self._request_json(url, method="POST", body=body)
 
     def get_notification(self, message_id: str) -> dict[str, Any]:

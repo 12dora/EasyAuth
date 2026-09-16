@@ -93,15 +93,27 @@ generation 未变也会刷新本地 `last_synced_at`——新鲜度表示「已�
 
 工作通知钉钉载荷固定为 `msgtype: oa`（不再发送 markdown / text / action_card）：
 
-- `head.text` 为调用应用登记名（`App.name`，中文展示名，不是 `app_key`）；可选请求字段
-  `app_display_name` 可覆盖。EasyAuth 自己发出的通知（如 `easyauth-lifecycle` 交接提醒）
-  使用站点标题，缺省「统一身份认证」，色带固定 `FF1F6FEB`。
-- `head.bgcolor` 取应用可选字段 `notify_head_bgcolor`（8 位 ARGB）；未设置时按 app id
-  哈希在六色调色板中取稳定色带，使不同应用在钉钉里是不同颜色的标题块。
-- `body.title` 为通知标题（中文）；原先的 markdown 正文去掉标记后进入 `body.content`，保留换行。
-- `body.form` **始终**含 `时间`（Asia/Shanghai `HH:mm`），避免钉钉对「同一用户同一天相同内容」
-  静默去重。请求可附带 `fields: [{key, value}]`（例如「来自」）。
-- 若请求带 `deeplink_url`，写入 `message_url`。
+- **钉钉会改写 `head.text`。** 官方「消息类型与数据格式」写明：发送**工作通知**时，
+  `oa.head.text` 会被替换为当前发送应用（`agent_id` 所属钉钉应用，即公司服务号）在开放
+  平台登记的名称，请求体里的 `head.text` 对收件人不可见。因此调用应用的中文身份不能靠页
+  眉传达。
+- **色带仍有效。** `head.bgcolor` 文档未说会替换；取应用可选字段 `notify_head_bgcolor`
+  （8 位 ARGB），未设置时按 app id 哈希在六色调色板中取稳定色带。不同应用在钉钉里是不同
+  颜色的标题块。EasyAuth 自己发出的通知（如 `easyauth-lifecycle`）色带固定 `FF1F6FEB`。
+- **`body.title` 前缀承载调用方中文名。** 合成为 `<应用中文名> · <通知标题>`。应用中文名
+  取 `app_display_name`（若请求提供）否则 `App.name`，永不回落 `app_key`；EasyAuth 自身
+  通知用站点标题，缺省「统一身份认证」。只截断通知标题部分，永不截断应用名。钉钉建议
+  `body.title` 50 字以内，合成标题压到 40 字。`head.text` 仍按登记名填写（非工作通知场景
+  才看得见），但工作通知上被钉钉覆盖，不能当作产品口径。
+- `body.content` 为剥掉 markdown 标记后的纯文本，保留换行。旧 SDK 的 `template` 字段被
+  忽略（不再发送 markdown / text / action_card）。
+- `body.form` **始终**含 `时间`（Asia/Shanghai `YYYY-MM-DD HH:mm:ss`），避免钉钉对「同一
+  用户同一天相同内容」静默去重。请求可附带 `fields: [{key, value}]`（例如「来自」），至
+  多 5 项（加上「时间」后钉钉最多显示 6 条）；不得使用保留键「时间」。`key`/`value` 长度
+  是卡片展示约束，不是钉钉硬限制。
+- 若请求带 `deeplink_url`，写入 `message_url`。旧 SDK 的 `deeplink_title` 以及其它未知
+  字段一律忽略，不得 422。移除条件：EasyLearning 等下游升级到不再发送旧字段的 SDK 之后，
+  再考虑把 `template` / `deeplink_title` 收成 422。
 
 - 目录作用域只能从控制台返回的权威列表里选；作用域失效会让健康检查 unhealthy，越界收件人
   记 `USER_SCOPE_MISMATCH`。

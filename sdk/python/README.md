@@ -283,6 +283,10 @@ accepted = notify_client.send_notification(
 message = notify_client.get_notification(accepted["message_id"])
 ```
 
+钉钉工作通知会把 `oa.head.text` 改写成服务号名称，因此调用应用中文名写在 `body.title`
+前缀（`<应用中文名> · <通知标题>`），色带仍按应用。旧版 `send_notification(template=...,
+deeplink_title=...)` 请求体服务端仍接受并忽略，映射为 OA 纯文本。
+
 `send_notification` 的 HTTP `202` 只表示 EasyAuth 已受理，绝不表示钉钉已发送或用户已收到。
 格式畸形的 scoped ref、未知 ref 和通道 scope 不匹配不会把整次请求改成 HTTP
 `422`；在请求体结构本身有效时，消息仍以 `202` 受理，这些收件人随后分别成为终态 `failed`。

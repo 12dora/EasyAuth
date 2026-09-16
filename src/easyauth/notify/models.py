@@ -110,11 +110,6 @@ class NotifyMessage(models.Model):
     title: models.CharField[str, str] = models.CharField(max_length=100, blank=True)
     content: models.TextField[str, str] = models.TextField()
     deeplink_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
-    deeplink_title: models.CharField[str, str] = models.CharField(
-        max_length=20,
-        blank=True,
-        default="",
-    )
     form_fields: models.JSONField[list[JsonValue], list[JsonValue]] = models.JSONField(
         default=list,
         blank=True,

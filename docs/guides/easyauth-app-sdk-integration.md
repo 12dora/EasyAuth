@@ -225,7 +225,7 @@ reports = directory_client.search_directory_users(
 | `get_directory_user_manager` | 直接主管;无主管时服务端 `404` |
 | `list_directory_user_subordinates` | 直接下属(不分页全量) |
 | `list_directory_departments` | 部门列表(`parent_id` 省略=全量扁平列表,树由消费方自建) |
-| `send_notification` | 发送钉钉 OA 工作通知(异步受理;可选 `fields` / `app_display_name` / `deeplink_url`) |
+| `send_notification` | 发送钉钉 OA 工作通知(异步受理;可选 `fields` / `app_display_name` / `deeplink_url`；旧 `template` / `deeplink_title` 仍接受并忽略) |
 | `get_notification` | 查询投递状态 |
 
 ## 生命周期交接回调

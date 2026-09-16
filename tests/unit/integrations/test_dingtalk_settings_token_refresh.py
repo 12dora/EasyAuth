@@ -55,6 +55,50 @@ def test_connectivity_check_forces_fresh_token(monkeypatch: pytest.MonkeyPatch) 
     assert client.force_refresh_values == [True]
 
 
+def test_connectivity_check_probes_notify_triple_when_independent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main = _ConnectivityClient()
+    notify = _ConnectivityClient()
+    config = DingTalkRuntimeConfig(
+        app_key="main-key",
+        app_secret="main-secret",
+        agent_id="1001",
+        timeout_seconds=5,
+        notify=DingTalkCredentialTriple(
+            app_key="svc-key",
+            app_secret="svc-secret",
+            agent_id="9001",
+        ),
+    )
+
+    def require_superuser(_request: HttpRequest) -> str:
+        return "admin"
+
+    def record_test(*, actor_id: str, ok: bool, error: str) -> None:
+        del actor_id, ok, error
+
+    monkeypatch.setattr(settings_api, "require_superuser", require_superuser)
+    monkeypatch.setattr(
+        settings_api.DingTalkApiClient,  # pyright: ignore[reportPrivateLocalImportUsage]
+        "from_settings",
+        lambda: main,
+    )
+    monkeypatch.setattr(
+        settings_api.DingTalkApiClient,  # pyright: ignore[reportPrivateLocalImportUsage]
+        "from_notify_settings",
+        lambda: notify,
+    )
+    monkeypatch.setattr(settings_api, "dingtalk_runtime_config", lambda: config)
+    monkeypatch.setattr(settings_api, "_record_dingtalk_test", record_test)
+
+    response = settings_api.console_dingtalk_connectivity_test(RequestFactory().post("/"))
+
+    assert response.status_code == HTTPStatus.OK
+    assert main.force_refresh_values == [True]
+    assert notify.force_refresh_values == [True]
+
+
 def test_credential_update_invalidates_previous_token(monkeypatch: pytest.MonkeyPatch) -> None:
     _ = IntegrationSettings.objects.create(
         pk=1,
@@ -62,23 +106,11 @@ def test_credential_update_invalidates_previous_token(monkeypatch: pytest.Monkey
         dingtalk_app_secret="old-secret",
     )
     invalidated: list[tuple[str, str]] = []
-    previous = DingTalkRuntimeConfig(
-        app_key="old-app",
-        app_secret="old-secret",
-        agent_id="",
-        timeout_seconds=5,
-        notify=DingTalkCredentialTriple(app_key="old-app", app_secret="old-secret", agent_id=""),
-    )
-    monkeypatch.setattr(settings_api, "dingtalk_runtime_config", lambda: previous)
 
     def invalidate(*, app_key: str, app_secret: str) -> None:
         invalidated.append((app_key, app_secret))
 
-    monkeypatch.setattr(
-        settings_api,
-        "invalidate_access_token",
-        invalidate,
-    )
+    monkeypatch.setattr(settings_api, "invalidate_access_token", invalidate)
     request = RequestFactory().patch(
         "/",
         data=dumps({"dingtalk_app_key": "new-app"}),
@@ -106,18 +138,6 @@ def test_notify_credential_update_invalidates_previous_notify_token(
         dingtalk_notify_agent_id="9001",
     )
     invalidated: list[tuple[str, str]] = []
-    previous = DingTalkRuntimeConfig(
-        app_key="main-app",
-        app_secret="main-secret",
-        agent_id="1001",
-        timeout_seconds=5,
-        notify=DingTalkCredentialTriple(
-            app_key="old-svc",
-            app_secret="old-svc-secret",
-            agent_id="9001",
-        ),
-    )
-    monkeypatch.setattr(settings_api, "dingtalk_runtime_config", lambda: previous)
 
     def invalidate(*, app_key: str, app_secret: str) -> None:
         invalidated.append((app_key, app_secret))
@@ -136,3 +156,33 @@ def test_notify_credential_update_invalidates_previous_notify_token(
 
     assert response.status_code == HTTPStatus.OK
     assert invalidated == [("old-svc", "old-svc-secret")]
+
+
+def test_incomplete_notify_patch_does_not_invalidate_main_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = IntegrationSettings.objects.create(
+        pk=1,
+        dingtalk_app_key="main-app",
+        dingtalk_app_secret="main-secret",
+        dingtalk_agent_id="1001",
+    )
+    invalidated: list[tuple[str, str]] = []
+
+    def invalidate(*, app_key: str, app_secret: str) -> None:
+        invalidated.append((app_key, app_secret))
+
+    monkeypatch.setattr(settings_api, "invalidate_access_token", invalidate)
+    request = RequestFactory().patch(
+        "/",
+        data=dumps({"dingtalk_notify_app_key": "svc-key-only"}),
+        content_type="application/json",
+    )
+
+    response = settings_api._update_settings(  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        request,
+        actor_id="admin",
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert invalidated == []

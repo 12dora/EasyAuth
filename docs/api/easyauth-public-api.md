@@ -568,10 +568,11 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 `(directory_source_slug, corp_id)`，只允许向该作用域内的 active 员工投递；
 作用域失效时依赖健康为 unhealthy，worker 会拒绝越界收件人。
 
-钉钉 OA 头使用该静态 token 所属应用登记行的 `name`（中文展示名，不是 `app_key`）；
-可用 `app_display_name` 覆盖。色带见应用 `notify_head_bgcolor`，未设置则按应用 id
-哈希取六色调色板中的稳定色。`body.form` 始终含 Asia/Shanghai 的「时间」字段，
-避免钉钉对同一用户同一天相同内容静默去重。
+钉钉 OA 色带使用该静态 token 所属应用登记行的 `notify_head_bgcolor`，未设置则按应用 id
+哈希取六色调色板中的稳定色。工作通知会把 `oa.head.text` 改写成服务号名称，因此调用应用
+中文名写在 `body.title` 前缀：`<应用中文名> · <通知标题>`（只截标题，合成 ≤40 字）。
+应用中文名取 `app_display_name` 否则 `App.name`。`body.form` 始终含 Asia/Shanghai 的
+「时间」字段（精确到秒并带日期），避免钉钉对同一用户同一天相同内容静默去重。
 
 **异步受理语义**：`POST` 成功仅代表 EasyAuth 已落库并排程投递；真正的逐人成败通过 `GET` 状态查询。收件人应传目录返回的 opaque `user_ref` 并原样保存/回传。EasyAuth 不接受旧裸 `user_id` 或未作用域 `dt:<钉钉userid>` 兼容引用。在 capability、通道和请求体结构均有效时，畸形 scoped ref、未知 ref、非 active 或与通道作用域不一致都不会把整个请求变成 HTTP 409/422；消息仍以 202 受理，对应收件人分别成为终态 `failed`。
 
@@ -580,16 +581,19 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 | 字段 | 必填 | 约束 |
 | --- | --- | --- |
 | `recipients` | 是 | 1~500 个非空用户引用，每个 ≤4096 字符；解析成功后按 `(source_slug, corp_id, dingtalk_user_id)` 合并去重 |
-| `title` | 是 | ≤100 字符，中文通知标题，对应 OA `body.title` |
+| `title` | 是 | ≤100 字符，中文通知标题；OA `body.title` 合成为 `<应用中文名> · <本字段>`，只截本字段，合成 ≤40 字 |
 | `content` | 是 | 组装后的钉钉 msg JSON ≤ **2048 字节（UTF-8）**，超限 `422`；markdown 标记会剥成纯文本写入 `body.content` |
 | `deeplink_url` | 否 | ≤500 字符；`https://` 或 `dingtalk://dingtalkclient/page/link?...`（内嵌 url 仍须 https）；有值则写入 OA `message_url` |
-| `fields` | 否 | `[{key, value}]`，至多 20 项，接到「时间」之后；例如 `来自` |
-| `app_display_name` | 否 | ≤128 字符，覆盖 OA `head.text` |
+| `fields` | 否 | `[{key, value}]`，至多 **5** 项，接到系统「时间」之后；不得使用保留键「时间」。钉钉最多显示 6 条 form。`key`≤20 / `value`≤100 是卡片展示约束 |
+| `app_display_name` | 否 | ≤128 字符，覆盖 `body.title` 前缀中的应用中文名；不写入 `head.text` |
 | `author` | 否 | ≤64 字符，对应 OA `body.author` |
 | `dedup_key` | 否 | ≤128 字符；app 内**永久**幂等键 |
 | `biz_tag` | 否 | ≤64 字符，业务分类标签；属于幂等载荷字段 |
+| `template` | 否 | **兼容旧 SDK**：忽略，不发送 markdown / text / action_card |
+| `deeplink_title` | 否 | **兼容旧 SDK**：忽略。其它未知字段同样忽略，不得 422 |
 
-不再接受 `template` / `deeplink_title`。工作通知一律发送钉钉 OA。
+工作通知一律发送钉钉 OA。`template` / `deeplink_title` 是已部署 EasyLearning SDK 的外部契约；
+移除条件是下游升级到不再发送这两个字段的 SDK 之后。
 
 **请求示例：**
 

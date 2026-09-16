@@ -288,8 +288,32 @@ def test_send_notification_minimal_body(monkeypatch: Any) -> None:
         "author",
         "dedup_key",
         "biz_tag",
+        "template",
+        "deeplink_title",
     ):
         assert optional not in captured["body"]
+
+
+def test_send_notification_legacy_kwargs_still_in_body(monkeypatch: Any) -> None:
+    response = _load_sample("notify/message_create_response.json")
+    captured = _stub_json(monkeypatch, response)
+
+    _ = _client().send_notification(
+        recipients=[_USER_REF],
+        template="markdown",
+        title="课程提醒",
+        content="### 正文",
+        deeplink_title="查看详情",
+    )
+
+    _assert_bearer(captured)
+    assert captured["body"] == {
+        "recipients": [_USER_REF],
+        "title": "课程提醒",
+        "content": "### 正文",
+        "template": "markdown",
+        "deeplink_title": "查看详情",
+    }
 
 
 def test_get_notification(monkeypatch: Any) -> None:

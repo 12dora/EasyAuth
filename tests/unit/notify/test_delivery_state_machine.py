@@ -19,7 +19,7 @@ from easyauth.notify.acceptance import (
     accept_notify_message,
 )
 from easyauth.notify.contracts import MAX_DELIVERY_ATTEMPTS, NOTIFY_THROTTLE_RETRY_SECONDS
-from easyauth.notify.delivery import deliver_message
+from easyauth.notify.delivery import _stored_form_fields, deliver_message
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_ERROR_DINGTALK_REJECTED,
@@ -336,3 +336,24 @@ def test_mixed_accept_fail_and_deliver_partial(
     assert message.status == NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED
     assert message.recipient_sent == 1
     assert message.recipient_failed == 1
+
+
+def test_stored_form_fields_bad_json_raises_typeerror() -> None:
+    app = App.objects.create(app_key="notify-sm-bad-form", name="坏表单")
+    message = NotifyMessage.objects.create(
+        app=app,
+        channel=AppNotificationChannel.objects.get(app=app, is_active=True),
+        title="t",
+        content="c",
+        payload_hash="b" * 64,
+        form_fields=["not-an-object"],
+        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+        requested_credential_id=1,
+    )
+    with pytest.raises(TypeError, match="通知表单字段必须为对象列表"):
+        _ = _stored_form_fields(message)
+
+    message.form_fields = [{"key": 1, "value": "x"}]
+    message.save(update_fields=["form_fields"])
+    with pytest.raises(TypeError, match="通知表单字段必须含字符串 key/value"):
+        _ = _stored_form_fields(message)

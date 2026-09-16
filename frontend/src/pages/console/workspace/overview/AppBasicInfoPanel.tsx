@@ -36,6 +36,10 @@ function AppBasicInfoRows({ app, status }: { app?: AppSummary; status: string | 
       <BasicInfoItem label={t("console.overview.field.appName")} value={app ? formatAppDisplayName(app) : "-"} />
       <BasicInfoItem label={t("console.overview.field.appAlias")} value={app?.alias || "-"} />
       <BasicInfoItem label={t("console.overview.field.appKey")} value={<code>{app?.app_key || "-"}</code>} />
+      <BasicInfoItem
+        label={t("console.overview.field.notifyHeadBgcolor")}
+        value={app?.notify_head_bgcolor || t("console.overview.field.notifyHeadBgcolorPalette")}
+      />
       <BasicInfoItem label={t("appList.column.owners")} value={<PeopleList people={app?.owners} t={t} />} />
       <BasicInfoItem label={t("console.overview.field.developers")} value={<PeopleList people={developers} t={t} />} />
       <BasicInfoItem label={t("common.updatedAt")} value={formatDateTime(app?.updated_at)} />

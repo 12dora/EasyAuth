@@ -20,6 +20,7 @@ from easyauth.applications.models import (
     AppCapability,
     AppNotificationChannel,
 )
+from easyauth.applications.notify_appearance import palette_notify_head_bgcolor
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.models import AuditLog
 from easyauth.notify.delivery import deliver_message
@@ -466,30 +467,92 @@ def test_notify_api_delivers_oa_payload_with_registered_app_name(
     assert sent_msg["msgtype"] == "oa"
     oa = sent_msg["oa"]
     assert oa["head"]["text"] == "学习工作台"
-    assert oa["head"]["bgcolor"]
-    assert oa["body"]["title"] == "课程提醒"
+    assert oa["head"]["bgcolor"] == palette_notify_head_bgcolor(app.id)
+    assert oa["body"]["title"] == "学习工作台 · 课程提醒"
     assert oa["body"]["content"] == "请完成本周学习\n必修课"
     assert oa["body"]["form"][0]["key"] == "时间"
     assert oa["body"]["form"][1] == {"key": "来自", "value": "李老师"}
     assert oa["message_url"] == "https://learn.example.com/lessons/9"
 
 
-def test_post_rejects_markdown_template_field(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_post_accepts_legacy_sdk_markdown_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache.clear()
+    app = App.objects.create(app_key=_APP_KEY, name="学习工作台")
+    _enable_notify(app)
+    _auth(monkeypatch, app)
+    _seed_user(authentik="legacy-u", dingtalk="dt-legacy")
+    # 46cd486 之前 SDK send_notification 的精确请求体: 必填 template, 可选 deeplink_title。
+    body = {
+        "recipients": ["legacy-u"],
+        "template": "markdown",
+        "content": "### 请完成本周学习\n**必修课**",
+        "title": "课程提醒",
+        "deeplink_url": "https://learn.example.com/lessons/9",
+        "deeplink_title": "查看详情",
+        "dedup_key": "lesson:9",
+        "biz_tag": "learning",
+    }
+    response = notify_messages_create(_post(body), _APP_KEY)
+    assert response.status_code == HTTPStatus.ACCEPTED
+    message_id = loads(response.content)["message_id"]
+
+    client = MagicMock()
+    client.send_work_notification.return_value = "task-legacy"
+
+    def client_for_channel(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
+        return client, 42
+
+    monkeypatch.setattr(
+        "easyauth.notify.channel_config.dingtalk_client_and_agent",
+        client_for_channel,
+    )
+    deliver_message(message_id, 1)
+
+    client.send_work_notification.assert_called_once()
+    sent_msg = client.send_work_notification.call_args.kwargs["msg"]
+    assert sent_msg["msgtype"] == "oa"
+    oa = sent_msg["oa"]
+    assert oa["body"]["title"] == "学习工作台 · 课程提醒"
+    assert oa["body"]["content"] == "请完成本周学习\n必修课"
+    assert oa["message_url"] == "https://learn.example.com/lessons/9"
+    assert oa["head"]["bgcolor"] == palette_notify_head_bgcolor(app.id)
+
+
+def test_post_ignores_unknown_extra_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache.clear()
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_notify(app)
+    _auth(monkeypatch, app)
+    _seed_user(authentik="extra-u", dingtalk="dt-extra")
+    body = {
+        "recipients": ["extra-u"],
+        "title": "问候",
+        "content": "你好",
+        "template": "text",
+        "deeplink_title": "查看详情",
+        "future_sdk_field": {"nested": True},
+    }
+    response = notify_messages_create(_post(body), _APP_KEY)
+    assert response.status_code == HTTPStatus.ACCEPTED
+    assert NotifyMessage.objects.filter(app=app).exists() is True
+
+
+def test_post_rejects_too_many_form_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     cache.clear()
     app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
     _enable_notify(app)
     _auth(monkeypatch, app)
     body = {
         "recipients": ["u1"],
-        "template": "markdown",
-        "title": "旧模板",
-        "content": "### 正文",
+        "title": "标题",
+        "content": "正文",
+        "fields": [{"key": f"k{index}", "value": "v"} for index in range(6)],
     }
     response = notify_messages_create(_post(body), _APP_KEY)
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     payload = loads(response.content)
     assert payload["error"]["code"] == "VALIDATION_ERROR"
-    assert "template" in payload["error"]["details"]["fields"]
+    assert payload["error"]["details"]["field"] == "fields"
     assert NotifyMessage.objects.filter(app=app).exists() is False
 
 
