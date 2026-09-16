@@ -55,9 +55,21 @@ def dingtalk_client_and_agent(
     )
 
 
+def notify_work_notice_enabled() -> bool:
+    """工作通知(OA)渠道全局开关; 无设置行时与列默认值一致(开启)。"""
+    row = _settings_row()
+    if row is None:
+        return True
+    return row.dingtalk_notify_work_notice_enabled
+
+
 def notify_robot_enabled() -> bool:
     """服务号机器人 sidecar 全局开关; 无设置行时与列默认值一致(开启)。"""
-    row = IntegrationSettings.objects.filter(pk=INTEGRATION_SETTINGS_SINGLETON_ID).first()
+    row = _settings_row()
     if row is None:
         return True
     return row.dingtalk_notify_robot_enabled
+
+
+def _settings_row() -> IntegrationSettings | None:
+    return IntegrationSettings.objects.filter(pk=INTEGRATION_SETTINGS_SINGLETON_ID).first()

@@ -34,6 +34,7 @@ def test_integration_settings_get_returns_env_fallback() -> None:
     assert payload["dingtalk_notify_app_key"] == ""
     assert payload["dingtalk_notify_app_secret_configured"] is False
     assert payload["dingtalk_notify_agent_id"] == ""
+    assert payload["dingtalk_notify_work_notice_enabled"] is True
     assert payload["dingtalk_notify_robot_enabled"] is True
 
 
@@ -209,6 +210,41 @@ def test_integration_settings_notify_robot_switch_round_trip() -> None:
     assert payload["dingtalk_notify_robot_enabled"] is False
     row.refresh_from_db()
     assert row.dingtalk_notify_robot_enabled is False
+
+
+def test_integration_settings_work_notice_switch_round_trip() -> None:
+    client = _logged_in_superuser("settings-work-notice-admin")
+    row = IntegrationSettings.load()
+    assert row.dingtalk_notify_work_notice_enabled is True
+
+    response = client.patch(
+        SETTINGS_API_URL,
+        data={"dingtalk_notify_work_notice_enabled": False},
+        content_type="application/json",
+    )
+    assert response.status_code == HTTPStatus.OK
+    payload = cast("dict[str, JsonValue]", response.json())
+    assert payload["dingtalk_notify_work_notice_enabled"] is False
+    row.refresh_from_db()
+    assert row.dingtalk_notify_work_notice_enabled is False
+
+
+def test_integration_settings_rejects_disabling_every_notify_channel() -> None:
+    client = _logged_in_superuser("settings-no-channel-admin")
+
+    response = client.patch(
+        SETTINGS_API_URL,
+        data={
+            "dingtalk_notify_work_notice_enabled": False,
+            "dingtalk_notify_robot_enabled": False,
+        },
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    row = IntegrationSettings.load()
+    assert row.dingtalk_notify_work_notice_enabled is True
+    assert row.dingtalk_notify_robot_enabled is True
 
 
 def test_integration_settings_patch_can_explicitly_clear_fields() -> None:

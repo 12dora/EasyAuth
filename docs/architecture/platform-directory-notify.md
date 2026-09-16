@@ -98,9 +98,12 @@ AppKey，权限点 `qyapi_robot_sendmsg`，EasyAuth 只发不收）。走新版
 `deeplink_url` 用 `sampleActionCard2`。Markdown 正文为
 `### <应用名> · <标题>` + 原文 content + `HH:mm · 来自 <发起方>`，与 OA body 同一套身份
 信息。机器人结果记在收件人行的 `robot_process_query_key` / `robot_status` /
-`robot_error`，**失败不得把工作通知标失败，反之亦然**。全局开关
-`IntegrationSettings.dingtalk_notify_robot_enabled`（默认开启；控制台「同时经服务号机器人推送」）
-可关掉第二通道。
+`robot_error`，**失败不得把工作通知标失败，反之亦然**。两个渠道各有全局开关
+（控制台「钉钉 · 服务号」卡片的「通知渠道」子块）：`IntegrationSettings.dingtalk_notify_robot_enabled`
+（默认开启；「服务号机器人」）关掉机器人第二通道；`dingtalk_notify_work_notice_enabled`
+（默认开启；「工作通知」）关掉 OA 工作通知，此时投递不再调用 `asyncsend_v2`，收件人终态改由
+机器人结果推进（机器人成功记 `sent` 且 `dingtalk_task_id` 留空，对账任务据此跳过；机器人失败记
+`failed` + `error_code=ROBOT_REJECTED`）。两个开关不得同时关闭，设置接口会以 422 拒绝。
 
 工作通知钉钉载荷固定为 `msgtype: oa`（不再发送 markdown / text / action_card）：
 

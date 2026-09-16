@@ -22,6 +22,7 @@ const SETTINGS = {
   dingtalk_notify_app_key: "",
   dingtalk_notify_app_secret_configured: false,
   dingtalk_notify_agent_id: "",
+  dingtalk_notify_work_notice_enabled: true,
   dingtalk_notify_robot_enabled: true,
   updated_at: "2026-07-10T08:00:00Z",
   updated_by: "admin",
@@ -87,7 +88,7 @@ describe("ConsoleSettingsPage", () => {
     });
   });
 
-  test("通知应用块可单独保存且不回显 secret", async () => {
+  test("服务号卡片可单独保存且不回显 secret", async () => {
     const fetchMock = settingsFetchMock({
       dingtalk_notify_app_key: "svc-key",
       dingtalk_notify_app_secret_configured: true,
@@ -99,18 +100,18 @@ describe("ConsoleSettingsPage", () => {
 
     renderSettings();
 
-    expect(await screen.findByRole("heading", { name: "通知应用（服务号）" })).toBeVisible();
-    expect(screen.getByText("用于工作通知发送；留空则沿用上方应用。")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "钉钉 · 服务号" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "钉钉 · 统一认证应用" })).toBeVisible();
     const notifyKey = await screen.findByLabelText("服务号 AppKey");
     await waitFor(() => expect(notifyKey).toHaveValue("svc-key"));
-    expect(await screen.findByText("已设置")).toBeVisible();
+    const notifyForm = notifyKey.closest("form");
+    expect(notifyForm).not.toBeNull();
+    expect(within(notifyForm!).getAllByText("已设置")).toHaveLength(1);
     expect(screen.getByLabelText("服务号 AppSecret")).toHaveValue("");
     expect(document.body).not.toHaveTextContent("must-never-render");
     fireEvent.change(notifyKey, { target: { value: "svc-key-2" } });
     await user.type(screen.getByLabelText("服务号 AppSecret"), "one-time-notify-secret");
-    const dingtalkForm = notifyKey.closest("form");
-    expect(dingtalkForm).not.toBeNull();
-    await user.click(within(dingtalkForm!).getByRole("button", { name: "保存设置" }));
+    await user.click(within(notifyForm!).getByRole("button", { name: "保存设置" }));
 
     await waitFor(() => {
       expect(requestBody(fetchMock)).toEqual({
@@ -121,6 +122,26 @@ describe("ConsoleSettingsPage", () => {
     expect(JSON.stringify(requestBody(fetchMock))).not.toContain("must-never-render");
   });
 
+  test("统一认证应用卡片的保存不携带服务号字段", async () => {
+    const fetchMock = settingsFetchMock({ dingtalk_notify_app_key: "svc-key" });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSettings();
+
+    const agentId = await screen.findByLabelText("钉钉 AgentId");
+    await waitFor(() => expect(agentId).toHaveValue("1001"));
+    const appForm = agentId.closest("form");
+    expect(appForm).not.toBeNull();
+    expect(within(appForm!).queryByLabelText("服务号 AppKey")).toBeNull();
+    fireEvent.change(agentId, { target: { value: "1002" } });
+    await user.click(within(appForm!).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => {
+      expect(requestBody(fetchMock)).toEqual({ dingtalk_agent_id: "1002" });
+    });
+  });
+
   test("关闭服务号机器人开关时只发送该布尔字段", async () => {
     const fetchMock = settingsFetchMock({ dingtalk_notify_robot_enabled: true });
     vi.stubGlobal("fetch", fetchMock);
@@ -128,17 +149,50 @@ describe("ConsoleSettingsPage", () => {
 
     renderSettings();
 
-    const toggle = await screen.findByRole("checkbox", { name: "同时经服务号机器人推送" });
+    const toggle = await screen.findByRole("switch", { name: "服务号机器人" });
     await waitFor(() => expect(toggle).toBeChecked());
     await user.click(toggle);
     expect(toggle).not.toBeChecked();
-    const dingtalkForm = toggle.closest("form");
-    expect(dingtalkForm).not.toBeNull();
-    await user.click(within(dingtalkForm!).getByRole("button", { name: "保存设置" }));
+    const notifyForm = toggle.closest("form");
+    expect(notifyForm).not.toBeNull();
+    await user.click(within(notifyForm!).getByRole("button", { name: "保存设置" }));
 
     await waitFor(() => {
       expect(requestBody(fetchMock)).toEqual({ dingtalk_notify_robot_enabled: false });
     });
+  });
+
+  test("关闭工作通知开关时只发送该布尔字段", async () => {
+    const fetchMock = settingsFetchMock({ dingtalk_notify_work_notice_enabled: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSettings();
+
+    const toggle = await screen.findByRole("switch", { name: "工作通知" });
+    await waitFor(() => expect(toggle).toBeChecked());
+    await user.click(toggle);
+    const notifyForm = toggle.closest("form");
+    expect(notifyForm).not.toBeNull();
+    await user.click(within(notifyForm!).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => {
+      expect(requestBody(fetchMock)).toEqual({ dingtalk_notify_work_notice_enabled: false });
+    });
+  });
+
+  test("载荷到达后概览条按现有字段给出三个状态", async () => {
+    const fetchMock = settingsFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderSettings();
+
+    const summary = (await screen.findByText("钉钉统一认证")).closest("div")?.parentElement;
+    expect(summary).not.toBeNull();
+    expect(within(summary!).getByText("Authentik")).toBeVisible();
+    expect(within(summary!).getByText("服务号")).toBeVisible();
+    // 服务号三元组为空: 概览与卡片都应说明回退到统一认证应用, 而不是报未配置。
+    expect(within(summary!).getByText("沿用统一认证应用")).toBeVisible();
   });
 });
 

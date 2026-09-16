@@ -21,6 +21,7 @@ from easyauth.notify.delivery import deliver_message
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_ERROR_DINGTALK_REJECTED,
+    NOTIFY_ERROR_ROBOT_REJECTED,
     NOTIFY_MESSAGE_STATUS_COMPLETED,
     NOTIFY_MESSAGE_STATUS_FAILED,
     NOTIFY_RECIPIENT_STATUS_FAILED,
@@ -210,3 +211,50 @@ def test_robot_switch_off_skips_robot_call(monkeypatch: pytest.MonkeyPatch) -> N
     assert recipient.robot_error is None
     client.send_work_notification.assert_called_once()
     client.send_robot_oto_messages.assert_not_called()
+
+
+def test_work_notice_switch_off_delivers_via_robot_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = IntegrationSettings.load()
+    row.dingtalk_notify_work_notice_enabled = False
+    row.save(update_fields=["dingtalk_notify_work_notice_enabled", "updated_at"])
+    app = App.objects.create(app_key="notify-oa-off", name="学习工作台")
+    _seed_user(authentik="r5", dingtalk="dt-r5")
+    message = _accept(app, ["r5"])
+    client = _patch_client(monkeypatch)
+
+    deliver_message(str(message.id), 1)
+
+    message.refresh_from_db()
+    recipient = NotifyRecipient.objects.get(message=message)
+    assert message.status == NOTIFY_MESSAGE_STATUS_COMPLETED
+    # 工作通知关闭: 不调 OA 接口, 收件人终态由机器人结果决定, 且不留 task_id 给对账任务。
+    client.send_work_notification.assert_not_called()
+    client.send_robot_oto_messages.assert_called_once()
+    assert recipient.status == NOTIFY_RECIPIENT_STATUS_SENT
+    assert recipient.dingtalk_task_id == ""
+    assert recipient.robot_status == NOTIFY_ROBOT_STATUS_SENT
+
+
+def test_work_notice_switch_off_marks_failed_when_robot_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = IntegrationSettings.load()
+    row.dingtalk_notify_work_notice_enabled = False
+    row.save(update_fields=["dingtalk_notify_work_notice_enabled", "updated_at"])
+    app = App.objects.create(app_key="notify-oa-off-fail", name="学习工作台")
+    _seed_user(authentik="r6", dingtalk="dt-r6")
+    message = _accept(app, ["r6"])
+    client = _patch_client(
+        monkeypatch,
+        robot_side_effect=DingTalkApiRequestError("robot denied", status_code=403),
+    )
+
+    deliver_message(str(message.id), 1)
+
+    message.refresh_from_db()
+    recipient = NotifyRecipient.objects.get(message=message)
+    assert message.status == NOTIFY_MESSAGE_STATUS_FAILED
+    client.send_work_notification.assert_not_called()
+    assert recipient.status == NOTIFY_RECIPIENT_STATUS_FAILED
+    assert recipient.error_code == NOTIFY_ERROR_ROBOT_REJECTED
+    assert recipient.robot_status == NOTIFY_ROBOT_STATUS_FAILED

@@ -36,6 +36,9 @@ if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
 
 AUTHENTIK_BASE_URL_INVALID_MESSAGE: Final = "authentik_base_url 必须是 http(s) URL 或留空。"
+NOTIFY_CHANNEL_REQUIRED_MESSAGE: Final = (
+    "工作通知与服务号机器人不能同时关闭, 至少保留一个通知渠道。"
+)
 
 
 class IntegrationSettingsPatch(BaseModel):
@@ -50,6 +53,7 @@ class IntegrationSettingsPatch(BaseModel):
     dingtalk_notify_app_key: str = Field(default="", max_length=128)
     dingtalk_notify_app_secret: str = Field(default="", max_length=512)
     dingtalk_notify_agent_id: str = Field(default="", max_length=64)
+    dingtalk_notify_work_notice_enabled: bool = True
     dingtalk_notify_robot_enabled: bool = True
 
     @field_validator("authentik_base_url")
@@ -112,6 +116,14 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
         # 必须在锁内读取当前生效凭证, 避免并发 PATCH 失效另一个请求之前的陈旧缓存键。
         previous_dingtalk = dingtalk_runtime_config()
         applied = _apply_settings_patch(row, payload)
+        if not row.dingtalk_notify_work_notice_enabled and not row.dingtalk_notify_robot_enabled:
+            # 两个钉钉通知渠道同时关闭等于通知彻底失效, 属于无效配置: 直接拒绝并回滚。
+            transaction.set_rollback(True)
+            return error_response(
+                ErrorCode.VALIDATION_ERROR,
+                NOTIFY_CHANNEL_REQUIRED_MESSAGE,
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
         row.updated_by = actor_id
         row.save(update_fields=[*applied.update_fields, "updated_by", "updated_at"])
         _record_settings_update(
@@ -199,6 +211,9 @@ def _apply_notify_fields(
     if "dingtalk_notify_agent_id" in fields_set:
         row.dingtalk_notify_agent_id = payload.dingtalk_notify_agent_id
         update_fields.append("dingtalk_notify_agent_id")
+    if "dingtalk_notify_work_notice_enabled" in fields_set:
+        row.dingtalk_notify_work_notice_enabled = payload.dingtalk_notify_work_notice_enabled
+        update_fields.append("dingtalk_notify_work_notice_enabled")
     if "dingtalk_notify_robot_enabled" in fields_set:
         row.dingtalk_notify_robot_enabled = payload.dingtalk_notify_robot_enabled
         update_fields.append("dingtalk_notify_robot_enabled")
@@ -296,6 +311,9 @@ def _settings_response() -> JsonResponse:
         if row is not None
         else False,
         "dingtalk_notify_agent_id": row.dingtalk_notify_agent_id if row is not None else "",
+        "dingtalk_notify_work_notice_enabled": True
+        if row is None
+        else row.dingtalk_notify_work_notice_enabled,
         "dingtalk_notify_robot_enabled": True
         if row is None
         else row.dingtalk_notify_robot_enabled,
