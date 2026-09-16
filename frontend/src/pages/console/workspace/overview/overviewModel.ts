@@ -6,8 +6,8 @@ export interface AppPatchPayload {
   /** 面向员工的别名; 清空时提交空字符串, 由后端落成「无别名」。 */
   alias: string;
   description: string;
-  /** 工作通知 OA 色带, 6/8 位十六进制(可带 #); 空串表示走平台调色板。 */
-  notify_head_bgcolor: string;
+  /** 工作通知 OA 色带; 仅用户改动时提交。空串表示改回平台调色板。 */
+  notify_head_bgcolor?: string;
 }
 
 export interface MembershipCreatePayload {

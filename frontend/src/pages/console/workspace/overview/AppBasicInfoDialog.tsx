@@ -37,12 +37,17 @@ export function AppBasicInfoDialog({
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    onSubmit({
+    const payload: AppPatchPayload = {
       name: name.trim(),
       alias: alias.trim(),
       description: description.trim(),
-      notify_head_bgcolor: notifyHeadBgcolor.trim(),
-    });
+    };
+    const nextColor = notifyHeadBgcolor.trim();
+    const previousColor = (app?.notify_head_bgcolor ?? "").trim();
+    if (nextColor !== previousColor) {
+      payload.notify_head_bgcolor = nextColor;
+    }
+    onSubmit(payload);
   };
 
   return (

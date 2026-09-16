@@ -43,3 +43,27 @@ test("编辑基本信息可提交通知色带", async () => {
     notify_head_bgcolor: "#c62828",
   });
 });
+
+test("未改色带时 PATCH 不包含 notify_head_bgcolor", async () => {
+  const onSubmit = vi.fn();
+  const user = userEvent.setup();
+  render(
+    <I18nProvider>
+      <AppBasicInfoDialog
+        app={APP}
+        errorMessage=""
+        isSubmitting={false}
+        onClose={() => undefined}
+        onSubmit={onSubmit}
+      />
+    </I18nProvider>,
+  );
+
+  await user.click(screen.getByRole("button", { name: "保存" }));
+
+  expect(onSubmit).toHaveBeenCalledWith({
+    name: "学习工作台",
+    alias: "",
+    description: "",
+  });
+});
