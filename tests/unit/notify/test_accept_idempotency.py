@@ -16,7 +16,6 @@ from easyauth.notify.models import (
     NOTIFY_MESSAGE_STATUS_FAILED,
     NOTIFY_MESSAGE_STATUS_PENDING,
     NOTIFY_RECIPIENT_STATUS_FAILED,
-    NOTIFY_TEMPLATE_TEXT,
     NotifyMessage,
     NotifyRecipient,
 )
@@ -57,7 +56,7 @@ def _accept(
         NotifyAcceptanceInput(
             app=app,
             message=NotifyMessageInput(
-                template=NOTIFY_TEMPLATE_TEXT,
+                title="测试通知",
                 content=content,
                 recipients=tuple(recipients),
                 dedup_key=dedup_key,

@@ -3,65 +3,73 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 from easyauth.notify.contracts import (
+    APP_DISPLAY_NAME_TOO_LONG_MESSAGE,
+    AUTHOR_TOO_LONG_MESSAGE,
     BIZ_TAG_TOO_LONG_MESSAGE,
     CONTENT_REQUIRED_MESSAGE,
     DEDUP_KEY_TOO_LONG_MESSAGE,
-    DEEPLINK_REQUIRED_MESSAGE,
-    DEEPLINK_TITLE_TOO_LONG_MESSAGE,
     DEEPLINK_URL_INVALID_MESSAGE,
-    DEFAULT_DEEPLINK_TITLE,
     DINGTALK_LINK_PREFIX,
+    FIELDS_INVALID_MESSAGE,
     HTTPS_PREFIX,
+    NOTIFY_APP_DISPLAY_NAME_MAX_CHARS,
+    NOTIFY_AUTHOR_MAX_CHARS,
     NOTIFY_BIZ_TAG_MAX_CHARS,
     NOTIFY_DEDUP_KEY_MAX_CHARS,
-    NOTIFY_DEEPLINK_TITLE_MAX_CHARS,
     NOTIFY_DEEPLINK_URL_MAX_CHARS,
-    NOTIFY_TEMPLATE_ACTION_CARD,
-    NOTIFY_TEMPLATE_MARKDOWN,
-    NOTIFY_TEMPLATE_TEXT,
+    NOTIFY_FORM_FIELD_MAX_ITEMS,
+    NOTIFY_FORM_KEY_MAX_CHARS,
+    NOTIFY_FORM_VALUE_MAX_CHARS,
     NOTIFY_TITLE_MAX_CHARS,
-    TEMPLATE_INVALID_MESSAGE,
     TITLE_REQUIRED_MESSAGE,
     TITLE_TOO_LONG_MESSAGE,
     NotifyAcceptError,
 )
-from easyauth.notify.models import NOTIFY_TEMPLATE_VALUES
+from easyauth.notify.head import resolve_notify_head
+from easyauth.notify.oa import OaBuildInput, build_oa_msg
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from easyauth.applications.models import App
+
+
+@dataclass(frozen=True, slots=True)
+class DingTalkMsgSource:
+    title: str
+    content: str
+    deeplink_url: str = ""
+    fields: tuple[tuple[str, str], ...] = ()
+    app_display_name: str = ""
+    author: str = ""
 
 
 def build_dingtalk_msg(
     *,
-    template: str,
-    title: str,
-    content: str,
-    deeplink_url: str = "",
-    deeplink_title: str = DEFAULT_DEEPLINK_TITLE,
+    app: App,
+    source: DingTalkMsgSource,
+    sent_at: datetime | None = None,
 ) -> dict[str, object]:
-    """组装钉钉工作通知 msg JSON 结构(不含字节校验)。"""
-    if template == NOTIFY_TEMPLATE_TEXT:
-        return {"msgtype": "text", "text": {"content": content}}
-    if template == NOTIFY_TEMPLATE_MARKDOWN:
-        return {
-            "msgtype": "markdown",
-            "markdown": {"title": title, "text": content},
-        }
-    if template == NOTIFY_TEMPLATE_ACTION_CARD:
-        button_title = deeplink_title or DEFAULT_DEEPLINK_TITLE
-        return {
-            "msgtype": "action_card",
-            "action_card": {
-                "title": title,
-                "markdown": content,
-                "single_title": button_title,
-                "single_url": deeplink_url,
-            },
-        }
-    raise NotifyAcceptError(
-        kind="validation_error",
-        message=TEMPLATE_INVALID_MESSAGE,
-        field="template",
+    """组装钉钉工作通知 OA msg JSON(不含字节校验)。"""
+    head_text, head_bgcolor = resolve_notify_head(
+        app=app,
+        app_display_name=source.app_display_name,
+    )
+    return build_oa_msg(
+        OaBuildInput(
+            title=source.title,
+            content=source.content,
+            head_text=head_text,
+            head_bgcolor=head_bgcolor,
+            deeplink_url=source.deeplink_url,
+            fields=source.fields,
+            author=source.author,
+            sent_at=sent_at,
+        ),
     )
 
 
@@ -74,27 +82,29 @@ def dingtalk_msg_utf8_size(msg: dict[str, object]) -> int:
 class NotifyMessageInput:
     """通知正文输入: 受理校验、幂等哈希与落库共用同一字段集。"""
 
-    template: str
     content: str
-    title: str = ""
+    title: str
     deeplink_url: str = ""
-    deeplink_title: str = DEFAULT_DEEPLINK_TITLE
     dedup_key: str = ""
     biz_tag: str = ""
     recipients: tuple[str, ...] = ()
+    fields: tuple[tuple[str, str], ...] = ()
+    app_display_name: str = ""
+    author: str = ""
 
 
 def compute_payload_hash(message: NotifyMessageInput) -> str:
-    """按契约 §N2 对规范化字段全集做幂等哈希。"""
+    """按契约对规范化字段全集做幂等哈希。"""
     canonical = json.dumps(
         {
-            "template": message.template,
             "title": message.title,
             "content": message.content,
             "deeplink_url": message.deeplink_url,
-            "deeplink_title": message.deeplink_title,
             "biz_tag": message.biz_tag,
             "recipients": sorted(message.recipients),
+            "fields": [{"key": key, "value": value} for key, value in message.fields],
+            "app_display_name": message.app_display_name,
+            "author": message.author,
         },
         ensure_ascii=False,
         allow_nan=False,
@@ -106,41 +116,43 @@ def compute_payload_hash(message: NotifyMessageInput) -> str:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedInput:
-    template: str
     title: str
     content: str
     deeplink_url: str
-    deeplink_title: str
     dedup_key: str
     biz_tag: str
+    fields: tuple[tuple[str, str], ...]
+    app_display_name: str
+    author: str
 
 
 def normalize_and_validate(message: NotifyMessageInput) -> NormalizedInput:
     _validate_common_fields(message)
-    effective_title, effective_deeplink, effective_deeplink_title = _template_fields(message)
+    deeplink_url = _validated_deeplink(message.deeplink_url)
     return NormalizedInput(
-        template=message.template,
-        title=effective_title,
+        title=message.title,
         content=message.content,
-        deeplink_url=effective_deeplink,
-        deeplink_title=effective_deeplink_title,
+        deeplink_url=deeplink_url,
         dedup_key=message.dedup_key,
         biz_tag=message.biz_tag,
+        fields=message.fields,
+        app_display_name=message.app_display_name,
+        author=message.author,
     )
 
 
 def _validate_common_fields(message: NotifyMessageInput) -> None:
-    if message.template not in NOTIFY_TEMPLATE_VALUES:
-        raise NotifyAcceptError(
-            kind="validation_error",
-            message=TEMPLATE_INVALID_MESSAGE,
-            field="template",
-        )
     if not message.content:
         raise NotifyAcceptError(
             kind="validation_error",
             message=CONTENT_REQUIRED_MESSAGE,
             field="content",
+        )
+    if not message.title:
+        raise NotifyAcceptError(
+            kind="validation_error",
+            message=TITLE_REQUIRED_MESSAGE,
+            field="title",
         )
     if len(message.title) > NOTIFY_TITLE_MAX_CHARS:
         raise NotifyAcceptError(
@@ -148,6 +160,11 @@ def _validate_common_fields(message: NotifyMessageInput) -> None:
             message=TITLE_TOO_LONG_MESSAGE,
             field="title",
         )
+    _validate_length_fields(message)
+    _validate_form_fields(message.fields)
+
+
+def _validate_length_fields(message: NotifyMessageInput) -> None:
     if len(message.dedup_key) > NOTIFY_DEDUP_KEY_MAX_CHARS:
         raise NotifyAcceptError(
             kind="validation_error",
@@ -160,46 +177,52 @@ def _validate_common_fields(message: NotifyMessageInput) -> None:
             message=BIZ_TAG_TOO_LONG_MESSAGE,
             field="biz_tag",
         )
-    if len(message.deeplink_title) > NOTIFY_DEEPLINK_TITLE_MAX_CHARS:
+    if len(message.app_display_name) > NOTIFY_APP_DISPLAY_NAME_MAX_CHARS:
         raise NotifyAcceptError(
             kind="validation_error",
-            message=DEEPLINK_TITLE_TOO_LONG_MESSAGE,
-            field="deeplink_title",
+            message=APP_DISPLAY_NAME_TOO_LONG_MESSAGE,
+            field="app_display_name",
+        )
+    if len(message.author) > NOTIFY_AUTHOR_MAX_CHARS:
+        raise NotifyAcceptError(
+            kind="validation_error",
+            message=AUTHOR_TOO_LONG_MESSAGE,
+            field="author",
         )
 
 
-def _template_fields(message: NotifyMessageInput) -> tuple[str, str, str]:
-    if message.template == NOTIFY_TEMPLATE_TEXT:
-        # text 模板忽略 title / deeplink。
-        return "", "", DEFAULT_DEEPLINK_TITLE
-    if message.template == NOTIFY_TEMPLATE_MARKDOWN:
-        if not message.title:
+def _validate_form_fields(fields: tuple[tuple[str, str], ...]) -> None:
+    if len(fields) > NOTIFY_FORM_FIELD_MAX_ITEMS:
+        raise NotifyAcceptError(
+            kind="validation_error",
+            message=FIELDS_INVALID_MESSAGE,
+            field="fields",
+        )
+    for key, value in fields:
+        if not key or len(key) > NOTIFY_FORM_KEY_MAX_CHARS:
             raise NotifyAcceptError(
                 kind="validation_error",
-                message=TITLE_REQUIRED_MESSAGE,
-                field="title",
+                message=FIELDS_INVALID_MESSAGE,
+                field="fields",
             )
-        return message.title, "", DEFAULT_DEEPLINK_TITLE
-    # action_card
-    if not message.title:
-        raise NotifyAcceptError(
-            kind="validation_error",
-            message=TITLE_REQUIRED_MESSAGE,
-            field="title",
-        )
-    if not message.deeplink_url:
-        raise NotifyAcceptError(
-            kind="validation_error",
-            message=DEEPLINK_REQUIRED_MESSAGE,
-            field="deeplink_url",
-        )
-    if not _is_valid_deeplink_url(message.deeplink_url):
+        if len(value) > NOTIFY_FORM_VALUE_MAX_CHARS:
+            raise NotifyAcceptError(
+                kind="validation_error",
+                message=FIELDS_INVALID_MESSAGE,
+                field="fields",
+            )
+
+
+def _validated_deeplink(url: str) -> str:
+    if not url:
+        return ""
+    if not _is_valid_deeplink_url(url):
         raise NotifyAcceptError(
             kind="validation_error",
             message=DEEPLINK_URL_INVALID_MESSAGE,
             field="deeplink_url",
         )
-    return message.title, message.deeplink_url, message.deeplink_title or DEFAULT_DEEPLINK_TITLE
+    return url
 
 
 def _is_valid_deeplink_url(url: str) -> bool:

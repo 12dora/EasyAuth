@@ -12,20 +12,14 @@ from easyauth.applications.models import App, AppNotificationChannel
 if TYPE_CHECKING:
     from datetime import date, datetime
 
+    from easyauth.applications.models.constants import JsonValue
+
 # ---- 消息模板 ----
-NOTIFY_TEMPLATE_TEXT: Final = "text"
-NOTIFY_TEMPLATE_MARKDOWN: Final = "markdown"
-NOTIFY_TEMPLATE_ACTION_CARD: Final = "action_card"
+NOTIFY_TEMPLATE_OA: Final = "oa"
 NOTIFY_TEMPLATE_CHOICES: Final[tuple[tuple[str, str], ...]] = (
-    (NOTIFY_TEMPLATE_TEXT, "text"),
-    (NOTIFY_TEMPLATE_MARKDOWN, "markdown"),
-    (NOTIFY_TEMPLATE_ACTION_CARD, "action_card"),
+    (NOTIFY_TEMPLATE_OA, "oa"),
 )
-NOTIFY_TEMPLATE_VALUES: Final[tuple[str, ...]] = (
-    NOTIFY_TEMPLATE_TEXT,
-    NOTIFY_TEMPLATE_MARKDOWN,
-    NOTIFY_TEMPLATE_ACTION_CARD,
-)
+NOTIFY_TEMPLATE_VALUES: Final[tuple[str, ...]] = (NOTIFY_TEMPLATE_OA,)
 
 # ---- 消息聚合状态 ----
 NOTIFY_MESSAGE_STATUS_PENDING: Final = "pending"
@@ -111,16 +105,22 @@ class NotifyMessage(models.Model):
     template: models.CharField[str, str] = models.CharField(
         max_length=16,
         choices=NOTIFY_TEMPLATE_CHOICES,
+        default=NOTIFY_TEMPLATE_OA,
     )
     title: models.CharField[str, str] = models.CharField(max_length=100, blank=True)
     content: models.TextField[str, str] = models.TextField()
     deeplink_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
-    # action_card 按钮文案; 空串表示投递时回落默认「查看详情」(契约 §N2)。
     deeplink_title: models.CharField[str, str] = models.CharField(
         max_length=20,
         blank=True,
         default="",
     )
+    form_fields: models.JSONField[list[JsonValue], list[JsonValue]] = models.JSONField(
+        default=list,
+        blank=True,
+    )
+    app_display_name: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    author: models.CharField[str, str] = models.CharField(max_length=64, blank=True)
     # APP 内幂等键: 同 (app, dedup_key) 只受理一次, 永久有效。
     dedup_key: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     # 规范化载荷 sha256; dedup_key 命中但 hash 不同 → 409 CONFLICT。

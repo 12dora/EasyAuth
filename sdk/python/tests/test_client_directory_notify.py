@@ -10,13 +10,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from easyauth_app_sdk import (
-    NOTIFY_TEMPLATE_ACTION_CARD,
-    NOTIFY_TEMPLATE_MARKDOWN,
-    NOTIFY_TEMPLATE_TEXT,
-    EasyAuthAppClient,
-    EasyAuthClientError,
-)
+from easyauth_app_sdk import EasyAuthAppClient, EasyAuthClientError
 from easyauth_app_sdk import client as client_module
 
 # 仓库根下的契约样例(与服务端契约测试共用)。
@@ -81,12 +75,6 @@ def _stub_json(monkeypatch: Any, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _assert_bearer(captured: dict[str, Any]) -> None:
     assert captured["authorization"] == "Bearer eat_x"
-
-
-def test_constants_exported() -> None:
-    assert NOTIFY_TEMPLATE_TEXT == "text"
-    assert NOTIFY_TEMPLATE_MARKDOWN == "markdown"
-    assert NOTIFY_TEMPLATE_ACTION_CARD == "action_card"
 
 
 def test_search_directory_users_url_and_query(monkeypatch: Any) -> None:
@@ -255,18 +243,17 @@ def test_list_directory_departments_with_parent(monkeypatch: Any) -> None:
 
 
 def test_send_notification_replays_contract_sample(monkeypatch: Any) -> None:
-    """请求体逐字段回放 message_create_request.json(含 deeplink_title)。"""
+    """请求体逐字段回放 message_create_request.json。"""
     request_body = _load_sample("notify/message_create_request.json")
     response = _load_sample("notify/message_create_response.json")
     captured = _stub_json(monkeypatch, response)
 
     result = _client().send_notification(
         recipients=request_body["recipients"],
-        template=request_body["template"],
         content=request_body["content"],
         title=request_body["title"],
         deeplink_url=request_body["deeplink_url"],
-        deeplink_title=request_body["deeplink_title"],
+        fields=request_body["fields"],
         dedup_key=request_body["dedup_key"],
         biz_tag=request_body["biz_tag"],
     )
@@ -284,17 +271,24 @@ def test_send_notification_minimal_body(monkeypatch: Any) -> None:
 
     _ = _client().send_notification(
         recipients=[_USER_REF],
-        template=NOTIFY_TEMPLATE_TEXT,
+        title="问候",
         content="hello",
     )
 
     _assert_bearer(captured)
     assert captured["body"] == {
         "recipients": [_USER_REF],
-        "template": "text",
+        "title": "问候",
         "content": "hello",
     }
-    for optional in ("title", "deeplink_url", "deeplink_title", "dedup_key", "biz_tag"):
+    for optional in (
+        "deeplink_url",
+        "fields",
+        "app_display_name",
+        "author",
+        "dedup_key",
+        "biz_tag",
+    ):
         assert optional not in captured["body"]
 
 

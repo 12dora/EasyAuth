@@ -21,7 +21,6 @@ from easyauth.notify.models import (
     NOTIFY_RECIPIENT_STATUS_FAILED,
     NOTIFY_RECIPIENT_STATUS_PENDING,
     NOTIFY_SCOPED_REF_V1_MAX_CHARS,
-    NOTIFY_TEMPLATE_TEXT,
     NotifyRecipient,
 )
 from easyauth.notify.recipients import resolve_recipients
@@ -34,7 +33,7 @@ def _accept(app: App, recipients: list[str], content: str) -> object:
         NotifyAcceptanceInput(
             app=app,
             message=NotifyMessageInput(
-                template=NOTIFY_TEMPLATE_TEXT,
+                title="测试通知",
                 content=content,
                 recipients=tuple(recipients),
             ),

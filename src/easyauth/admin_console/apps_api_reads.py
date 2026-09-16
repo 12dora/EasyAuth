@@ -242,6 +242,7 @@ def _app_item(
         "app_key": app.app_key,
         "name": app.name,
         "alias": app.alias,
+        "notify_head_bgcolor": app.notify_head_bgcolor,
         "description": app.description,
         "is_active": app.is_active,
         "owners": owners,

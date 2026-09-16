@@ -559,7 +559,7 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
 
 ## 6. 通知
 
-底层通道为钉钉工作通知 `asyncsend_v2`。应用的 `notify` 平台能力和当前
+底层通道为钉钉工作通知 `asyncsend_v2`，载荷固定 `msgtype: oa`。应用的 `notify` 平台能力和当前
 凭据的 `notify` 能力必须同时开启，否则返回 `403 PERMISSION_DENIED`
 （文案：「应用未开通通知能力。」）。该 App 还必须在自己的 workspace 由
 App owner 配置独立的、版本化钉钉通知通道；未配置时返回
@@ -568,6 +568,11 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 `(directory_source_slug, corp_id)`，只允许向该作用域内的 active 员工投递；
 作用域失效时依赖健康为 unhealthy，worker 会拒绝越界收件人。
 
+钉钉 OA 头使用该静态 token 所属应用登记行的 `name`（中文展示名，不是 `app_key`）；
+可用 `app_display_name` 覆盖。色带见应用 `notify_head_bgcolor`，未设置则按应用 id
+哈希取六色调色板中的稳定色。`body.form` 始终含 Asia/Shanghai 的「时间」字段，
+避免钉钉对同一用户同一天相同内容静默去重。
+
 **异步受理语义**：`POST` 成功仅代表 EasyAuth 已落库并排程投递；真正的逐人成败通过 `GET` 状态查询。收件人应传目录返回的 opaque `user_ref` 并原样保存/回传。EasyAuth 不接受旧裸 `user_id` 或未作用域 `dt:<钉钉userid>` 兼容引用。在 capability、通道和请求体结构均有效时，畸形 scoped ref、未知 ref、非 active 或与通道作用域不一致都不会把整个请求变成 HTTP 409/422；消息仍以 202 受理，对应收件人分别成为终态 `failed`。
 
 ### `POST /api/v1/apps/{app_key}/notify/messages`
@@ -575,13 +580,16 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 | 字段 | 必填 | 约束 |
 | --- | --- | --- |
 | `recipients` | 是 | 1~500 个非空用户引用，每个 ≤4096 字符；解析成功后按 `(source_slug, corp_id, dingtalk_user_id)` 合并去重 |
-| `template` | 是 | `text` / `markdown` / `action_card` |
-| `title` | markdown、action_card 必填 | ≤100 字符；text 忽略 |
-| `content` | 是 | 组装后的钉钉 msg JSON ≤ **2048 字节（UTF-8）**，超限 `422` |
-| `deeplink_url` | action_card 必填 | ≤500 字符；`https://` 或 `dingtalk://dingtalkclient/page/link?...`（内嵌 url 仍须 https） |
-| `deeplink_title` | 否 | action_card 按钮文案，≤20 字符，默认「查看详情」 |
+| `title` | 是 | ≤100 字符，中文通知标题，对应 OA `body.title` |
+| `content` | 是 | 组装后的钉钉 msg JSON ≤ **2048 字节（UTF-8）**，超限 `422`；markdown 标记会剥成纯文本写入 `body.content` |
+| `deeplink_url` | 否 | ≤500 字符；`https://` 或 `dingtalk://dingtalkclient/page/link?...`（内嵌 url 仍须 https）；有值则写入 OA `message_url` |
+| `fields` | 否 | `[{key, value}]`，至多 20 项，接到「时间」之后；例如 `来自` |
+| `app_display_name` | 否 | ≤128 字符，覆盖 OA `head.text` |
+| `author` | 否 | ≤64 字符，对应 OA `body.author` |
 | `dedup_key` | 否 | ≤128 字符；app 内**永久**幂等键 |
 | `biz_tag` | 否 | ≤64 字符，业务分类标签；属于幂等载荷字段 |
+
+不再接受 `template` / `deeplink_title`。工作通知一律发送钉钉 OA。
 
 **请求示例：**
 
@@ -591,11 +599,10 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
     "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dXNlcjAxMjM",
     "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:bWFuYWdlcjg4MzY"
   ],
-  "template": "action_card",
   "title": "任务逾期升级",
   "content": "### 任务已逾期 3 天\n**接口联调排期**\n负责人: 王小明",
   "deeplink_url": "https://eproject.jiefakj.com/zh-CN/tasks/123",
-  "deeplink_title": "查看任务",
+  "fields": [{"key": "来自", "value": "王小明"}],
   "dedup_key": "overdue-escalate:123:2026-07-16",
   "biz_tag": "overdue_escalation"
 }
@@ -607,7 +614,7 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 | --- | --- | --- |
 | 新受理 | **202** | `accepted: true`；仅表示 EasyAuth 已落库并排程，不表示已调用钉钉或已发送 |
 | `dedup_key` 命中且载荷一致 | **200** | `accepted: false`，`message_id` 为首次受理 ID |
-| `dedup_key` 命中但载荷不同 | **409 CONFLICT** | 载荷字段包括 `template`、`title`、`content`、`deeplink_url`、`deeplink_title`、`biz_tag` 和排序后的 `recipients` |
+| `dedup_key` 命中但载荷不同 | **409 CONFLICT** | 载荷字段包括 `title`、`content`、`deeplink_url`、`fields`、`app_display_name`、`author`、`biz_tag` 和排序后的 `recipients` |
 | 参数问题 | **422 VALIDATION_ERROR** | 请求体级校验失败，整条请求不落部分消息/收件人；显式 JSON 类型错误不会被转成字符串或空串；`details.field` 指明字段，包括 recipients 非 1~500 个非空字符串或任一引用超过 4096 字符 |
 | 速率/配额超限 | **429 THROTTLED** + `Retry-After` | 日配额的 Retry-After 到次日零点（Asia/Shanghai） |
 | 凭据无效 | **401 AUTHENTICATION_FAILED** | 凭据问题，不应持续重试 |
@@ -643,7 +650,7 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 {
   "message_id": "0d9f5c1e-7a42-4b8e-9c3d-2f1a6b8e4d70",
   "status": "partially_failed",
-  "template": "action_card",
+  "template": "oa",
   "biz_tag": "overdue_escalation",
   "dedup_key": "overdue-escalate:123:2026-07-16",
   "created_at": "2026-07-16T10:00:00+08:00",

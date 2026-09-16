@@ -275,7 +275,6 @@ notify_client = EasyAuthAppClient(
 
 accepted = notify_client.send_notification(
     recipients=[stored_user_ref],
-    template="markdown",
     title="应收提醒",
     content="请处理已到期应收款。",
     dedup_key="ar.overdue:invoice-001:v1",
@@ -310,7 +309,7 @@ from easyauth_app_sdk import EasyAuthClientError
 try:
     notify_client.send_notification(
         recipients=[stored_user_ref],
-        template="text",
+        title="测试通知",
         content="测试通知",
         dedup_key="example:001",
     )

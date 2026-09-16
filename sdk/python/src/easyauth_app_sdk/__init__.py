@@ -14,9 +14,6 @@
 """
 
 from easyauth_app_sdk.client import (
-    NOTIFY_TEMPLATE_ACTION_CARD,
-    NOTIFY_TEMPLATE_MARKDOWN,
-    NOTIFY_TEMPLATE_TEXT,
     EasyAuthAppClient,
     EasyAuthClientError,
 )
@@ -75,9 +72,6 @@ __all__ = [
     "HANDOVER_EXECUTE_EVENT",
     "HANDOVER_ITEMS_EVENT",
     "HANDOVER_PREVIEW_EVENT",
-    "NOTIFY_TEMPLATE_ACTION_CARD",
-    "NOTIFY_TEMPLATE_MARKDOWN",
-    "NOTIFY_TEMPLATE_TEXT",
     "SDK_NAME",
     "SDK_VERSION",
     "WEBHOOK_TEST_EVENT",

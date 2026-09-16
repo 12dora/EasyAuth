@@ -20,7 +20,6 @@ from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_MESSAGE_STATUS_PENDING,
     NOTIFY_MESSAGE_STATUS_SENDING,
-    NOTIFY_TEMPLATE_TEXT,
     NotifyMessage,
 )
 
@@ -51,7 +50,7 @@ def _accept(app: App) -> NotifyMessage:
         NotifyAcceptanceInput(
             app=app,
             message=NotifyMessageInput(
-                template=NOTIFY_TEMPLATE_TEXT,
+                title="测试通知",
                 content="claim-body",
                 recipients=("c1",),
             ),
@@ -102,7 +101,7 @@ def test_expired_lease_can_be_taken_over(monkeypatch: pytest.MonkeyPatch) -> Non
         NotifyAcceptanceInput(
             app=app,
             message=NotifyMessageInput(
-                template=NOTIFY_TEMPLATE_TEXT,
+                title="测试通知",
                 content="expire-body",
                 recipients=("c2",),
             ),

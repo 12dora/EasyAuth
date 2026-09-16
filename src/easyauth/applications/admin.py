@@ -132,7 +132,7 @@ class CatalogVersionAdminMixin:
 @admin.register(App)
 @final
 class AppAdmin(CatalogVersionAdminMixin, AppAdminBase):
-    list_display = ("app_key", "name", "is_active", "created_at", "updated_at")
+    list_display = ("app_key", "name", "alias", "notify_head_bgcolor", "is_active", "created_at")
     search_fields = ("app_key", "name")
     list_filter = ("is_active",)
     readonly_fields = ("created_at", "updated_at")

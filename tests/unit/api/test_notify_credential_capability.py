@@ -86,7 +86,7 @@ def test_notify_accept_without_channel_returns_503_without_message(
         f"/api/v1/apps/{app.app_key}/notify/messages",
         data={
             "recipients": ["notify-authentik-user"],
-            "template": "text",
+            "title": "测试通知",
             "content": "must not persist",
         },
         content_type="application/json",

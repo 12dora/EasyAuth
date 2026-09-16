@@ -22,7 +22,6 @@ from easyauth.notify.models import (
     NOTIFY_RECIPIENT_STATUS_DELIVERED,
     NOTIFY_RECIPIENT_STATUS_FAILED,
     NOTIFY_RECIPIENT_STATUS_SENT,
-    NOTIFY_TEMPLATE_TEXT,
     NotifyMessage,
     NotifyRecipient,
 )
@@ -79,7 +78,7 @@ def _message_with_sent(
     message = NotifyMessage.objects.create(
         app=app,
         channel=AppNotificationChannel.objects.get(app=app, is_active=True),
-        template=NOTIFY_TEMPLATE_TEXT,
+        title="测试通知",
         content="c",
         payload_hash="h" * 64,
         status=NOTIFY_MESSAGE_STATUS_SENDING,
@@ -252,7 +251,7 @@ def test_reconcile_fairly_rotates_beyond_first_fifty_tasks(
         message = NotifyMessage.objects.create(
             app=app,
             channel=channel,
-            template=NOTIFY_TEMPLATE_TEXT,
+            title="测试通知",
             content=f"message-{index:03d}",
             payload_hash=f"{index:064d}",
             status=NOTIFY_MESSAGE_STATUS_SENDING,

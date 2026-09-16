@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Final, TypedDict, cast
+from typing import Final, cast
 from uuid import UUID
 
 from django.conf import settings
@@ -14,6 +14,7 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.notify_payloads import NotifyCreatePayload, notify_create_payload
 from easyauth.api.permission_query_auth import authenticate_permission_query_token
 from easyauth.api.responses import error_response, json_response
 from easyauth.applications.capabilities import (
@@ -31,7 +32,6 @@ from easyauth.notify.acceptance import (
     accept_notify_message,
 )
 from easyauth.notify.contracts import (
-    DEFAULT_DEEPLINK_TITLE,
     AcceptNotifyResult,
     NotifyAcceptError,
 )
@@ -103,7 +103,7 @@ def _parse_create_request(
     body = _json_object_body(request)
     if isinstance(body, JsonResponse):
         return body
-    payload = _notify_create_payload(body)
+    payload = notify_create_payload(body)
     if isinstance(payload, JsonResponse):
         _record_notify_rejected(
             principal=principal,
@@ -125,14 +125,17 @@ def _accept_create_request(
             NotifyAcceptanceInput(
                 app=app,
                 message=NotifyMessageInput(
-                    template=create_payload["template"],
                     title=create_payload["title"],
                     content=create_payload["content"],
                     deeplink_url=create_payload["deeplink_url"],
-                    deeplink_title=create_payload["deeplink_title"],
                     dedup_key=create_payload["dedup_key"],
                     biz_tag=create_payload["biz_tag"],
                     recipients=tuple(create_payload["recipients"]),
+                    fields=tuple(
+                        (item["key"], item["value"]) for item in create_payload["fields"]
+                    ),
+                    app_display_name=create_payload["app_display_name"],
+                    author=create_payload["author"],
                 ),
                 credential=NotifyCredentialInput(
                     credential_type=principal.credential_type,
@@ -385,105 +388,6 @@ def _json_object_body(request: HttpRequest) -> dict[str, object] | JsonResponse:
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
     return cast("dict[str, object]", parsed)
-
-
-class NotifyCreatePayload(TypedDict):
-    recipients: list[str]
-    template: str
-    title: str
-    content: str
-    deeplink_url: str
-    deeplink_title: str
-    dedup_key: str
-    biz_tag: str
-
-
-def _notify_create_payload(body: dict[str, object]) -> NotifyCreatePayload | JsonResponse:
-    allowed_fields = {
-        "recipients",
-        "template",
-        "title",
-        "content",
-        "deeplink_url",
-        "deeplink_title",
-        "dedup_key",
-        "biz_tag",
-    }
-    unknown_fields = sorted(set(body) - allowed_fields)
-    if unknown_fields:
-        return _validation_error(
-            "请求字段不受支持。",
-            "body",
-            {"fields": cast("JsonValue", unknown_fields)},
-        )
-    try:
-        recipients = _as_string_list(body.get("recipients"))
-    except TypeError:
-        return _validation_error("recipients 必须为 1~500 个用户引用。", "recipients")
-    payload: NotifyCreatePayload = {
-        "recipients": recipients,
-        "template": "",
-        "title": "",
-        "content": "",
-        "deeplink_url": "",
-        "deeplink_title": DEFAULT_DEEPLINK_TITLE,
-        "dedup_key": "",
-        "biz_tag": "",
-    }
-    for field_name in (
-        "template",
-        "title",
-        "content",
-        "deeplink_url",
-        "deeplink_title",
-        "dedup_key",
-        "biz_tag",
-    ):
-        parsed = _optional_string_field(body, field_name)
-        if isinstance(parsed, JsonResponse):
-            return parsed
-        payload[field_name] = parsed or (
-            DEFAULT_DEEPLINK_TITLE if field_name == "deeplink_title" else ""
-        )
-    return payload
-
-
-def _optional_string_field(body: dict[str, object], field_name: str) -> str | JsonResponse:
-    value = body.get(field_name)
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    return _validation_error(f"{field_name} 必须为字符串。", field_name)
-
-
-def _validation_error(
-    message: str,
-    field: str,
-    extra_details: dict[str, JsonValue] | None = None,
-) -> JsonResponse:
-    details: dict[str, JsonValue] = {"field": field}
-    if extra_details is not None:
-        details.update(extra_details)
-    return error_response(
-        ErrorCode.VALIDATION_ERROR,
-        message,
-        details,
-        status=HTTPStatus.UNPROCESSABLE_ENTITY,
-    )
-
-
-def _as_string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        message = "recipients 必须为 1~500 个用户引用。"
-        raise TypeError(message)
-    result: list[str] = []
-    for item in cast("list[object]", value):
-        if not isinstance(item, str):
-            message = "recipients 必须为 1~500 个用户引用。"
-            raise TypeError(message)
-        result.append(item)
-    return result
 
 
 def _recipient_count_from_body(body: dict[str, object]) -> int:

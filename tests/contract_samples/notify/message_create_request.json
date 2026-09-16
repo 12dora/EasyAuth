@@ -1,10 +1,9 @@
 {
   "recipients": ["f7c31a09e5b24f8d9a1c", "dt:v1:ZGluZ3RhbGs:Y29ycC1ub3RpZnktYXBp:bWFuYWdlcjg4MzY"],
-  "template": "action_card",
   "title": "任务逾期升级",
   "content": "### 任务已逾期 3 天\n**接口联调排期**\n负责人: 王小明",
   "deeplink_url": "https://eproject.jiefakj.com/zh-CN/tasks/123",
-  "deeplink_title": "查看任务",
+  "fields": [{"key": "来自", "value": "王小明"}],
   "dedup_key": "overdue-escalate:123:2026-07-16",
   "biz_tag": "overdue_escalation"
 }

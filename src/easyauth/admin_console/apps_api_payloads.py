@@ -5,6 +5,8 @@ from typing import ClassVar, Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from easyauth.applications.notify_appearance import normalize_notify_head_bgcolor
+
 # 控制台应用写入契约: app_key 格式、名称非空、成员 user_id 去空白去重。
 APP_KEY_INVALID_MESSAGE: Final = "app_key 格式无效。"
 APP_KEY_PATTERN: Final = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
@@ -31,6 +33,7 @@ class AppCreatePayload(BaseModel):
     app_key: str = Field(max_length=64)
     name: str = Field(max_length=128)
     alias: str = Field(default="", max_length=128)
+    notify_head_bgcolor: str = Field(default="", max_length=9)
     description: str = ""
     is_active: bool = True
     owner_user_ids: list[str] = Field(default_factory=list)
@@ -62,6 +65,11 @@ class AppCreatePayload(BaseModel):
     def normalize_alias(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("notify_head_bgcolor")
+    @classmethod
+    def normalize_notify_head_bgcolor_field(cls, value: str) -> str:
+        return normalize_notify_head_bgcolor(value)
+
     @field_validator("owner_user_ids", "developer_user_ids")
     @classmethod
     def normalize_user_ids(cls, value: list[str]) -> list[str]:
@@ -73,6 +81,7 @@ class AppPatchPayload(BaseModel):
 
     name: str | None = Field(default=None, max_length=128)
     alias: str | None = Field(default=None, max_length=128)
+    notify_head_bgcolor: str | None = Field(default=None, max_length=9)
     description: str | None = None
     is_active: bool | None = None
 
@@ -99,6 +108,13 @@ class AppPatchPayload(BaseModel):
         if value is None:
             return None
         return value.strip()
+
+    @field_validator("notify_head_bgcolor")
+    @classmethod
+    def normalize_notify_head_bgcolor_field(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_notify_head_bgcolor(value)
 
 
 def _normalize_user_ids(user_ids: list[str]) -> list[str]:

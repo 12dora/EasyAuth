@@ -20,7 +20,7 @@ from easyauth.notify.acceptance import (
     accept_notify_message,
 )
 from easyauth.notify.contracts import NotifyAcceptError
-from easyauth.notify.models import CREDENTIAL_TYPE_STATIC_TOKEN, NOTIFY_TEMPLATE_TEXT
+from easyauth.notify.models import CREDENTIAL_TYPE_STATIC_TOKEN
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -76,7 +76,7 @@ def test_daily_quota_is_atomic_across_concurrent_accepts() -> None:
                     NotifyAcceptanceInput(
                         app=App.objects.get(id=app.id),
                         message=NotifyMessageInput(
-                            template=NOTIFY_TEMPLATE_TEXT,
+                            title="配额通知",
                             content=f"quota-{index}",
                             recipients=(f"quota-auth-{index}",),
                         ),

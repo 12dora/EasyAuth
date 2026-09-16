@@ -49,7 +49,6 @@ from easyauth.notify.acceptance import (
     accept_notify_message,
 )
 from easyauth.notify.messages import NotifyMessageInput
-from easyauth.notify.models import NOTIFY_TEMPLATE_TEXT
 from easyauth.outbox.services import enqueue_task
 
 logger = logging.getLogger(__name__)
@@ -205,17 +204,15 @@ def lifecycle_send_reminder_task(
     ready = _lifecycle_notify_ready()
     if ready is None:
         raise _deferred_lifecycle_reminder_error(task_id, kind, assignee_user_id)
-    content, dedup_key = _lifecycle_reminder_content_and_dedup(
-        task,
-        task_id=task_id,
-        kind=kind,
-    )
     return _accept_lifecycle_reminder(
         identity=ready.identity,
         credential=ready.credential,
-        assignee_user_id=assignee_user_id,
-        content=content,
-        dedup_key=dedup_key,
+        message=_lifecycle_reminder_input(
+            task,
+            task_id=task_id,
+            kind=kind,
+            assignee_user_id=assignee_user_id,
+        ),
     )
 
 
@@ -416,40 +413,44 @@ def _lifecycle_notify_ready() -> _LifecycleNotifyReady | None:
     return _LifecycleNotifyReady(identity=identity, credential=credential)
 
 
-def _lifecycle_reminder_content_and_dedup(
+def _lifecycle_reminder_title(kind: str) -> str:
+    if kind == "deadline_soon":
+        return "交接即将到期"
+    return "交接尚未完成"
+
+
+def _lifecycle_reminder_input(
     task: HandoverTask,
     *,
     task_id: int,
     kind: str,
-) -> tuple[str, str]:
+    assignee_user_id: str,
+) -> NotifyMessageInput:
     content = (
         f"交接单 {task_id} 即将到期, 请尽快处理。"
         if kind == "deadline_soon"
         else f"交接单 {task_id} 尚未完成, 请及时处理。"
     )
-    dedup_key = f"lifecycle:{task_id}:{task.last_reminded_on}:{kind}"
-    return content, dedup_key
+    return NotifyMessageInput(
+        title=_lifecycle_reminder_title(kind),
+        content=content,
+        recipients=(assignee_user_id,),
+        dedup_key=f"lifecycle:{task_id}:{task.last_reminded_on}:{kind}",
+        biz_tag="lifecycle.reminder",
+    )
 
 
 def _accept_lifecycle_reminder(
     *,
     identity: App,
     credential: AppCredential,
-    assignee_user_id: str,
-    content: str,
-    dedup_key: str,
+    message: NotifyMessageInput,
 ) -> str:
     """受理生命周期提醒; 调用点集中在此, 便于 notify 受理签名迁移。"""
     result = accept_notify_message(
         NotifyAcceptanceInput(
             app=identity,
-            message=NotifyMessageInput(
-                template=NOTIFY_TEMPLATE_TEXT,
-                content=content,
-                recipients=(assignee_user_id,),
-                dedup_key=dedup_key,
-                biz_tag="lifecycle.reminder",
-            ),
+            message=message,
             credential=NotifyCredentialInput(
                 credential_type=credential.credential_type,
                 credential_id=credential.id,

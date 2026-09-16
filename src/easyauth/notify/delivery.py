@@ -19,7 +19,6 @@ from easyauth.integrations.dingtalk.api_client import (
 )
 from easyauth.notify import channel_config
 from easyauth.notify.contracts import (
-    DEFAULT_DEEPLINK_TITLE,
     DINGTALK_THROTTLE_ERRCODES,
     MAX_DELIVERY_ATTEMPTS,
     NOTIFY_BATCH_SIZE,
@@ -42,7 +41,7 @@ from easyauth.notify.contracts import (
     NOTIFY_RETRY_DELAYS_SECONDS,
     NOTIFY_THROTTLE_RETRY_SECONDS,
 )
-from easyauth.notify.messages import build_dingtalk_msg
+from easyauth.notify.messages import DingTalkMsgSource, build_dingtalk_msg
 from easyauth.notify.models import NotifyMessage, NotifyRecipient
 from easyauth.outbox.services import enqueue_task
 
@@ -113,11 +112,15 @@ def _delivery_context(message: NotifyMessage, claim_token: str) -> _DeliveryCont
         _record_network_error(message, claim_token, error)
         return None
     msg = build_dingtalk_msg(
-        template=message.template,
-        title=message.title,
-        content=message.content,
-        deeplink_url=message.deeplink_url,
-        deeplink_title=message.deeplink_title or DEFAULT_DEEPLINK_TITLE,
+        app=message.app,
+        source=DingTalkMsgSource(
+            title=message.title,
+            content=message.content,
+            deeplink_url=message.deeplink_url,
+            fields=_stored_form_fields(message),
+            app_display_name=message.app_display_name,
+            author=message.author,
+        ),
     )
     return _DeliveryContext(
         message=message,
@@ -126,6 +129,21 @@ def _delivery_context(message: NotifyMessage, claim_token: str) -> _DeliveryCont
         agent_id=agent_id,
         msg=msg,
     )
+
+
+def _stored_form_fields(message: NotifyMessage) -> tuple[tuple[str, str], ...]:
+    rows: list[tuple[str, str]] = []
+    for item in message.form_fields:
+        if not isinstance(item, dict):
+            message_text = "通知表单字段必须为对象列表。"
+            raise TypeError(message_text)
+        key = item.get("key")
+        value = item.get("value")
+        if not isinstance(key, str) or not isinstance(value, str):
+            message_text = "通知表单字段必须含字符串 key/value。"
+            raise TypeError(message_text)
+        rows.append((key, value))
+    return tuple(rows)
 
 
 def _send_recipient_chunks(

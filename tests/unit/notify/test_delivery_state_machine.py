@@ -33,7 +33,6 @@ from easyauth.notify.models import (
     NOTIFY_RECIPIENT_STATUS_PENDING,
     NOTIFY_RECIPIENT_STATUS_SENT,
     NOTIFY_RECIPIENT_STATUS_THROTTLED,
-    NOTIFY_TEMPLATE_TEXT,
     NotifyMessage,
     NotifyRecipient,
 )
@@ -66,7 +65,7 @@ def _accept(app: App, recipients: list[str]) -> NotifyMessage:
         NotifyAcceptanceInput(
             app=app,
             message=NotifyMessageInput(
-                template=NOTIFY_TEMPLATE_TEXT,
+                title="测试通知",
                 content=f"body-{recipients[0]}",
                 recipients=tuple(recipients),
             ),
@@ -111,7 +110,7 @@ def test_notify_message_rejects_terminal_status_without_completed_at() -> None:
         _ = NotifyMessage.objects.create(
             app=app,
             channel=channel,
-            template=NOTIFY_TEMPLATE_TEXT,
+            title="测试通知",
             content="x",
             payload_hash="a" * 64,
             status=NOTIFY_MESSAGE_STATUS_COMPLETED,

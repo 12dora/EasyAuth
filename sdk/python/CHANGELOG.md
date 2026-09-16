@@ -5,6 +5,13 @@
 
 ## [Unreleased]
 
+### Breaking
+
+- 工作通知改为钉钉 OA：`send_notification` 不再接受 `template` /
+  `deeplink_title`，`title` 改为必填。新增可选 `fields`、`app_display_name`、
+  `author`。已删除 `NOTIFY_TEMPLATE_TEXT` / `NOTIFY_TEMPLATE_MARKDOWN` /
+  `NOTIFY_TEMPLATE_ACTION_CARD`。
+
 ## [0.5.0] - 2026-09-08
 
 ### Added

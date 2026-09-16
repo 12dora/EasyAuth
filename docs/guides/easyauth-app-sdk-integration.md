@@ -104,10 +104,7 @@ directory endpoint 遇到畸形或未作用域 ref 返回 `422`。notify 请求�
 import os
 from datetime import date
 
-from easyauth_app_sdk import (
-    NOTIFY_TEMPLATE_ACTION_CARD,
-    EasyAuthAppClient,
-)
+from easyauth_app_sdk import EasyAuthAppClient
 
 # 三条凭据必须分开，且只授予各自所需 capability。
 permission_client = EasyAuthAppClient(
@@ -131,14 +128,14 @@ result = directory_client.search_directory_users(q="王", page_size=50)
 for user in result["data"]:
     print(user["user_ref"], user["name"], user["title"], user["user_id"])
 
-# ② 逾期升级: 找到负责人的主管并发 action_card 提醒
+# ② 逾期升级: 找到负责人的主管并发 OA 提醒
 manager = directory_client.get_directory_user_manager(assignee_user_ref)
 receipt = notify_client.send_notification(
     recipients=[manager["user_ref"]],
-    template=NOTIFY_TEMPLATE_ACTION_CARD,
     title="任务逾期升级",
     content=f"### 任务已逾期 3 天\n**{task.title}**\n负责人: {assignee_name}",
     deeplink_url=f"https://eproject.example.com/tasks/{task.id}",
+    fields=[{"key": "来自", "value": assignee_name}],
     dedup_key=f"overdue-escalate:{task.id}:{date.today().isoformat()}",
     biz_tag="overdue_escalation",
 )
@@ -228,7 +225,7 @@ reports = directory_client.search_directory_users(
 | `get_directory_user_manager` | 直接主管;无主管时服务端 `404` |
 | `list_directory_user_subordinates` | 直接下属(不分页全量) |
 | `list_directory_departments` | 部门列表(`parent_id` 省略=全量扁平列表,树由消费方自建) |
-| `send_notification` | 发送钉钉工作通知(异步受理;可选 `deeplink_title` 按钮文案,缺省「查看详情」) |
+| `send_notification` | 发送钉钉 OA 工作通知(异步受理;可选 `fields` / `app_display_name` / `deeplink_url`) |
 | `get_notification` | 查询投递状态 |
 
 ## 生命周期交接回调

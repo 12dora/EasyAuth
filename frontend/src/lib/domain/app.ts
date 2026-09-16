@@ -9,6 +9,8 @@ export interface AppSummary {
   name: string;
   /** 控制台维护的面向员工别名; 未设置时为空字符串, 展示一律走 formatAppDisplayName。 */
   alias: string;
+  /** 工作通知 OA 头色带, 8 位 ARGB; 空串表示按应用 id 走平台调色板。 */
+  notify_head_bgcolor?: string;
   description?: string;
   is_active?: boolean;
   /** 负责人; 后端 `_app_item.owners` 为 PersonRef[], 按姓名再 user_id 排序。 */
@@ -51,6 +53,7 @@ export interface AppCreatePayload {
   app_key: string;
   name: string;
   alias?: string;
+  notify_head_bgcolor?: string;
   description?: string;
   owner_user_ids?: string[];
   developer_user_ids?: string[];
@@ -60,6 +63,7 @@ export interface AppCreatePayload {
 export interface AppUpdatePayload {
   name?: string;
   alias?: string;
+  notify_head_bgcolor?: string;
   description?: string;
   owner_user_ids?: string[];
   developer_user_ids?: string[];

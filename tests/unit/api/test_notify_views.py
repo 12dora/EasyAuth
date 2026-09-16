@@ -30,7 +30,6 @@ from easyauth.notify.models import (
     NOTIFY_RAW_REF_MAX_CHARS,
     NOTIFY_RECIPIENT_STATUS_DELIVERED,
     NOTIFY_RECIPIENT_STATUS_FAILED,
-    NOTIFY_TEMPLATE_ACTION_CARD,
     NotifyMessage,
     NotifyRecipient,
 )
@@ -148,7 +147,7 @@ def test_post_200_idempotent_replay(monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_user(authentik="u-idem", dingtalk="dt-idem")
     body = {
         "recipients": ["u-idem"],
-        "template": "text",
+        "title": "测试通知",
         "content": "hello-idem",
         "dedup_key": "idem:1",
     }
@@ -170,7 +169,7 @@ def test_post_409_dedup_payload_conflict(monkeypatch: pytest.MonkeyPatch) -> Non
     _seed_user(authentik="u-c", dingtalk="dt-c")
     base = {
         "recipients": ["u-c"],
-        "template": "text",
+        "title": "测试通知",
         "content": "a",
         "dedup_key": "conflict:1",
     }
@@ -195,11 +194,8 @@ def test_get_status_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     message = NotifyMessage.objects.create(
         app=app,
         channel=AppNotificationChannel.objects.get(app=app, is_active=True),
-        template=NOTIFY_TEMPLATE_ACTION_CARD,
         title="任务逾期升级",
         content="x",
-        deeplink_url="https://eproject.jiefakj.com/zh-CN/tasks/123",
-        deeplink_title="查看任务",
         dedup_key="overdue-escalate:123:2026-07-16",
         payload_hash="a" * 64,
         biz_tag="overdue_escalation",
@@ -265,7 +261,7 @@ def test_get_404_other_app(monkeypatch: pytest.MonkeyPatch) -> None:
     message = NotifyMessage.objects.create(
         app=other,
         channel=other_channel,
-        template="text",
+        template="oa",
         content="x",
         payload_hash="b" * 64,
         requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
@@ -284,7 +280,7 @@ def test_post_rate_limit_429(monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_user(authentik="rate-u", dingtalk="dt-rate")
     body = {
         "recipients": ["rate-u"],
-        "template": "text",
+        "title": "测试通知",
         "content": "r1",
     }
     first = notify_messages_create(_post(body), _APP_KEY)
@@ -300,7 +296,7 @@ def test_capability_required(monkeypatch: pytest.MonkeyPatch) -> None:
     cache.clear()
     app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
     _auth(monkeypatch, app)
-    body = {"recipients": ["x"], "template": "text", "content": "c"}
+    body = {"recipients": ["x"], "title": "t", "content": "c"}
     response = notify_messages_create(_post(body), _APP_KEY)
     assert response.status_code == HTTPStatus.FORBIDDEN
     assert "通知能力" in loads(response.content)["error"]["message"]
@@ -314,7 +310,7 @@ def test_invalid_recipients_type_audits_rejected(monkeypatch: pytest.MonkeyPatch
     app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
     _enable_notify(app)
     _auth(monkeypatch, app)
-    body = {"recipients": "not-a-list", "template": "text", "content": "c"}
+    body = {"recipients": "not-a-list", "title": "t", "content": "c"}
     response = notify_messages_create(_post(body), _APP_KEY)
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     rejected = AuditLog.objects.filter(event_type="app_notify_rejected")
@@ -331,7 +327,7 @@ def test_invalid_string_field_type_returns_422_without_string_coercion(
     app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
     _enable_notify(app)
     _auth(monkeypatch, app)
-    body = {"recipients": ["u1"], "template": "text", "content": True}
+    body = {"recipients": ["u1"], "title": "t", "content": True}
 
     response = notify_messages_create(_post(body), _APP_KEY)
 
@@ -351,7 +347,7 @@ def test_raw_ref_over_storage_limit_returns_422_without_partial_rows(
     _auth(monkeypatch, app)
     body = {
         "recipients": ["x" * (NOTIFY_RAW_REF_MAX_CHARS + 1)],
-        "template": "text",
+        "title": "测试通知",
         "content": "too long recipient",
     }
 
@@ -387,7 +383,7 @@ def test_error_code_enum_accept_time(monkeypatch: pytest.MonkeyPatch) -> None:
             "no-dt",
             build_dingtalk_user_ref(source_slug=_SOURCE, corp_id=_CORP, user_id="inactive-dt"),
         ],
-        "template": "text",
+        "title": "测试通知",
         "content": "errs",
     }
     response = notify_messages_create(_post(body), _APP_KEY)
@@ -409,7 +405,7 @@ def test_pipeline_accept_to_deliver(monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_user(authentik="pipe-u", dingtalk="dt-pipe")
     body = {
         "recipients": ["pipe-u"],
-        "template": "text",
+        "title": "测试通知",
         "content": "pipeline",
     }
     response = notify_messages_create(_post(body), _APP_KEY)
@@ -432,6 +428,69 @@ def test_pipeline_accept_to_deliver(monkeypatch: pytest.MonkeyPatch) -> None:
     assert detail["status"] == "completed"
     assert detail["recipients"][0]["status"] == "sent"
     assert detail["recipient_sent"] == 1
+
+
+def test_notify_api_delivers_oa_payload_with_registered_app_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache.clear()
+    app = App.objects.create(app_key=_APP_KEY, name="学习工作台")
+    _enable_notify(app)
+    _auth(monkeypatch, app)
+    _seed_user(authentik="oa-u", dingtalk="dt-oa")
+    body = {
+        "recipients": ["oa-u"],
+        "title": "课程提醒",
+        "content": "### 请完成本周学习\n**必修课**",
+        "fields": [{"key": "来自", "value": "李老师"}],
+        "deeplink_url": "https://learn.example.com/lessons/9",
+    }
+    response = notify_messages_create(_post(body), _APP_KEY)
+    assert response.status_code == HTTPStatus.ACCEPTED
+    message_id = loads(response.content)["message_id"]
+
+    client = MagicMock()
+    client.send_work_notification.return_value = "task-oa"
+
+    def client_for_channel(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
+        return client, 42
+
+    monkeypatch.setattr(
+        "easyauth.notify.channel_config.dingtalk_client_and_agent",
+        client_for_channel,
+    )
+    deliver_message(message_id, 1)
+
+    client.send_work_notification.assert_called_once()
+    sent_msg = client.send_work_notification.call_args.kwargs["msg"]
+    assert sent_msg["msgtype"] == "oa"
+    oa = sent_msg["oa"]
+    assert oa["head"]["text"] == "学习工作台"
+    assert oa["head"]["bgcolor"]
+    assert oa["body"]["title"] == "课程提醒"
+    assert oa["body"]["content"] == "请完成本周学习\n必修课"
+    assert oa["body"]["form"][0]["key"] == "时间"
+    assert oa["body"]["form"][1] == {"key": "来自", "value": "李老师"}
+    assert oa["message_url"] == "https://learn.example.com/lessons/9"
+
+
+def test_post_rejects_markdown_template_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache.clear()
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_notify(app)
+    _auth(monkeypatch, app)
+    body = {
+        "recipients": ["u1"],
+        "template": "markdown",
+        "title": "旧模板",
+        "content": "### 正文",
+    }
+    response = notify_messages_create(_post(body), _APP_KEY)
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    payload = loads(response.content)
+    assert payload["error"]["code"] == "VALIDATION_ERROR"
+    assert "template" in payload["error"]["details"]["fields"]
+    assert NotifyMessage.objects.filter(app=app).exists() is False
 
 
 def test_post_through_middleware_is_csrf_exempt(monkeypatch: pytest.MonkeyPatch) -> None:

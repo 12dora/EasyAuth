@@ -343,6 +343,8 @@ EASYAUTH_TRUSTED_WEBHOOK_HOSTS = parse_trusted_webhook_hosts(
 # 本地开发必须用 http://localhost:8001 访问(127.0.0.1 不属于 RP ID "localhost", 无法使用通行密钥)。
 EASYAUTH_WEBAUTHN_RP_ID = os.environ.get("EASYAUTH_WEBAUTHN_RP_ID", "localhost")
 EASYAUTH_WEBAUTHN_RP_NAME = os.environ.get("EASYAUTH_WEBAUTHN_RP_NAME", "EasyAuth")
+# 工作通知 OA 头展示名; 空则使用「统一身份认证」。
+EASYAUTH_SITE_TITLE = os.environ.get("EASYAUTH_SITE_TITLE", "").strip()
 # 允许的 WebAuthn origin(协议+host+端口), 逗号分隔; 必须与浏览器实际访问地址完全一致。
 EASYAUTH_WEBAUTHN_ORIGINS = tuple(
     origin.strip()

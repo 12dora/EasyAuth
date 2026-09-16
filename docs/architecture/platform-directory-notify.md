@@ -77,6 +77,7 @@ generation 未变也会刷新本地 `last_synced_at`——新鲜度表示「已�
 2. 每应用双层限流 + 每日收件人配额，把爆炸半径限制在配额内；
 3. 全量审计——谁、什么时候、给谁、发了什么类别，可追溯；
 4. 内容治理：title / content 长度上限，`deeplink_url` 必须 https（防止钉钉卡片变成钓鱼跳板）；
+   发送侧会去掉 markdown 标记，钉钉 OA 正文为纯文本。
 5. `active` 硬约束：disabled / departed 一律拒发（`USER_INACTIVE`）；
 6. **下游后端必须按业务规则计算收件人**，不得提供"前端传任意 `userRef` 就调用
    `send_notification`"的透传接口。
@@ -89,6 +90,18 @@ generation 未变也会刷新本地 `last_synced_at`——新鲜度表示「已�
 `dingtalk_notify_app_key` / `dingtalk_notify_app_secret` / `dingtalk_notify_agent_id`。
 仅当这三项均非空时使用该三元组换票与 `agent_id`；任一留空则回退到主应用三元组
 （目录同步 / Stream / 登录用的 `dingtalk_app_*`）。notify-worker 投递与对账与此同一口径。
+
+工作通知钉钉载荷固定为 `msgtype: oa`（不再发送 markdown / text / action_card）：
+
+- `head.text` 为调用应用登记名（`App.name`，中文展示名，不是 `app_key`）；可选请求字段
+  `app_display_name` 可覆盖。EasyAuth 自己发出的通知（如 `easyauth-lifecycle` 交接提醒）
+  使用站点标题，缺省「统一身份认证」，色带固定 `FF1F6FEB`。
+- `head.bgcolor` 取应用可选字段 `notify_head_bgcolor`（8 位 ARGB）；未设置时按 app id
+  哈希在六色调色板中取稳定色带，使不同应用在钉钉里是不同颜色的标题块。
+- `body.title` 为通知标题（中文）；原先的 markdown 正文去掉标记后进入 `body.content`，保留换行。
+- `body.form` **始终**含 `时间`（Asia/Shanghai `HH:mm`），避免钉钉对「同一用户同一天相同内容」
+  静默去重。请求可附带 `fields: [{key, value}]`（例如「来自」）。
+- 若请求带 `deeplink_url`，写入 `message_url`。
 
 - 目录作用域只能从控制台返回的权威列表里选；作用域失效会让健康检查 unhealthy，越界收件人
   记 `USER_SCOPE_MISMATCH`。

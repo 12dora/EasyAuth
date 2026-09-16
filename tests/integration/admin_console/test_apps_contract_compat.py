@@ -465,6 +465,7 @@ def _expected_detail_fields() -> set[str]:
         "app_key",
         "name",
         "alias",
+        "notify_head_bgcolor",
         "description",
         "is_active",
         "owners",

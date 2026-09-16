@@ -57,6 +57,11 @@ Authentik 生成的首字母图为 `data:image/svg+xml;base64,...` 内联图。�
 | GET | `/apps/{app_key}/managed-users-preview` | 管理范围预览 |
 | POST | `/apps/{app_key}/permission-query-tests` | 权限查询联调 |
 
+应用列表和详情项返回 `notify_head_bgcolor`：工作通知 OA 头色带，8 位大写 ARGB
+（如 `FF1A7F4C`）。空串表示未指定，发送时按应用 id 哈希在六色调色板中取稳定色带。
+写入时也接受 `#RRGGBB` / `RRGGBB`，服务端归一成 ARGB。EasyAuth 自身通知固定
+`FF1F6FEB`，不受该字段影响。
+
 应用列表和详情项的 `owners` 为人员对象数组（PersonRef：`user_id`、`name`、`department`、
 `account_kind`、`avatar_url`），
 按姓名再按 `user_id` 排序；整页 owner 成员关系、UserMirror 与部门路径一次性批量解析，不按 App

@@ -22,6 +22,7 @@ from easyauth.notify.contracts import (
     ResolvedRecipient,
 )
 from easyauth.notify.messages import (
+    DingTalkMsgSource,
     NormalizedInput,
     NotifyMessageInput,
     build_dingtalk_msg,
@@ -29,7 +30,7 @@ from easyauth.notify.messages import (
     dingtalk_msg_utf8_size,
     normalize_and_validate,
 )
-from easyauth.notify.models import NotifyMessage, NotifyRecipient
+from easyauth.notify.models import NOTIFY_TEMPLATE_OA, NotifyMessage, NotifyRecipient
 from easyauth.notify.recipients import (
     accept_time_rejected_count,
     assert_daily_quota,
@@ -105,11 +106,15 @@ def _prepare_acceptance(acceptance: NotifyAcceptanceInput) -> _AcceptanceData:
     message = acceptance.message
     normalized = normalize_and_validate(message)
     msg = build_dingtalk_msg(
-        template=normalized.template,
-        title=normalized.title,
-        content=normalized.content,
-        deeplink_url=normalized.deeplink_url,
-        deeplink_title=normalized.deeplink_title,
+        app=acceptance.app,
+        source=DingTalkMsgSource(
+            title=normalized.title,
+            content=normalized.content,
+            deeplink_url=normalized.deeplink_url,
+            fields=normalized.fields,
+            app_display_name=normalized.app_display_name,
+            author=normalized.author,
+        ),
     )
     if dingtalk_msg_utf8_size(msg) > NOTIFY_MSG_MAX_BYTES:
         raise NotifyAcceptError(
@@ -122,12 +127,13 @@ def _prepare_acceptance(acceptance: NotifyAcceptanceInput) -> _AcceptanceData:
     payload_hash = compute_payload_hash(
         replace(
             message,
-            template=normalized.template,
             title=normalized.title,
             content=normalized.content,
             deeplink_url=normalized.deeplink_url,
-            deeplink_title=normalized.deeplink_title,
             biz_tag=normalized.biz_tag,
+            fields=normalized.fields,
+            app_display_name=normalized.app_display_name,
+            author=normalized.author,
         ),
     )
 
@@ -237,11 +243,13 @@ def _create_message_with_recipients(
     message = NotifyMessage.objects.create(
         app=app,
         channel=channel,
-        template=data.normalized.template,
+        template=NOTIFY_TEMPLATE_OA,
         title=data.normalized.title,
         content=data.normalized.content,
         deeplink_url=data.normalized.deeplink_url,
-        deeplink_title=data.normalized.deeplink_title,
+        form_fields=[{"key": key, "value": value} for key, value in data.normalized.fields],
+        app_display_name=data.normalized.app_display_name,
+        author=data.normalized.author,
         dedup_key=data.normalized.dedup_key,
         payload_hash=data.payload_hash,
         biz_tag=data.normalized.biz_tag,

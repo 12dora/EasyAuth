@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
+from easyauth.applications.notify_appearance import normalize_notify_head_bgcolor
 from easyauth.config.crypto import EncryptedCharField
 
 from .constants import (
@@ -33,6 +34,12 @@ class App(models.Model):
     name: models.CharField[str, str] = models.CharField(max_length=128)
     # 面向员工的别名(如「海关数据」); 由控制台维护, manifest 推送不得覆盖。
     alias: models.CharField[str, str] = models.CharField(max_length=128, blank=True, default="")
+    # 工作通知 OA 头色带, 8 位 ARGB; 空则按 app id 哈希走六色调色板。
+    notify_head_bgcolor: models.CharField[str, str] = models.CharField(
+        max_length=8,
+        blank=True,
+        default="",
+    )
     description: models.TextField[str, str] = models.TextField(blank=True)
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     catalog_version: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=1)
@@ -95,6 +102,14 @@ class App(models.Model):
     @override
     def __str__(self) -> str:
         return self.app_key
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        try:
+            self.notify_head_bgcolor = normalize_notify_head_bgcolor(self.notify_head_bgcolor)
+        except ValueError as error:
+            raise ValidationError({"notify_head_bgcolor": str(error)}) from error
 
 
 class AppCapability(models.Model):

@@ -11,7 +11,7 @@ from urllib.parse import quote, urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from http.client import HTTPResponse
 
 DEFAULT_TIMEOUT_SECONDS: Final = 5.0
@@ -27,11 +27,6 @@ _HTTP_REDIRECT_MAX: Final = 400
 _HTTP_TOO_MANY_REQUESTS: Final = 429
 _HTTP_SERVER_ERROR_MIN: Final = 500
 _HTTP_SERVER_ERROR_MAX: Final = 600
-
-# 通知模板取值(send_notification.template)。
-NOTIFY_TEMPLATE_TEXT: Final = "text"
-NOTIFY_TEMPLATE_MARKDOWN: Final = "markdown"
-NOTIFY_TEMPLATE_ACTION_CARD: Final = "action_card"
 
 
 class EasyAuthClientError(RuntimeError):
@@ -264,38 +259,41 @@ class EasyAuthAppClient:
 
     # ---- notify ----
 
-    def send_notification(  # noqa: PLR0913 - 请求体字段与契约 §N2 一一对应
+    def send_notification(  # noqa: PLR0913 - 请求体字段与公共通知契约一一对应
         self,
         *,
         recipients: Sequence[str],
-        template: str,
         content: str,
-        title: str | None = None,
+        title: str,
         deeplink_url: str | None = None,
-        deeplink_title: str | None = None,
+        fields: Sequence[Mapping[str, str]] | None = None,
+        app_display_name: str | None = None,
+        author: str | None = None,
         dedup_key: str | None = None,
         biz_tag: str | None = None,
     ) -> dict[str, Any]:
         """发送钉钉工作通知(异步受理)。POST {app_base}/notify/messages。
 
+        钉钉通道固定为 OA: head 为调用应用中文名, body.title 为通知标题,
+        content 为纯文本, form 始终含 Asia/Shanghai 的「时间」。
         recipients 元素必须使用目录响应返回并由业务后端保存的 opaque user_ref。
-        template 取 "text" | "markdown" | "action_card"。
         返回 {"message_id", "accepted", ...}。
         幂等: 相同 dedup_key 重复调用返回同一 message_id 且 accepted=False。
-        deeplink_title 为 action_card 按钮文案; 省略时服务端缺省为「查看详情」。
         """
         url = f"{self._app_base()}/notify/messages"
         body: dict[str, Any] = {
             "recipients": list(recipients),
-            "template": template,
+            "title": title,
             "content": content,
         }
-        if title is not None:
-            body["title"] = title
         if deeplink_url is not None:
             body["deeplink_url"] = deeplink_url
-        if deeplink_title is not None:
-            body["deeplink_title"] = deeplink_title
+        if fields is not None:
+            body["fields"] = [dict(item) for item in fields]
+        if app_display_name is not None:
+            body["app_display_name"] = app_display_name
+        if author is not None:
+            body["author"] = author
         if dedup_key is not None:
             body["dedup_key"] = dedup_key
         if biz_tag is not None:

@@ -18,7 +18,6 @@ from easyauth.notify.models import (
     NOTIFY_ERROR_USER_NOT_FOUND,
     NOTIFY_RECIPIENT_STATUS_FAILED,
     NOTIFY_RECIPIENT_STATUS_SENT,
-    NOTIFY_TEMPLATE_TEXT,
     NotifyRecipient,
 )
 
@@ -71,7 +70,7 @@ def test_daily_quota_exceeded_raises_throttled() -> None:
     first = _accept(
         app,
         NotifyMessageInput(
-            template=NOTIFY_TEMPLATE_TEXT,
+            title="测试通知",
             content="one",
             recipients=("q1",),
         ),
@@ -82,7 +81,7 @@ def test_daily_quota_exceeded_raises_throttled() -> None:
         _ = _accept(
             app,
             NotifyMessageInput(
-                template=NOTIFY_TEMPLATE_TEXT,
+                title="测试通知",
                 content="two",
                 recipients=("q2",),
             ),
@@ -100,7 +99,7 @@ def test_idempotent_replay_recipient_rejected_only_accept_time_failures() -> Non
     first = _accept(
         app,
         NotifyMessageInput(
-            template=NOTIFY_TEMPLATE_TEXT,
+            title="测试通知",
             content="same-payload",
             recipients=("r1", "dt:missing-user"),
             dedup_key="event:rej",
@@ -144,7 +143,7 @@ def test_idempotent_replay_recipient_rejected_only_accept_time_failures() -> Non
     second = _accept(
         app,
         NotifyMessageInput(
-            template=NOTIFY_TEMPLATE_TEXT,
+            title="测试通知",
             content="same-payload",
             recipients=("r1", "dt:missing-user"),
             dedup_key="event:rej",
@@ -161,34 +160,31 @@ def test_idempotent_replay_recipient_rejected_only_accept_time_failures() -> Non
     )
 
 
-def test_deeplink_title_persisted_and_in_payload_hash() -> None:
-    app = App.objects.create(app_key="notify-deeplink-title", name="DL")
+def test_form_fields_persisted_and_in_payload_hash() -> None:
+    app = App.objects.create(app_key="notify-form-fields", name="FF")
     _seed("d1", "dt-d1")
 
     first = _accept(
         app,
         NotifyMessageInput(
-            template="action_card",
             title="标题",
             content="正文",
             deeplink_url="https://example.com/x",
-            deeplink_title="查看任务",
+            fields=(("来自", "张三"),),
             recipients=("d1",),
             dedup_key="dl:1",
         ),
     )
-    assert first.message.deeplink_title == "查看任务"
+    assert first.message.form_fields == [{"key": "来自", "value": "张三"}]
 
-    # 同 dedup 但不同 deeplink_title → 冲突。
     with pytest.raises(NotifyAcceptError) as exc:
         _ = _accept(
             app,
             NotifyMessageInput(
-                template="action_card",
                 title="标题",
                 content="正文",
                 deeplink_url="https://example.com/x",
-                deeplink_title="另一按钮",
+                fields=(("来自", "李四"),),
                 recipients=("d1",),
                 dedup_key="dl:1",
             ),
