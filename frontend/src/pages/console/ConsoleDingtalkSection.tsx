@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { PlugZap, Save } from "lucide-react";
+import { Save } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { Button } from "../../components/Button";
@@ -12,10 +12,10 @@ import {
   dingtalkAppStatus,
   SETTINGS_QUERY_KEY,
   SETTINGS_URL,
-  type DingtalkTestResult,
   type IntegrationSettingsPayload,
 } from "./consoleSettingsModel";
 import { SecretBadge, SettingsCard } from "./SettingsCard";
+import { ConnectionTestControl } from "./SettingsConnectionTest";
 
 /** 钉钉「统一认证应用」卡片: 目录同步、事件订阅与登录共用的主应用三元组。 */
 export function ConsoleDingtalkSection({ settings }: { settings: IntegrationSettingsPayload | undefined }) {
@@ -49,24 +49,6 @@ export function ConsoleDingtalkSection({ settings }: { settings: IntegrationSett
       toast.error(t("settings.integration.saveFailed"), error.message);
     },
   });
-  const testMutation = useMutation({
-    mutationFn: () =>
-      apiRequest<DingtalkTestResult>(`${SETTINGS_URL}/dingtalk/test`, {
-        method: "POST",
-        body: {},
-      }),
-    onSuccess: (payload) => {
-      // 连接测试的结果本身就是操作反馈: ok 走成功 toast, 否则走失败 toast, 均带后端返回的说明。
-      if (payload.ok) {
-        toast.success(t("settings.dingtalk.testSuccess"), payload.message);
-      } else {
-        toast.error(t("settings.dingtalk.testFailed"), payload.message);
-      }
-    },
-    onError: (error: Error) => {
-      toast.error(t("settings.dingtalk.testFailed"), error.message);
-    },
-  });
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -82,15 +64,16 @@ export function ConsoleDingtalkSection({ settings }: { settings: IntegrationSett
       onSubmit={submit}
       footer={
         <>
-          <Button
-            type="button"
-            icon={<PlugZap size={15} />}
-            loading={testMutation.isPending}
-            disabled={testMutation.isPending || !settings}
-            onClick={() => testMutation.mutate()}
-          >
-            {t("settings.dingtalk.test")}
-          </Button>
+          <ConnectionTestControl
+            url={`${SETTINGS_URL}/dingtalk/test`}
+            disabled={!settings}
+            testId="dingtalk-connection-test"
+            body={() => ({
+              dingtalk_app_key: appKey.trim(),
+              dingtalk_app_secret: appSecret,
+              dingtalk_agent_id: agentId.trim(),
+            })}
+          />
           <Button
             type="submit"
             variant="primary"

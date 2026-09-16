@@ -12,7 +12,6 @@ from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
     method_not_allowed_response,
-    require_method,
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.api.datetime_json import datetime_value
@@ -26,11 +25,7 @@ from easyauth.applications.integration_settings import (
 )
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.net import InsecureUrlError, require_secure_url
-from easyauth.integrations.dingtalk.api_client import (
-    DingTalkApiClient,
-    DingTalkApiError,
-    invalidate_access_token,
-)
+from easyauth.integrations.dingtalk.api_client import invalidate_access_token
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -247,49 +242,6 @@ def _schedule_token_invalidation(app_key: str, app_secret: str) -> None:
         invalidate_access_token(app_key=app_key, app_secret=app_secret)
 
     transaction.on_commit(_invalidate)
-
-
-def console_dingtalk_connectivity_test(request: HttpRequest) -> JsonResponse:
-    # 连通性测试: 用当前生效凭证取一次 accessToken; 不落任何业务数据。
-    match require_superuser(request):
-        case str() as actor_id:
-            pass
-        case JsonResponse() as response:
-            return response
-    if response := require_method(request, "POST"):
-        return response
-    try:
-        _probe_dingtalk_access_tokens()
-    except DingTalkApiError as error:
-        _record_dingtalk_test(actor_id=actor_id, ok=False, error=str(error))
-        return json_response({"ok": False, "message": str(error)})
-    _record_dingtalk_test(actor_id=actor_id, ok=True, error="")
-    return json_response({"ok": True, "message": "钉钉凭证有效, 已成功获取访问令牌。"})
-
-
-def _probe_dingtalk_access_tokens() -> None:
-    _ = DingTalkApiClient.from_settings().get_access_token(force_refresh=True)
-    config = dingtalk_runtime_config()
-    notify = config.notify
-    if _token_fingerprint(notify.app_key, notify.app_secret) == _token_fingerprint(
-        config.app_key,
-        config.app_secret,
-    ):
-        return
-    _ = DingTalkApiClient.from_notify_settings().get_access_token(force_refresh=True)
-
-
-def _record_dingtalk_test(*, actor_id: str, ok: bool, error: str) -> None:
-    _ = AuditService.record(
-        AuditRecord(
-            actor_type="admin",
-            actor_id=actor_id,
-            action="dingtalk_connectivity_tested",
-            target_type="integration_settings",
-            target_id="dingtalk",
-            metadata={"ok": ok, "error": error},
-        ),
-    )
 
 
 def _settings_response() -> JsonResponse:

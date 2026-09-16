@@ -62,6 +62,8 @@ if TYPE_CHECKING:
 # 04-钉钉工作通知调研结论.md §1。oapi 例外范围仅限本文件三个工作通知方法。
 DINGTALK_API_BASE_URL: Final = "https://api.dingtalk.com"
 DINGTALK_OAPI_BASE_URL: Final = "https://oapi.dingtalk.com"
+# 旧版 oapi 换票接口; 只在设置页连通性探测使用(工作通知走 oapi, 需单独确认凭证被接受)。
+OAPI_GET_TOKEN_PATH: Final = "/gettoken"  # noqa: S105 - 接口路径, 非凭据.
 MAX_JSON_RESPONSE_BYTES: Final = 1024 * 1024
 MAX_ERROR_RESPONSE_BYTES: Final = 4096
 
@@ -69,6 +71,7 @@ __all__ = (
     "DINGTALK_API_BASE_URL",
     "DINGTALK_OAPI_BASE_URL",
     "MAX_JSON_RESPONSE_BYTES",
+    "OAPI_GET_TOKEN_PATH",
     "ROBOT_MSG_KEY_ACTION_CARD",
     "ROBOT_MSG_KEY_MARKDOWN",
     "ROBOT_OTO_BATCH_SEND_PATH",
@@ -390,18 +393,29 @@ class DingTalkApiClient:
             body=body,
             deadline=deadline,
         )
-        errcode = payload.get("errcode")
-        if errcode is None:
-            return payload
-        if isinstance(errcode, bool) or not isinstance(errcode, (int, float)):
-            message = "钉钉 oapi 响应 errcode 非法。"
-            raise DingTalkApiRequestError(message)
-        if int(errcode) != 0:
-            errmsg = payload.get("errmsg")
-            detail = errmsg if isinstance(errmsg, str) and errmsg else f"errcode={int(errcode)}"
-            message = f"钉钉 oapi 业务错误: {detail}"
-            raise DingTalkApiRequestError(message, errcode=int(errcode))
+        _raise_for_oapi_errcode(payload)
         return payload
+
+    def probe_oapi_access_token(self) -> None:
+        """旧版 oapi 换票探针: GET /gettoken 直接用 appkey/appsecret 换票。
+
+        工作通知走 oapi, 与新版 /v1.0/oauth2/accessToken 是两条独立的授权链路,
+        设置页「测试连接」必须分别确认。探针不缓存也不回传票据, 只判定是否被接受。
+        """
+        deadline = monotonic() + self._timeout_seconds
+        query = urlencode({"appkey": self._app_key, "appsecret": self._app_secret})
+        payload = self._execute_json_request(
+            "GET",
+            f"{DINGTALK_OAPI_BASE_URL}{OAPI_GET_TOKEN_PATH}?{query}",
+            headers={"Accept": "application/json"},
+            body=None,
+            deadline=deadline,
+        )
+        _raise_for_oapi_errcode(payload)
+        token = payload.get("access_token")
+        if not isinstance(token, str) or not token:
+            message = "钉钉 oapi 换票响应缺少 access_token。"
+            raise DingTalkApiRequestError(message)
 
     def _execute_json_request(
         self,
@@ -441,6 +455,20 @@ class DingTalkApiClient:
             message = "钉钉 API 响应必须是 JSON 对象。"
             raise DingTalkApiRequestError(message)
         return cast("DingTalkJson", parsed)
+
+
+def _raise_for_oapi_errcode(payload: DingTalkJson) -> None:
+    errcode = payload.get("errcode")
+    if errcode is None:
+        return
+    if isinstance(errcode, bool) or not isinstance(errcode, (int, float)):
+        message = "钉钉 oapi 响应 errcode 非法。"
+        raise DingTalkApiRequestError(message)
+    if int(errcode) != 0:
+        errmsg = payload.get("errmsg")
+        detail = errmsg if isinstance(errmsg, str) and errmsg else f"errcode={int(errcode)}"
+        message = f"钉钉 oapi 业务错误: {detail}"
+        raise DingTalkApiRequestError(message, errcode=int(errcode))
 
 
 def _error_detail(error: HTTPError) -> str:

@@ -627,8 +627,10 @@ PUT 不得变更策略所属部门或应用，否则 422。
 | --- | --- | --- |
 | GET | `/users`、`/user-options` | 用户检索/选项 |
 | GET | `/audit-logs` | 审计日志 |
-| GET/PUT | `/settings/integrations` | 集成设置 |
-| POST | `/settings/integrations/dingtalk/test` | 钉钉连通测试 |
+| GET/PATCH | `/settings/integrations` | 集成设置 |
+| POST | `/settings/integrations/authentik/test` | Authentik 连通测试 |
+| POST | `/settings/integrations/dingtalk/test` | 钉钉统一认证应用连通测试 |
+| POST | `/settings/integrations/dingtalk-notify/test` | 钉钉服务号连通测试 |
 | GET | `/security/two-factor` | 二因素状态 |
 | POST | `/security/two-factor/totp/*`、`passkeys/*` | TOTP / Passkey |
 
@@ -653,6 +655,42 @@ PUT 必须提交其中一组作用域；控制台使用受校验的下拉框，�
 owner 选择有效作用域并保存新版本后恢复；此时依赖健康为 unhealthy，越界发送会被拒绝。
 首次创建必须提供 secret；后续 PUT 可省略 secret 以复用已有密文。
 响应不回显 secret，连通性失败不返回钉钉底层错误原文。
+
+### 连通性测试（三个「测试连接」端点）
+
+设置页每张集成卡片各有一个探针端点，三者共用同一套约定：
+
+| 端点 | 探测内容 |
+| --- | --- |
+| `POST /settings/integrations/authentik/test` | 带 API token 请求 `GET {base_url}/api/v3/core/users/?page_size=1`，一次调用同时证明 Base URL 可达与 token 可用 |
+| `POST /settings/integrations/dingtalk/test` | 统一认证应用：强制刷新一次新版 `POST /v1.0/oauth2/accessToken` |
+| `POST /settings/integrations/dingtalk-notify/test` | 服务号：新版 `accessToken` **和**旧版 `GET https://oapi.dingtalk.com/gettoken` 两条授权链路都要过 |
+
+- **权限**：与 `/settings/integrations` 相同，`require_superuser`；仅接受 POST，其它方法 405。
+- **限流**：按「目标 + 管理员」固定窗口计数，60 秒内 30 次，超出返回 `THROTTLED` 429。
+- **审计**：每次调用落一条 `AuditLog`，`event_type` 分别为 `authentik_connectivity_tested`、
+  `dingtalk_connectivity_tested`、`dingtalk_notify_connectivity_tested`，`target_type` 为
+  `integration_settings`，`metadata` 只含 `ok` / `error_code` / `error` / `latency_ms`，**不含**任何
+  token 或 secret。
+- **请求体**（可选，`extra="forbid"`）：表单里尚未保存的「草稿」值。字段留空或缺省表示沿用落库值
+  （secret 留空即沿用已存密文），因此探测的永远是"保存后真正会被使用的那组凭证"。
+  - Authentik：`authentik_base_url`、`authentik_api_token`；
+  - 统一认证应用：`dingtalk_app_key`、`dingtalk_app_secret`、`dingtalk_agent_id`；
+  - 服务号：`dingtalk_notify_app_key`、`dingtalk_notify_app_secret`、`dingtalk_notify_agent_id`。
+    服务号三项未配齐时按运行时口径**回退到统一认证应用凭证**并探测该组，与发送路径一致。
+- **响应**（探测失败同样是 200，`ok=false`；只有权限/方法/限流/参数错误才用错误信封）：
+
+```json
+{ "ok": true, "latency_ms": 42, "error_code": "", "error_message": "" }
+```
+
+  `error_code` 取值：`NOT_CONFIGURED`（凭证缺失，不发出站请求）、`INSECURE_BASE_URL`
+  （Authentik Base URL 非 https 且非本机 localhost，拒绝明文传输管理 token）、`UNAUTHORIZED`
+  （上游 401/403）、`REJECTED`（上游其它 4xx/5xx 或 oapi 业务 errcode）、`UNAVAILABLE`
+  （网络不可达/超时）。响应与审计都不回显 token/secret。
+
+  服务号机器人的**存在性**不做探测：钉钉开放平台没有"不发消息就能确认企业内部单聊机器人存在"
+  的廉价接口，企业内部应用的 `robotCode` 即 AppKey，已由上面两次换票覆盖其凭证有效性。
 
 ---
 

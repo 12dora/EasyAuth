@@ -181,18 +181,111 @@ describe("ConsoleSettingsPage", () => {
     });
   });
 
-  test("载荷到达后概览条按现有字段给出三个状态", async () => {
-    const fetchMock = settingsFetchMock();
+  test("Base URL 预填环境变量回退值, 且只保存 token 时不把回退固化成覆盖值", async () => {
+    const fetchMock = settingsFetchMock({
+      authentik_base_url_override: "",
+      authentik_base_url_effective: "https://env.example.com",
+      authentik_base_url_source: "env",
+    });
     vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
 
     renderSettings();
 
-    const summary = (await screen.findByText("钉钉统一认证")).closest("div")?.parentElement;
-    expect(summary).not.toBeNull();
-    expect(within(summary!).getByText("Authentik")).toBeVisible();
-    expect(within(summary!).getByText("服务号")).toBeVisible();
-    // 服务号三元组为空: 概览与卡片都应说明回退到统一认证应用, 而不是报未配置。
-    expect(within(summary!).getByText("沿用统一认证应用")).toBeVisible();
+    const baseUrlInput = await screen.findByLabelText(/Authentik Base URL/);
+    await waitFor(() => expect(baseUrlInput).toHaveValue("https://env.example.com"));
+    // 来源提示留在输入框下方, 不再有单独的「当前生效地址」尾行。
+    expect(screen.getByText("当前值来自环境变量；留空则回退到环境变量配置。")).toBeVisible();
+    expect(screen.queryByText("当前生效地址")).toBeNull();
+
+    const authentikForm = baseUrlInput.closest("form");
+    await user.type(within(authentikForm!).getByLabelText(/API Token/), "new-token");
+    await user.click(within(authentikForm!).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => {
+      expect(requestBody(fetchMock)).toEqual({ authentik_api_token: "new-token" });
+    });
+  });
+
+  test("Authentik 测试连接成功后就地显示耗时", async () => {
+    const fetchMock = settingsFetchMock(
+      {},
+      { [`${SETTINGS_URL}/authentik/test`]: okResult(42) },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSettings();
+
+    const authentikForm = (await screen.findByLabelText(/Authentik Base URL/)).closest("form");
+    await user.click(within(authentikForm!).getByRole("button", { name: "测试连接" }));
+
+    await waitFor(() => {
+      expect(within(authentikForm!).getByRole("status")).toHaveTextContent("连接正常 · 42 ms");
+    });
+    // 未保存的草稿值随请求一起提交, 测的是"保存后会生效的那组配置"。
+    expect(testRequestBody(fetchMock, `${SETTINGS_URL}/authentik/test`)).toEqual({
+      authentik_base_url: "https://auth.example.com",
+      authentik_api_token: "",
+    });
+  });
+
+  test("服务号测试连接失败时展示后端给出的原因", async () => {
+    const fetchMock = settingsFetchMock(
+      { dingtalk_notify_app_key: "svc-key", dingtalk_notify_agent_id: "9001" },
+      {
+        [`${SETTINGS_URL}/dingtalk-notify/test`]: {
+          ok: false,
+          latency_ms: 137,
+          error_code: "REJECTED",
+          error_message: "钉钉 oapi 业务错误: invalid appsecret",
+        },
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSettings();
+
+    const notifyForm = (await screen.findByLabelText("服务号 AppKey")).closest("form");
+    await user.click(within(notifyForm!).getByRole("button", { name: "测试连接" }));
+
+    await waitFor(() => {
+      expect(within(notifyForm!).getByRole("status")).toHaveTextContent(
+        "连接失败：钉钉 oapi 业务错误: invalid appsecret",
+      );
+    });
+    expect(testRequestBody(fetchMock, `${SETTINGS_URL}/dingtalk-notify/test`)).toEqual({
+      dingtalk_notify_app_key: "svc-key",
+      dingtalk_notify_app_secret: "",
+      dingtalk_notify_agent_id: "9001",
+    });
+  });
+
+  test("统一认证应用卡片的测试连接带上未保存的三元组", async () => {
+    const fetchMock = settingsFetchMock(
+      {},
+      { [`${SETTINGS_URL}/dingtalk/test`]: okResult(7) },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSettings();
+
+    const appKeyInput = await screen.findByLabelText("钉钉 AppKey");
+    await waitFor(() => expect(appKeyInput).toHaveValue("old-key"));
+    fireEvent.change(appKeyInput, { target: { value: "draft-key" } });
+    const appForm = appKeyInput.closest("form");
+    await user.click(within(appForm!).getByRole("button", { name: "测试连接" }));
+
+    await waitFor(() => {
+      expect(within(appForm!).getByRole("status")).toHaveTextContent("连接正常 · 7 ms");
+    });
+    expect(testRequestBody(fetchMock, `${SETTINGS_URL}/dingtalk/test`)).toEqual({
+      dingtalk_app_key: "draft-key",
+      dingtalk_app_secret: "",
+      dingtalk_agent_id: "1001",
+    });
   });
 });
 
@@ -212,7 +305,14 @@ function renderSettings() {
   );
 }
 
-function settingsFetchMock(overrides: Partial<typeof SETTINGS> & Record<string, unknown> = {}) {
+function okResult(latencyMs: number) {
+  return { ok: true, latency_ms: latencyMs, error_code: "", error_message: "" };
+}
+
+function settingsFetchMock(
+  overrides: Partial<typeof SETTINGS> & Record<string, unknown> = {},
+  testResults: Record<string, unknown> = {},
+) {
   const payload = { ...SETTINGS, ...overrides };
   return vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input);
@@ -225,8 +325,18 @@ function settingsFetchMock(overrides: Partial<typeof SETTINGS> & Record<string, 
     if (url === TWO_FACTOR_URL && (!init?.method || init.method === "GET")) {
       return jsonResponse({ supported: true, totp: { enabled: false }, passkeys: [] });
     }
+    if (init?.method === "POST" && url in testResults) {
+      return jsonResponse(testResults[url]);
+    }
     throw new Error(`Unexpected fetch: ${url}`);
   });
+}
+
+function testRequestBody(fetchMock: ReturnType<typeof settingsFetchMock>, url: string) {
+  const call = fetchMock.mock.calls.find(
+    ([input, init]) => String(input) === url && init?.method === "POST",
+  );
+  return JSON.parse(String(call?.[1]?.body));
 }
 
 function requestBody(fetchMock: ReturnType<typeof settingsFetchMock>) {

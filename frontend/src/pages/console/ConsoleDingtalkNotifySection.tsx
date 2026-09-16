@@ -15,6 +15,7 @@ import {
   type IntegrationSettingsPayload,
 } from "./consoleSettingsModel";
 import { SecretBadge, SettingsCard, SettingsSubBlock, SettingsToggle } from "./SettingsCard";
+import { ConnectionTestControl } from "./SettingsConnectionTest";
 
 /** 钉钉「服务号」卡片: 独立的通知应用三元组 + 通知渠道开关。 */
 export function ConsoleDingtalkNotifySection({ settings }: { settings: IntegrationSettingsPayload | undefined }) {
@@ -72,64 +73,118 @@ export function ConsoleDingtalkNotifySection({ settings }: { settings: Integrati
       status={settings ? dingtalkNotifyStatus(t, settings) : undefined}
       onSubmit={submit}
       footer={
-        <Button
-          type="submit"
-          variant="primary"
-          icon={<Save size={15} />}
-          loading={saveMutation.isPending}
-          disabled={saveMutation.isPending || !settings}
-        >
-          {t("settings.integration.save")}
-        </Button>
+        <>
+          <ConnectionTestControl
+            url={`${SETTINGS_URL}/dingtalk-notify/test`}
+            disabled={!settings}
+            testId="dingtalk-notify-connection-test"
+            body={() => ({
+              dingtalk_notify_app_key: appKey.trim(),
+              dingtalk_notify_app_secret: appSecret,
+              dingtalk_notify_agent_id: agentId.trim(),
+            })}
+          />
+          <Button
+            type="submit"
+            variant="primary"
+            icon={<Save size={15} />}
+            loading={saveMutation.isPending}
+            disabled={saveMutation.isPending || !settings}
+          >
+            {t("settings.integration.save")}
+          </Button>
+        </>
       }
     >
       <Field label={t("settings.dingtalk.notifyAppKey")}>
         <TextInput autoComplete="off" value={appKey} onChange={(event) => setAppKey(event.currentTarget.value)} />
       </Field>
-      <Field
-        label={t("settings.dingtalk.notifyAppSecret")}
-        hint={t("settings.dingtalk.secretHint")}
-        labelExtra={
-          settings ? (
-            <SecretBadge
-              configured={settings.dingtalk_notify_app_secret_configured}
-              configuredLabel={t("settings.dingtalk.secretSet")}
-              missingLabel={t("settings.dingtalk.secretUnset")}
-            />
-          ) : null
-        }
-      >
-        <TextInput
-          type="password"
-          autoComplete="off"
-          value={appSecret}
-          placeholder={
-            settings?.dingtalk_notify_app_secret_configured
-              ? t("settings.dingtalk.secretPlaceholderSet")
-              : t("settings.dingtalk.secretPlaceholderUnset")
-          }
-          onChange={(event) => setAppSecret(event.currentTarget.value)}
-        />
-      </Field>
+      <NotifySecretField settings={settings} value={appSecret} onChange={setAppSecret} />
       <Field label={t("settings.dingtalk.notifyAgentId")} hint={t("settings.dingtalk.notifyAgentIdHint")}>
         <TextInput autoComplete="off" value={agentId} onChange={(event) => setAgentId(event.currentTarget.value)} />
       </Field>
-      <SettingsSubBlock title={t("settings.dingtalk.channelsTitle")} hint={t("settings.dingtalk.channelsHint")}>
-        <SettingsToggle
-          label={t("settings.dingtalk.workNoticeEnabled")}
-          hint={t("settings.dingtalk.workNoticeHint")}
-          checked={workNoticeEnabled}
-          disabled={!settings}
-          onChange={setWorkNoticeEnabled}
-        />
-        <SettingsToggle
-          label={t("settings.dingtalk.robotEnabled")}
-          hint={t("settings.dingtalk.robotHint")}
-          checked={robotEnabled}
-          disabled={!settings}
-          onChange={setRobotEnabled}
-        />
-      </SettingsSubBlock>
+      <NotifyChannelToggles
+        enabled={Boolean(settings)}
+        workNotice={workNoticeEnabled}
+        robot={robotEnabled}
+        onWorkNoticeChange={setWorkNoticeEnabled}
+        onRobotChange={setRobotEnabled}
+      />
     </SettingsCard>
+  );
+}
+
+/** 写入型服务号密钥字段: 只展示"是否已设置", 永不回显密文。 */
+function NotifySecretField({
+  settings,
+  value,
+  onChange,
+}: {
+  settings: IntegrationSettingsPayload | undefined;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <Field
+      label={t("settings.dingtalk.notifyAppSecret")}
+      hint={t("settings.dingtalk.secretHint")}
+      labelExtra={
+        settings ? (
+          <SecretBadge
+            configured={settings.dingtalk_notify_app_secret_configured}
+            configuredLabel={t("settings.dingtalk.secretSet")}
+            missingLabel={t("settings.dingtalk.secretUnset")}
+          />
+        ) : null
+      }
+    >
+      <TextInput
+        type="password"
+        autoComplete="off"
+        value={value}
+        placeholder={
+          settings?.dingtalk_notify_app_secret_configured
+            ? t("settings.dingtalk.secretPlaceholderSet")
+            : t("settings.dingtalk.secretPlaceholderUnset")
+        }
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+    </Field>
+  );
+}
+
+/** 两个通知渠道开关; 后端拒绝两者同时关闭。 */
+function NotifyChannelToggles({
+  enabled,
+  workNotice,
+  robot,
+  onWorkNoticeChange,
+  onRobotChange,
+}: {
+  enabled: boolean;
+  workNotice: boolean;
+  robot: boolean;
+  onWorkNoticeChange: (next: boolean) => void;
+  onRobotChange: (next: boolean) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <SettingsSubBlock title={t("settings.dingtalk.channelsTitle")} hint={t("settings.dingtalk.channelsHint")}>
+      <SettingsToggle
+        label={t("settings.dingtalk.workNoticeEnabled")}
+        hint={t("settings.dingtalk.workNoticeHint")}
+        checked={workNotice}
+        disabled={!enabled}
+        onChange={onWorkNoticeChange}
+      />
+      <SettingsToggle
+        label={t("settings.dingtalk.robotEnabled")}
+        hint={t("settings.dingtalk.robotHint")}
+        checked={robot}
+        disabled={!enabled}
+        onChange={onRobotChange}
+      />
+    </SettingsSubBlock>
   );
 }

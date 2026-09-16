@@ -11,9 +11,11 @@ from easyauth.admin_console.approval_templates_api import (
     console_approval_template_test,
     console_approval_templates,
 )
-from easyauth.admin_console.settings_api import (
+from easyauth.admin_console.settings_api import console_integration_settings
+from easyauth.admin_console.settings_probe_api import (
+    console_authentik_connectivity_test,
     console_dingtalk_connectivity_test,
-    console_integration_settings,
+    console_dingtalk_notify_connectivity_test,
 )
 from easyauth.admin_console.teams_api import (
     console_team_detail,
@@ -87,9 +89,19 @@ MANAGEMENT_URLPATTERNS = [
         name="console-integration-settings",
     ),
     path(
+        "api/v1/settings/integrations/authentik/test",
+        console_authentik_connectivity_test,
+        name="console-authentik-connectivity-test",
+    ),
+    path(
         "api/v1/settings/integrations/dingtalk/test",
         console_dingtalk_connectivity_test,
         name="console-dingtalk-connectivity-test",
+    ),
+    path(
+        "api/v1/settings/integrations/dingtalk-notify/test",
+        console_dingtalk_notify_connectivity_test,
+        name="console-dingtalk-notify-connectivity-test",
     ),
     path(
         "api/v1/approval-templates",

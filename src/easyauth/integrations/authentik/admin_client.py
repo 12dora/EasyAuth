@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from http import HTTPStatus
 from json import JSONDecodeError, dumps, loads
 from typing import TYPE_CHECKING, Final, Self, cast
 from urllib.error import HTTPError, URLError
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
 
 ADMIN_API_NOT_CONFIGURED_MESSAGE: Final = "Authentik 管理 API 未配置。"
 ADMIN_API_UNAVAILABLE_MESSAGE: Final = "Authentik 管理 API 暂不可用。"
+ADMIN_API_PERMISSION_MESSAGE: Final = "Authentik 管理 API 拒绝当前 API token。"
 USER_NOT_FOUND_MESSAGE: Final = "Authentik 中找不到对应用户。"
 AMBIGUOUS_UUID_LOOKUP_MESSAGE: Final = "Authentik 管理 API 按 uuid 查到多个用户。"
 _SESSION_PAGE_SIZE: Final = 500
@@ -57,6 +59,11 @@ class AuthentikAdminError(RuntimeError):
 class AuthentikAdminNotConfiguredError(AuthentikAdminError):
     def __init__(self) -> None:
         super().__init__(ADMIN_API_NOT_CONFIGURED_MESSAGE)
+
+
+class AuthentikAdminPermissionError(AuthentikAdminError):
+    def __init__(self) -> None:
+        super().__init__(ADMIN_API_PERMISSION_MESSAGE)
 
 
 class AuthentikAdminUserNotFoundError(AuthentikAdminError):
@@ -134,6 +141,20 @@ class AuthentikAdminClient:
             deadline=deadline,
         )
         return _user_group_names(payload)
+
+    def probe_core_users(self) -> None:
+        """连通性探针: 用最小一页核心用户确认 base_url 可达且 API token 被接受。
+
+        设置页「测试连接」与依赖健康的存活探针互补: 这里必须带 token 发一次真实
+        受保护请求, 否则只能证明 Authentik 在线, 证明不了凭证可用。
+        """
+        payload = self._request_json(
+            "GET",
+            "/api/v3/core/users/",
+            query={"page_size": "1"},
+        )
+        if not isinstance(payload.get("results"), list):
+            raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
 
     def get_user_by_uuid(self, sub: str) -> AdminJson:
         # OIDC sub 与 UserMirror.authentik_user_id 都是核心用户 uuid, 不是 uid 散列。
@@ -259,6 +280,9 @@ class AuthentikAdminClient:
             ) as response:
                 return self._read_response(response, deadline=deadline)
         except HTTPError as error:
+            # 401/403 是凭证被拒, 与"上游故障"是两类完全不同的运维动作, 必须分型。
+            if error.code in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
+                raise AuthentikAdminPermissionError from error
             message = f"Authentik 管理 API 请求失败(HTTP {error.code})。"
             raise AuthentikAdminError(message) from error
         except (URLError, TimeoutError) as error:
