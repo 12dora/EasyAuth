@@ -23,6 +23,7 @@ from easyauth.applications.models import (
 from easyauth.applications.notify_appearance import palette_notify_head_bgcolor
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.models import AuditLog
+from easyauth.integrations.dingtalk.api_client import DingTalkRobotOtoResult
 from easyauth.notify.delivery import deliver_message
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
@@ -69,6 +70,27 @@ def _channel(app: App) -> AppNotificationChannel:
         corp_id=_CORP,
         version=1,
     )
+
+
+def _stub_robot(client: MagicMock, *, process_query_key: str = "pqk-1") -> None:
+    client.app_key = "svc-key"
+
+    def robot_side_effect(
+        *,
+        user_ids: object,
+        **_kwargs: object,
+    ) -> tuple[DingTalkRobotOtoResult, ...]:
+        ids = tuple(str(item) for item in list(user_ids))  # type: ignore[arg-type]
+        return (
+            DingTalkRobotOtoResult(
+                process_query_key=process_query_key,
+                user_ids=ids,
+                invalid_staff_ids=frozenset(),
+                flow_controlled_staff_ids=frozenset(),
+            ),
+        )
+
+    client.send_robot_oto_messages.side_effect = robot_side_effect
 
 
 def _auth(monkeypatch: pytest.MonkeyPatch, app: App) -> AppPrincipal:
@@ -414,6 +436,7 @@ def test_pipeline_accept_to_deliver(monkeypatch: pytest.MonkeyPatch) -> None:
 
     client = MagicMock()
     client.send_work_notification.return_value = "task-pipe"
+    _stub_robot(client)
 
     def client_for_channel(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
         return client, 42
@@ -452,6 +475,7 @@ def test_notify_api_delivers_oa_payload_with_registered_app_name(
 
     client = MagicMock()
     client.send_work_notification.return_value = "task-oa"
+    _stub_robot(client)
 
     def client_for_channel(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
         return client, 42
@@ -498,6 +522,7 @@ def test_post_accepts_legacy_sdk_markdown_body(monkeypatch: pytest.MonkeyPatch) 
 
     client = MagicMock()
     client.send_work_notification.return_value = "task-legacy"
+    _stub_robot(client)
 
     def client_for_channel(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
         return client, 42

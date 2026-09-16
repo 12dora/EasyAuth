@@ -50,6 +50,7 @@ class IntegrationSettingsPatch(BaseModel):
     dingtalk_notify_app_key: str = Field(default="", max_length=128)
     dingtalk_notify_app_secret: str = Field(default="", max_length=512)
     dingtalk_notify_agent_id: str = Field(default="", max_length=64)
+    dingtalk_notify_robot_enabled: bool = True
 
     @field_validator("authentik_base_url")
     @classmethod
@@ -198,6 +199,9 @@ def _apply_notify_fields(
     if "dingtalk_notify_agent_id" in fields_set:
         row.dingtalk_notify_agent_id = payload.dingtalk_notify_agent_id
         update_fields.append("dingtalk_notify_agent_id")
+    if "dingtalk_notify_robot_enabled" in fields_set:
+        row.dingtalk_notify_robot_enabled = payload.dingtalk_notify_robot_enabled
+        update_fields.append("dingtalk_notify_robot_enabled")
     return _CredentialPatchFlags(secret_changed=secret_changed)
 
 
@@ -292,6 +296,9 @@ def _settings_response() -> JsonResponse:
         if row is not None
         else False,
         "dingtalk_notify_agent_id": row.dingtalk_notify_agent_id if row is not None else "",
+        "dingtalk_notify_robot_enabled": True
+        if row is None
+        else row.dingtalk_notify_robot_enabled,
         "updated_at": datetime_value(row.updated_at) if row is not None else None,
         "updated_by": row.updated_by if row is not None else "",
     }

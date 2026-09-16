@@ -22,6 +22,7 @@ const SETTINGS = {
   dingtalk_notify_app_key: "",
   dingtalk_notify_app_secret_configured: false,
   dingtalk_notify_agent_id: "",
+  dingtalk_notify_robot_enabled: true,
   updated_at: "2026-07-10T08:00:00Z",
   updated_by: "admin",
 };
@@ -118,6 +119,26 @@ describe("ConsoleSettingsPage", () => {
       });
     });
     expect(JSON.stringify(requestBody(fetchMock))).not.toContain("must-never-render");
+  });
+
+  test("关闭服务号机器人开关时只发送该布尔字段", async () => {
+    const fetchMock = settingsFetchMock({ dingtalk_notify_robot_enabled: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSettings();
+
+    const toggle = await screen.findByRole("checkbox", { name: "同时经服务号机器人推送" });
+    await waitFor(() => expect(toggle).toBeChecked());
+    await user.click(toggle);
+    expect(toggle).not.toBeChecked();
+    const dingtalkForm = toggle.closest("form");
+    expect(dingtalkForm).not.toBeNull();
+    await user.click(within(dingtalkForm!).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => {
+      expect(requestBody(fetchMock)).toEqual({ dingtalk_notify_robot_enabled: false });
+    });
   });
 });
 

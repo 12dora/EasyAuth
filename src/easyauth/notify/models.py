@@ -62,6 +62,17 @@ NOTIFY_RECIPIENT_STATUS_VALUES: Final[tuple[str, ...]] = (
     NOTIFY_RECIPIENT_STATUS_FAILED,
     NOTIFY_RECIPIENT_STATUS_THROTTLED,
 )
+# 服务号机器人 sidecar: 与工作通知状态机独立, 失败互不影响。
+NOTIFY_ROBOT_STATUS_SENT: Final = "sent"
+NOTIFY_ROBOT_STATUS_FAILED: Final = "failed"
+NOTIFY_ROBOT_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
+    (NOTIFY_ROBOT_STATUS_SENT, "sent"),
+    (NOTIFY_ROBOT_STATUS_FAILED, "failed"),
+)
+NOTIFY_ROBOT_STATUS_VALUES: Final[tuple[str, ...]] = (
+    NOTIFY_ROBOT_STATUS_SENT,
+    NOTIFY_ROBOT_STATUS_FAILED,
+)
 # scoped user_ref v1 的三个目录字段各允许 128 个 Unicode 字符。按每字符最多
 # 4 UTF-8 bytes、无 padding base64url 计算, 每段最多 683 字符, 加 dt:v1 与分隔符
 # 共 2057 字符。4096 完整覆盖 v1, 并为后续引用版本保留约一倍的协议余量。
@@ -282,6 +293,22 @@ class NotifyRecipient(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(null=True, blank=True, db_index=True)
+    # 服务号机器人一对一投递结果; 与工作通知 status 独立, 可空表示未尝试。
+    robot_process_query_key: models.CharField[str | None, str | None] = models.CharField(
+        max_length=128,
+        null=True,
+        blank=True,
+    )
+    robot_status: models.CharField[str | None, str | None] = models.CharField(
+        max_length=16,
+        choices=NOTIFY_ROBOT_STATUS_CHOICES,
+        null=True,
+        blank=True,
+    )
+    robot_error: models.TextField[str | None, str | None] = models.TextField(
+        null=True,
+        blank=True,
+    )
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -320,6 +347,37 @@ class NotifyRecipient(models.Model):
                     | (Q(status=NOTIFY_RECIPIENT_STATUS_FAILED) & ~Q(error_code=""))
                 ),
                 name="notify_recipient_failed_error_code_shape",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(robot_status__isnull=True)
+                    | Q(robot_status__in=NOTIFY_ROBOT_STATUS_VALUES)
+                ),
+                name="notify_recipient_robot_status_supported",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(robot_status__isnull=True)
+                    | Q(robot_status=NOTIFY_ROBOT_STATUS_FAILED)
+                    | (
+                        Q(robot_status=NOTIFY_ROBOT_STATUS_SENT)
+                        & Q(robot_process_query_key__isnull=False)
+                        & ~Q(robot_process_query_key="")
+                    )
+                ),
+                name="notify_recipient_robot_sent_shape",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(robot_status__isnull=True)
+                    | Q(robot_status=NOTIFY_ROBOT_STATUS_SENT)
+                    | (
+                        Q(robot_status=NOTIFY_ROBOT_STATUS_FAILED)
+                        & Q(robot_error__isnull=False)
+                        & ~Q(robot_error="")
+                    )
+                ),
+                name="notify_recipient_robot_failed_shape",
             ),
         ]
         indexes: ClassVar[list[models.Index]] = [

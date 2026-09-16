@@ -62,6 +62,10 @@ class IntegrationSettings(models.Model):
         max_length=64,
         blank=True,
     )
+    # 工作通知之外是否同时经服务号机器人一对一推送; 默认开启, 关闭后仅保留 OA 工作通知。
+    dingtalk_notify_robot_enabled: models.BooleanField[bool, bool] = models.BooleanField(
+        default=True,
+    )
     updated_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now=True,

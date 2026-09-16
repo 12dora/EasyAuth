@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from easyauth.applications.integration_settings import dingtalk_runtime_config
+from easyauth.applications.integration_settings import (
+    INTEGRATION_SETTINGS_SINGLETON_ID,
+    IntegrationSettings,
+    dingtalk_runtime_config,
+)
 from easyauth.applications.models import AppNotificationChannel
 from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiClient,
@@ -49,3 +53,11 @@ def dingtalk_client_and_agent(
         ),
         agent,
     )
+
+
+def notify_robot_enabled() -> bool:
+    """服务号机器人 sidecar 全局开关; 无设置行时与列默认值一致(开启)。"""
+    row = IntegrationSettings.objects.filter(pk=INTEGRATION_SETTINGS_SINGLETON_ID).first()
+    if row is None:
+        return True
+    return row.dingtalk_notify_robot_enabled

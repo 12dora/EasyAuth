@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from types import TracebackType
 
-# 默认走钉钉新版 v1.0 API(api.dingtalk.com); 审批等能力均有新版。
+# 默认走钉钉新版 v1.0 API(api.dingtalk.com); 审批、服务号机器人单聊等均有新版。
 # 例外: 工作通知仅有旧版 oapi topapi(asyncsend_v2 / getsendprogress / getsendresult),
 # 官方无 api.dingtalk.com 新版替代——见 docs/architecture/platform-directory-notify.md
 # 04-钉钉工作通知调研结论.md §1。oapi 例外范围仅限本文件三个工作通知方法。
@@ -34,9 +34,15 @@ MAX_ERROR_RESPONSE_BYTES: Final = 4096
 OAPI_ASYNC_SEND_PATH: Final = "/topapi/message/corpconversation/asyncsend_v2"
 OAPI_GET_SEND_PROGRESS_PATH: Final = "/topapi/message/corpconversation/getsendprogress"
 OAPI_GET_SEND_RESULT_PATH: Final = "/topapi/message/corpconversation/getsendresult"
+ROBOT_OTO_BATCH_SEND_PATH: Final = "/v1.0/robot/oToMessages/batchSend"
+ROBOT_MSG_KEY_MARKDOWN: Final = "sampleMarkdown"
+ROBOT_MSG_KEY_ACTION_CARD: Final = "sampleActionCard2"
+ROBOT_ACTION_SINGLE_TITLE: Final = "查看详情"
 # 官方 userid_list 上限, 同时保住 getsendresult 回执能力。
 WORK_NOTIFICATION_MAX_USERIDS: Final = 100
 WORK_NOTIFICATION_PROGRESS_MAX_PERCENT: Final = 100
+# 服务号机器人 batchSend 单次 userIds 上限。
+ROBOT_OTO_MAX_USERIDS: Final = 20
 
 type DingTalkJson = dict[str, object]
 
@@ -111,6 +117,14 @@ class DingTalkSendResult:
 
 
 @dataclass(frozen=True, slots=True)
+class DingTalkRobotOtoResult:
+    process_query_key: str
+    user_ids: tuple[str, ...]
+    invalid_staff_ids: frozenset[str]
+    flow_controlled_staff_ids: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
 class _JsonRequestOptions:
     body: DingTalkJson | None = None
     query: dict[str, str] | None = None
@@ -155,12 +169,20 @@ class DingTalkApiClient:
             timeout_seconds=config.timeout_seconds,
         )
 
+    @property
+    def app_key(self) -> str:
+        return self._app_key
+
     def get_access_token(
         self,
         *,
         force_refresh: bool = False,
         _deadline: float | None = None,
     ) -> str:
+        """新版 API 换票: POST /v1.0/oauth2/accessToken, 供 x-acs-dingtalk-access-token 使用。
+
+        工作通知 oapi 与服务号机器人 batchSend 共用这一枚 token 与同一套缓存/超时约定。
+        """
         cache_key = _access_token_cache_key(self._app_key, self._app_secret)
         cached = _read_cached_access_token(cache_key, force_refresh=force_refresh)
         if cached is not None:
@@ -281,6 +303,65 @@ class DingTalkApiClient:
             message = "钉钉发送结果响应缺少 send_result。"
             raise DingTalkApiRequestError(message)
         return _parse_send_result(cast("DingTalkJson", send_result))
+
+    def send_robot_oto_messages(
+        self,
+        *,
+        robot_code: str,
+        user_ids: Sequence[str],
+        title: str,
+        text: str,
+        single_url: str = "",
+    ) -> tuple[DingTalkRobotOtoResult, ...]:
+        """服务号机器人一对一消息: 新版 batchSend, userIds 按 ≤20 分批。
+
+        走 `_request_json`(x-acs token、超时 deadline、HTTPError/URLError 映射)与其它新版
+        API 同一套重试/退避入口; 本方法不在客户端内静默吞失败。
+        """
+        if not robot_code.strip():
+            message = "机器人 robotCode 不能为空。"
+            raise DingTalkApiRequestError(message)
+        normalized = _validated_robot_user_ids(user_ids)
+        msg_key, msg_param = _robot_msg_key_and_param(
+            title=title,
+            text=text,
+            single_url=single_url,
+            single_title=ROBOT_ACTION_SINGLE_TITLE,
+        )
+        return tuple(
+            self._send_robot_oto_batch(
+                robot_code=robot_code.strip(),
+                user_ids=chunk,
+                msg_key=msg_key,
+                msg_param=msg_param,
+            )
+            for chunk in chunk_robot_user_ids(normalized)
+        )
+
+    def _send_robot_oto_batch(
+        self,
+        *,
+        robot_code: str,
+        user_ids: tuple[str, ...],
+        msg_key: str,
+        msg_param: str,
+    ) -> DingTalkRobotOtoResult:
+        if len(user_ids) > ROBOT_OTO_MAX_USERIDS:
+            message = f"机器人单聊 userIds 不得超过 {ROBOT_OTO_MAX_USERIDS} 个。"
+            raise DingTalkApiRequestError(message)
+        payload = self._request_json(
+            "POST",
+            ROBOT_OTO_BATCH_SEND_PATH,
+            options=_JsonRequestOptions(
+                body={
+                    "robotCode": robot_code,
+                    "userIds": list(user_ids),
+                    "msgKey": msg_key,
+                    "msgParam": msg_param,
+                },
+            ),
+        )
+        return _parse_robot_oto_result(payload, user_ids)
 
     def _request_json(
         self,
@@ -407,6 +488,83 @@ def _parse_send_result(send_result: DingTalkJson) -> DingTalkSendResult:
         unread_user_ids=_required_userid_set(send_result, "unread_user_id_list"),
         forbidden_receipts=_required_forbidden_receipts(send_result),
     )
+
+
+def chunk_robot_user_ids(user_ids: Sequence[str]) -> tuple[tuple[str, ...], ...]:
+    """把机器人单聊收件人按官方上限拆批。"""
+    return tuple(
+        tuple(user_ids[index : index + ROBOT_OTO_MAX_USERIDS])
+        for index in range(0, len(user_ids), ROBOT_OTO_MAX_USERIDS)
+    )
+
+
+def _validated_robot_user_ids(user_ids: Sequence[str]) -> tuple[str, ...]:
+    if not user_ids:
+        message = "机器人单聊 userIds 不能为空。"
+        raise DingTalkApiRequestError(message)
+    normalized: list[str] = []
+    for userid in user_ids:
+        if not isinstance(userid, str) or not userid:
+            message = "机器人单聊 userIds 包含无效 userid。"
+            raise DingTalkApiRequestError(message)
+        normalized.append(userid)
+    return tuple(normalized)
+
+
+def _robot_msg_key_and_param(
+    *,
+    title: str,
+    text: str,
+    single_url: str,
+    single_title: str,
+) -> tuple[str, str]:
+    if single_url:
+        msg_key = ROBOT_MSG_KEY_ACTION_CARD
+        param: dict[str, str] = {
+            "title": title,
+            "text": text,
+            "singleTitle": single_title,
+            "singleURL": single_url,
+        }
+    else:
+        msg_key = ROBOT_MSG_KEY_MARKDOWN
+        param = {"title": title, "text": text}
+    return msg_key, dumps(param, ensure_ascii=False, separators=(",", ":"))
+
+
+def _parse_robot_oto_result(
+    payload: DingTalkJson,
+    user_ids: tuple[str, ...],
+) -> DingTalkRobotOtoResult:
+    process_query_key = payload.get("processQueryKey")
+    if not isinstance(process_query_key, str) or not process_query_key:
+        message = "钉钉机器人发送响应缺少 processQueryKey。"
+        raise DingTalkApiRequestError(message)
+    return DingTalkRobotOtoResult(
+        process_query_key=process_query_key,
+        user_ids=user_ids,
+        invalid_staff_ids=_optional_staff_id_set(payload, "invalidStaffIdList"),
+        flow_controlled_staff_ids=_optional_staff_id_set(
+            payload,
+            "flowControlledStaffIdList",
+        ),
+    )
+
+
+def _optional_staff_id_set(payload: DingTalkJson, field: str) -> frozenset[str]:
+    raw = payload.get(field)
+    if raw is None:
+        return frozenset()
+    if not isinstance(raw, list):
+        message = f"钉钉机器人发送响应 {field} 类型无效。"
+        raise DingTalkApiRequestError(message)
+    staff_ids: set[str] = set()
+    for item in cast("list[object]", raw):
+        if not isinstance(item, str) or not item:
+            message = f"钉钉机器人发送响应 {field} 包含无效 userid。"
+            raise DingTalkApiRequestError(message)
+        staff_ids.add(item)
+    return frozenset(staff_ids)
 
 
 def _required_userid_set(payload: DingTalkJson, field: str) -> frozenset[str]:

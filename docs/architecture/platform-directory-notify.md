@@ -91,6 +91,17 @@ generation 未变也会刷新本地 `last_synced_at`——新鲜度表示「已�
 仅当这三项均非空时使用该三元组换票与 `agent_id`；任一留空则回退到主应用三元组
 （目录同步 / Stream / 登录用的 `dingtalk_app_*`）。notify-worker 投递与对账与此同一口径。
 
+工作通知发出后，**同一条消息还会经服务号机器人再发一条一对一消息**（`robotCode` = 服务号
+AppKey，权限点 `qyapi_robot_sendmsg`，EasyAuth 只发不收）。走新版
+`POST /v1.0/robot/oToMessages/batchSend`（`x-acs-dingtalk-access-token` 来自
+`POST /v1.0/oauth2/accessToken`），`userIds` 单批 ≤20；无链接用 `sampleMarkdown`，有
+`deeplink_url` 用 `sampleActionCard2`。Markdown 正文为
+`### <应用名> · <标题>` + 原文 content + `HH:mm · 来自 <发起方>`，与 OA body 同一套身份
+信息。机器人结果记在收件人行的 `robot_process_query_key` / `robot_status` /
+`robot_error`，**失败不得把工作通知标失败，反之亦然**。全局开关
+`IntegrationSettings.dingtalk_notify_robot_enabled`（默认开启；控制台「同时经服务号机器人推送」）
+可关掉第二通道。
+
 工作通知钉钉载荷固定为 `msgtype: oa`（不再发送 markdown / text / action_card）：
 
 - **钉钉会改写 `head.text`。** 官方「消息类型与数据格式」写明：发送**工作通知**时，

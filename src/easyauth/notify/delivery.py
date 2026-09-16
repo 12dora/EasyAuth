@@ -16,6 +16,8 @@ from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiRequestError,
     DingTalkApiUnavailableError,
     DingTalkNotConfiguredError,
+    DingTalkRobotOtoResult,
+    chunk_robot_user_ids,
 )
 from easyauth.notify import channel_config
 from easyauth.notify.contracts import (
@@ -42,7 +44,13 @@ from easyauth.notify.contracts import (
     NOTIFY_THROTTLE_RETRY_SECONDS,
 )
 from easyauth.notify.messages import DingTalkMsgSource, build_dingtalk_msg
-from easyauth.notify.models import NotifyMessage, NotifyRecipient
+from easyauth.notify.models import (
+    NOTIFY_ROBOT_STATUS_FAILED,
+    NOTIFY_ROBOT_STATUS_SENT,
+    NotifyMessage,
+    NotifyRecipient,
+)
+from easyauth.notify.robot import build_robot_message_parts
 from easyauth.outbox.services import enqueue_task
 
 if TYPE_CHECKING:
@@ -91,6 +99,10 @@ class _DeliveryContext:
     client: DingTalkApiClient
     agent_id: str | int
     msg: dict[str, object]
+    robot_enabled: bool
+    robot_title: str
+    robot_text: str
+    robot_single_url: str
 
 
 def _open_recipients(message: NotifyMessage) -> list[NotifyRecipient]:
@@ -111,16 +123,20 @@ def _delivery_context(message: NotifyMessage, claim_token: str) -> _DeliveryCont
         # 配置缺失视为可恢复: 保持 pending, 走常规退避; 健康探测补齐后自动恢复。
         _record_network_error(message, claim_token, error)
         return None
-    msg = build_dingtalk_msg(
+    sent_at = timezone.now()
+    source = DingTalkMsgSource(
+        title=message.title,
+        content=message.content,
+        deeplink_url=message.deeplink_url,
+        fields=_stored_form_fields(message),
+        app_display_name=message.app_display_name,
+        author=message.author,
+    )
+    msg = build_dingtalk_msg(app=message.app, source=source, sent_at=sent_at)
+    robot_title, robot_text = build_robot_message_parts(
         app=message.app,
-        source=DingTalkMsgSource(
-            title=message.title,
-            content=message.content,
-            deeplink_url=message.deeplink_url,
-            fields=_stored_form_fields(message),
-            app_display_name=message.app_display_name,
-            author=message.author,
-        ),
+        source=source,
+        sent_at=sent_at,
     )
     return _DeliveryContext(
         message=message,
@@ -128,6 +144,10 @@ def _delivery_context(message: NotifyMessage, claim_token: str) -> _DeliveryCont
         client=client,
         agent_id=agent_id,
         msg=msg,
+        robot_enabled=channel_config.notify_robot_enabled(),
+        robot_title=robot_title,
+        robot_text=robot_text,
+        robot_single_url=message.deeplink_url,
     )
 
 
@@ -164,6 +184,17 @@ def _send_recipient_chunk(
     userids = [row.dingtalk_userid for row in chunk if row.dingtalk_userid]
     if not userids:
         return False
+    network_interrupted = _send_work_notice(delivery, chunk, userids)
+    # 机器人 sidecar 与工作通知独立: 无论 OA 成败都尝试, 结果互不改写对方状态。
+    _send_robot_channel(delivery, chunk)
+    return network_interrupted
+
+
+def _send_work_notice(
+    delivery: _DeliveryContext,
+    chunk: Sequence[NotifyRecipient],
+    userids: list[str],
+) -> bool:
     try:
         task_id = delivery.client.send_work_notification(
             agent_id=delivery.agent_id,
@@ -177,6 +208,97 @@ def _send_recipient_chunk(
         return _handle_request_error(delivery, chunk, error)
     _mark_chunk_sent(chunk, task_id=task_id)
     return False
+
+
+def _send_robot_channel(
+    delivery: _DeliveryContext,
+    chunk: Sequence[NotifyRecipient],
+) -> None:
+    if not delivery.robot_enabled:
+        return
+    pending = [row for row in chunk if row.dingtalk_userid and row.robot_status is None]
+    if not pending:
+        return
+    by_userid = {row.dingtalk_userid: row for row in pending}
+    userids = [row.dingtalk_userid for row in pending]
+    for batch_ids in chunk_robot_user_ids(userids):
+        _send_robot_batch(delivery, by_userid, batch_ids)
+
+
+def _send_robot_batch(
+    delivery: _DeliveryContext,
+    by_userid: dict[str, NotifyRecipient],
+    batch_ids: tuple[str, ...],
+) -> None:
+    recipients = tuple(by_userid[userid] for userid in batch_ids)
+    try:
+        results = delivery.client.send_robot_oto_messages(
+            robot_code=delivery.client.app_key,
+            user_ids=batch_ids,
+            title=delivery.robot_title,
+            text=delivery.robot_text,
+            single_url=delivery.robot_single_url,
+        )
+    except (DingTalkApiUnavailableError, DingTalkApiRequestError) as error:
+        logger.warning(
+            "notify_robot_send_failed message_id=%s userids=%s error=%s",
+            delivery.message.id,
+            ",".join(batch_ids),
+            error,
+        )
+        _mark_robot_failed(recipients, error=str(error)[:NOTIFY_ERROR_MAX_CHARS])
+        return
+    for result in results:
+        _apply_robot_result(by_userid, result)
+
+
+def _apply_robot_result(
+    by_userid: dict[str, NotifyRecipient],
+    result: DingTalkRobotOtoResult,
+) -> None:
+    sent_ids: list[int] = []
+    invalid_ids: list[int] = []
+    flow_ids: list[int] = []
+    for userid in result.user_ids:
+        row = by_userid.get(userid)
+        if row is None:
+            continue
+        if userid in result.invalid_staff_ids:
+            invalid_ids.append(row.id)
+        elif userid in result.flow_controlled_staff_ids:
+            flow_ids.append(row.id)
+        else:
+            sent_ids.append(row.id)
+    _mark_robot_sent(sent_ids, process_query_key=result.process_query_key)
+    _mark_robot_failed_ids(invalid_ids, error="钉钉机器人返回无效员工。")
+    _mark_robot_failed_ids(flow_ids, error="钉钉机器人流控。")
+
+
+def _mark_robot_sent(ids: Sequence[int], *, process_query_key: str) -> None:
+    if not ids:
+        return
+    now = timezone.now()
+    _ = NotifyRecipient.objects.filter(id__in=ids, robot_status__isnull=True).update(
+        robot_status=NOTIFY_ROBOT_STATUS_SENT,
+        robot_process_query_key=process_query_key,
+        robot_error=None,
+        updated_at=now,
+    )
+
+
+def _mark_robot_failed(chunk: Sequence[NotifyRecipient], *, error: str) -> None:
+    _mark_robot_failed_ids([row.id for row in chunk], error=error)
+
+
+def _mark_robot_failed_ids(ids: Sequence[int], *, error: str) -> None:
+    if not ids:
+        return
+    now = timezone.now()
+    _ = NotifyRecipient.objects.filter(id__in=ids, robot_status__isnull=True).update(
+        robot_status=NOTIFY_ROBOT_STATUS_FAILED,
+        robot_error=error,
+        updated_at=now,
+    )
 
 
 def _handle_request_error(

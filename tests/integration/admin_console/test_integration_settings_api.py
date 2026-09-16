@@ -34,6 +34,7 @@ def test_integration_settings_get_returns_env_fallback() -> None:
     assert payload["dingtalk_notify_app_key"] == ""
     assert payload["dingtalk_notify_app_secret_configured"] is False
     assert payload["dingtalk_notify_agent_id"] == ""
+    assert payload["dingtalk_notify_robot_enabled"] is True
 
 
 def test_integration_settings_patch_sets_override_and_hides_token() -> None:
@@ -191,6 +192,23 @@ def test_integration_settings_notify_fields_round_trip_and_never_echo_secret() -
     assert row.dingtalk_notify_app_secret == "svc-secret-plain"
     assert row.dingtalk_notify_agent_id == "9002"
     assert "svc-secret-plain" not in omitted.content.decode()
+
+
+def test_integration_settings_notify_robot_switch_round_trip() -> None:
+    client = _logged_in_superuser("settings-robot-admin")
+    row = IntegrationSettings.load()
+    assert row.dingtalk_notify_robot_enabled is True
+
+    response = client.patch(
+        SETTINGS_API_URL,
+        data={"dingtalk_notify_robot_enabled": False},
+        content_type="application/json",
+    )
+    assert response.status_code == HTTPStatus.OK
+    payload = cast("dict[str, JsonValue]", response.json())
+    assert payload["dingtalk_notify_robot_enabled"] is False
+    row.refresh_from_db()
+    assert row.dingtalk_notify_robot_enabled is False
 
 
 def test_integration_settings_patch_can_explicitly_clear_fields() -> None:

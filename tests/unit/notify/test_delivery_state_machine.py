@@ -11,6 +11,7 @@ from easyauth.applications.models import App, AppNotificationChannel
 from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiRequestError,
     DingTalkApiUnavailableError,
+    DingTalkRobotOtoResult,
 )
 from easyauth.notify.acceptance import (
     NotifyAcceptanceInput,
@@ -91,6 +92,20 @@ def _patch_dingtalk(
         client.send_work_notification.side_effect = list(task_ids)
     else:
         client.send_work_notification.return_value = "task-1"
+    client.app_key = "svc-key"
+
+    def robot_side_effect(**kwargs: object) -> tuple[DingTalkRobotOtoResult, ...]:
+        ids = tuple(str(item) for item in list(kwargs["user_ids"]))  # type: ignore[arg-type]
+        return (
+            DingTalkRobotOtoResult(
+                process_query_key="pqk-1",
+                user_ids=ids,
+                invalid_staff_ids=frozenset(),
+                flow_controlled_staff_ids=frozenset(),
+            ),
+        )
+
+    client.send_robot_oto_messages.side_effect = robot_side_effect
 
     def fake_client_and_agent(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
         return client, 1001
@@ -165,6 +180,15 @@ def test_delivery_uses_channel_frozen_at_accept_time(monkeypatch: pytest.MonkeyP
     used_channels: list[int] = []
     client = MagicMock()
     client.send_work_notification.return_value = "frozen-task"
+    client.app_key = "frozen-key"
+    client.send_robot_oto_messages.return_value = (
+        DingTalkRobotOtoResult(
+            process_query_key="pqk-frozen",
+            user_ids=("frozen-dt",),
+            invalid_staff_ids=frozenset(),
+            flow_controlled_staff_ids=frozenset(),
+        ),
+    )
 
     def client_for_channel(channel: AppNotificationChannel) -> tuple[MagicMock, int]:
         used_channels.append(channel.id)

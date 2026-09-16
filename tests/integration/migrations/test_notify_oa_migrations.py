@@ -17,7 +17,9 @@ if TYPE_CHECKING:
 _NOTIFY_0007 = "0007_remove_legacy_recipient_identity"
 _NOTIFY_0008 = "0008_oa_message_fields"
 _NOTIFY_0009 = "0009_remove_notifymessage_deeplink_title"
+_NOTIFY_0010 = "0010_notifyrecipient_robot_delivery"
 _OA_COLUMNS = {"form_fields", "app_display_name", "author"}
+_ROBOT_COLUMNS = {"robot_process_query_key", "robot_status", "robot_error"}
 
 
 class _MessageRow(Protocol):
@@ -81,6 +83,18 @@ def test_deeplink_title_column_removed_and_reversible() -> None:
 
     _ = MigrationExecutor(connection).migrate(_targets_with_notify(_NOTIFY_0008))
     assert "deeplink_title" in _column_names(table)
+
+
+def test_robot_delivery_columns_added_and_reversible() -> None:
+    table = "notify_notifyrecipient"
+    _ = MigrationExecutor(connection).migrate(_targets_with_notify(_NOTIFY_0009))
+    assert _column_names(table).isdisjoint(_ROBOT_COLUMNS)
+
+    _ = MigrationExecutor(connection).migrate(_targets_with_notify(_NOTIFY_0010))
+    assert _ROBOT_COLUMNS.issubset(_column_names(table))
+
+    _ = MigrationExecutor(connection).migrate(_targets_with_notify(_NOTIFY_0009))
+    assert _column_names(table).isdisjoint(_ROBOT_COLUMNS)
 
 
 def _targets_with_notify(migration: str) -> list[tuple[str, str]]:

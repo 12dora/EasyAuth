@@ -16,6 +16,7 @@ export interface IntegrationSettingsPayload {
   dingtalk_notify_app_key: string;
   dingtalk_notify_app_secret_configured: boolean;
   dingtalk_notify_agent_id: string;
+  dingtalk_notify_robot_enabled: boolean;
   updated_at: string | null;
   updated_by: string;
 }
@@ -60,6 +61,7 @@ export interface DingtalkSettingsInput {
   notifyAppKey: string;
   notifyAppSecret: string;
   notifyAgentId: string;
+  notifyRobotEnabled: boolean;
 }
 
 /** PATCH 载荷只包含用户改动过的字段: 未动的字段省略(=保持不变), secret 留空同样省略。 */
@@ -85,6 +87,9 @@ export function dingtalkPatchBody(
   }
   if (settings && input.notifyAgentId.trim() !== settings.dingtalk_notify_agent_id) {
     body.dingtalk_notify_agent_id = input.notifyAgentId.trim();
+  }
+  if (settings && input.notifyRobotEnabled !== settings.dingtalk_notify_robot_enabled) {
+    body.dingtalk_notify_robot_enabled = input.notifyRobotEnabled;
   }
   return body;
 }

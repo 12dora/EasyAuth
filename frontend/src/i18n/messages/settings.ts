@@ -43,6 +43,8 @@ export const zhCN = {
   "settings.dingtalk.notifySecretMissing": "未设置",
   "settings.dingtalk.notifySecretPlaceholderConfigured": "已设置（留空保持不变）",
   "settings.dingtalk.notifySecretPlaceholderMissing": "未设置",
+  "settings.dingtalk.notifyRobotEnabled": "同时经服务号机器人推送",
+  "settings.dingtalk.notifyRobotHint": "工作通知之外，再以服务号机器人一对一消息送达；关闭后仅保留工作通知。",
 
   "settings.twoFactor.title": "两步验证",
   "settings.twoFactor.loadFailed": "两步验证状态加载失败",
@@ -155,6 +157,8 @@ export const en: Record<keyof typeof zhCN, string> = {
   "settings.dingtalk.notifySecretMissing": "Not set",
   "settings.dingtalk.notifySecretPlaceholderConfigured": "Set (leave empty to keep)",
   "settings.dingtalk.notifySecretPlaceholderMissing": "Not set",
+  "settings.dingtalk.notifyRobotEnabled": "Also push via the service-account robot",
+  "settings.dingtalk.notifyRobotHint": "In addition to work notifications, deliver a one-to-one robot message; turn off to keep work notifications only.",
 
   "settings.twoFactor.title": "Two-step verification",
   "settings.twoFactor.loadFailed": "Failed to load two-step verification status",

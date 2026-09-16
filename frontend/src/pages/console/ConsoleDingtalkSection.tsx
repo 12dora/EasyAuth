@@ -179,6 +179,15 @@ function DingtalkNotifyFields({
       <Field label={t("settings.dingtalk.notifyAgentId")}>
         <TextInput autoComplete="off" value={form.values.notifyAgentId} onChange={(event) => form.setNotifyAgentId(event.currentTarget.value)} />
       </Field>
+      <label className="inline-flex items-center gap-2 text-body text-ink">
+        <input
+          type="checkbox"
+          checked={form.values.notifyRobotEnabled}
+          onChange={(event) => form.setNotifyRobotEnabled(event.currentTarget.checked)}
+        />
+        <span>{t("settings.dingtalk.notifyRobotEnabled")}</span>
+      </label>
+      <p className="text-xs leading-5 text-ink-faint">{t("settings.dingtalk.notifyRobotHint")}</p>
     </div>
   );
 }
@@ -191,6 +200,7 @@ interface DingtalkFormState {
   setNotifyAppKey: (value: string) => void;
   setNotifyAppSecret: (value: string) => void;
   setNotifyAgentId: (value: string) => void;
+  setNotifyRobotEnabled: (value: boolean) => void;
   clearSecrets: () => void;
 }
 
@@ -201,6 +211,7 @@ function useDingtalkFormState(settings: IntegrationSettingsPayload | undefined):
   const [notifyAppKey, setNotifyAppKey] = useState("");
   const [notifyAppSecret, setNotifyAppSecret] = useState("");
   const [notifyAgentId, setNotifyAgentId] = useState("");
+  const [notifyRobotEnabled, setNotifyRobotEnabled] = useState(true);
 
   useEffect(() => {
     if (!settings) {
@@ -210,16 +221,26 @@ function useDingtalkFormState(settings: IntegrationSettingsPayload | undefined):
     setAgentId(settings.dingtalk_agent_id);
     setNotifyAppKey(settings.dingtalk_notify_app_key);
     setNotifyAgentId(settings.dingtalk_notify_agent_id);
+    setNotifyRobotEnabled(settings.dingtalk_notify_robot_enabled);
   }, [settings]);
 
   return {
-    values: { appKey, appSecret, agentId, notifyAppKey, notifyAppSecret, notifyAgentId },
+    values: {
+      appKey,
+      appSecret,
+      agentId,
+      notifyAppKey,
+      notifyAppSecret,
+      notifyAgentId,
+      notifyRobotEnabled,
+    },
     setAppKey,
     setAppSecret,
     setAgentId,
     setNotifyAppKey,
     setNotifyAppSecret,
     setNotifyAgentId,
+    setNotifyRobotEnabled,
     clearSecrets: () => {
       setAppSecret("");
       setNotifyAppSecret("");

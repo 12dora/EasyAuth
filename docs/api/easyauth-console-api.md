@@ -640,7 +640,8 @@ PUT 不得变更策略所属部门或应用，否则 422。
 全局 `/settings/integrations` 中的主钉钉凭证（`dingtalk_app_key` / `app_secret` / `agent_id`）
 用于目录同步、Stream、登录与审批；`dingtalk_notify_*` 为工作通知专用服务号，GET 返回落库值
 （secret 只给 `dingtalk_notify_app_secret_configured`，永不回显明文）。三项均非空才覆盖主应用，
-否则发送回退主应用三元组。PATCH 为部分更新，secret 省略则保持原密文。
+否则发送回退主应用三元组。`dingtalk_notify_robot_enabled`（布尔，默认 `true`）控制是否在工作
+通知之外再经服务号机器人一对一推送；PATCH 为部分更新，secret 省略则保持原密文。
 `notify` 业务 App 仍须在自己的 workspace 配置 `notification-channel` 以绑定目录作用域。
 每个版本同时绑定 `directory_source_slug` 和 `corp_id`。GET 返回
 `notification_channel` 及 `available_directory_scopes`；后者是当前目录同步状态、

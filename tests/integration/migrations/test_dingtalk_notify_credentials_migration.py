@@ -54,6 +54,20 @@ def test_notify_head_bgcolor_migration_reversible() -> None:
     assert "notify_head_bgcolor" not in _column_names(table)
 
 
+def test_notify_robot_enabled_migration_adds_true_default() -> None:
+    before = [("applications", "0036_app_notify_head_bgcolor")]
+    after = [("applications", "0037_integrationsettings_dingtalk_notify_robot_enabled")]
+    table = "applications_integrationsettings"
+    _ = MigrationExecutor(connection).migrate(before)
+    assert "dingtalk_notify_robot_enabled" not in _column_names(table)
+
+    _ = MigrationExecutor(connection).migrate(after)
+    assert "dingtalk_notify_robot_enabled" in _column_names(table)
+
+    _ = MigrationExecutor(connection).migrate(before)
+    assert "dingtalk_notify_robot_enabled" not in _column_names(table)
+
+
 def _column_names(table: str) -> set[str]:
     with connection.cursor() as cursor:
         description = connection.introspection.get_table_description(cursor, table)

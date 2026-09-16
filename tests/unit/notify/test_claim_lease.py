@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.models import App, AppNotificationChannel
+from easyauth.integrations.dingtalk.api_client import DingTalkRobotOtoResult
 from easyauth.notify.acceptance import (
     NotifyAcceptanceInput,
     NotifyCredentialInput,
@@ -121,6 +122,15 @@ def test_expired_lease_can_be_taken_over(monkeypatch: pytest.MonkeyPatch) -> Non
 
     client = MagicMock()
     client.send_work_notification.return_value = "task-takeover"
+    client.app_key = "svc-key"
+    client.send_robot_oto_messages.return_value = (
+        DingTalkRobotOtoResult(
+            process_query_key="pqk-takeover",
+            user_ids=("dt-c2",),
+            invalid_staff_ids=frozenset(),
+            flow_controlled_staff_ids=frozenset(),
+        ),
+    )
 
     def client_for_channel(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
         return client, 1
