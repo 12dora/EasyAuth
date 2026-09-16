@@ -13,6 +13,9 @@ export interface IntegrationSettingsPayload {
   dingtalk_app_key: string;
   dingtalk_app_secret_configured: boolean;
   dingtalk_agent_id: string;
+  dingtalk_notify_app_key: string;
+  dingtalk_notify_app_secret_configured: boolean;
+  dingtalk_notify_agent_id: string;
   updated_at: string | null;
   updated_by: string;
 }
@@ -50,10 +53,19 @@ export function authentikPatchBody(
   return body;
 }
 
+export interface DingtalkSettingsInput {
+  appKey: string;
+  appSecret: string;
+  agentId: string;
+  notifyAppKey: string;
+  notifyAppSecret: string;
+  notifyAgentId: string;
+}
+
 /** PATCH 载荷只包含用户改动过的字段: 未动的字段省略(=保持不变), secret 留空同样省略。 */
 export function dingtalkPatchBody(
   settings: IntegrationSettingsPayload | undefined,
-  input: { appKey: string; appSecret: string; agentId: string },
+  input: DingtalkSettingsInput,
 ): JsonObject {
   const body: JsonObject = {};
   if (settings && input.appKey.trim() !== settings.dingtalk_app_key) {
@@ -64,6 +76,15 @@ export function dingtalkPatchBody(
   }
   if (settings && input.agentId.trim() !== settings.dingtalk_agent_id) {
     body.dingtalk_agent_id = input.agentId.trim();
+  }
+  if (settings && input.notifyAppKey.trim() !== settings.dingtalk_notify_app_key) {
+    body.dingtalk_notify_app_key = input.notifyAppKey.trim();
+  }
+  if (input.notifyAppSecret !== "") {
+    body.dingtalk_notify_app_secret = input.notifyAppSecret;
+  }
+  if (settings && input.notifyAgentId.trim() !== settings.dingtalk_notify_agent_id) {
+    body.dingtalk_notify_agent_id = input.notifyAgentId.trim();
   }
   return body;
 }

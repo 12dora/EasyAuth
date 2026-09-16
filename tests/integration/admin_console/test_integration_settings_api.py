@@ -31,6 +31,9 @@ def test_integration_settings_get_returns_env_fallback() -> None:
     assert payload["authentik_base_url_override"] == ""
     assert payload["authentik_base_url_source"] == "env"
     assert payload["authentik_base_url_effective"] == "http://localhost:19000"
+    assert payload["dingtalk_notify_app_key"] == ""
+    assert payload["dingtalk_notify_app_secret_configured"] is False
+    assert payload["dingtalk_notify_agent_id"] == ""
 
 
 def test_integration_settings_patch_sets_override_and_hides_token() -> None:
@@ -142,6 +145,54 @@ def test_integration_settings_patch_keeps_authentik_when_only_dingtalk_fields_ar
     assert row.dingtalk_agent_id == "12345"
 
 
+def test_integration_settings_notify_fields_round_trip_and_never_echo_secret() -> None:
+    client = _logged_in_superuser("settings-notify-admin")
+
+    response = client.patch(
+        SETTINGS_API_URL,
+        data={
+            "dingtalk_notify_app_key": "svc-key",
+            "dingtalk_notify_app_secret": "svc-secret-plain",
+            "dingtalk_notify_agent_id": "9001",
+        },
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    body = response.content.decode()
+    payload = cast("dict[str, JsonValue]", response.json())
+    assert payload["dingtalk_notify_app_key"] == "svc-key"
+    assert payload["dingtalk_notify_app_secret_configured"] is True
+    assert payload["dingtalk_notify_agent_id"] == "9001"
+    assert "dingtalk_notify_app_secret" not in payload
+    assert "svc-secret-plain" not in body
+
+    row = IntegrationSettings.load()
+    assert row.dingtalk_notify_app_key == "svc-key"
+    assert row.dingtalk_notify_app_secret == "svc-secret-plain"
+    assert row.dingtalk_notify_agent_id == "9001"
+
+    from django.db import connection  # noqa: PLC0415 - 用例内直读原始列.
+
+    table = IntegrationSettings._meta.db_table  # noqa: SLF001 - 读取列名.
+    with connection.cursor() as cursor:
+        cursor.execute(f"SELECT dingtalk_notify_app_secret FROM {table} WHERE id = 1")  # noqa: S608
+        stored = cursor.fetchone()[0]
+    assert stored != "svc-secret-plain"
+    assert "svc-secret-plain" not in stored
+
+    omitted = client.patch(
+        SETTINGS_API_URL,
+        data={"dingtalk_notify_agent_id": "9002"},
+        content_type="application/json",
+    )
+    assert omitted.status_code == HTTPStatus.OK
+    row.refresh_from_db()
+    assert row.dingtalk_notify_app_secret == "svc-secret-plain"
+    assert row.dingtalk_notify_agent_id == "9002"
+    assert "svc-secret-plain" not in omitted.content.decode()
+
+
 def test_integration_settings_patch_can_explicitly_clear_fields() -> None:
     client = _logged_in_superuser("settings-clear-base-url-admin")
     row = IntegrationSettings.load()
@@ -150,6 +201,9 @@ def test_integration_settings_patch_can_explicitly_clear_fields() -> None:
     row.dingtalk_app_key = "ding-app"
     row.dingtalk_app_secret = "ding-secret"
     row.dingtalk_agent_id = "12345"
+    row.dingtalk_notify_app_key = "svc-key"
+    row.dingtalk_notify_app_secret = "svc-secret"
+    row.dingtalk_notify_agent_id = "9001"
     row.save()
 
     response = client.patch(
@@ -160,6 +214,9 @@ def test_integration_settings_patch_can_explicitly_clear_fields() -> None:
             "dingtalk_app_key": "",
             "dingtalk_app_secret": "",
             "dingtalk_agent_id": "",
+            "dingtalk_notify_app_key": "",
+            "dingtalk_notify_app_secret": "",
+            "dingtalk_notify_agent_id": "",
         },
         content_type="application/json",
     )
@@ -171,6 +228,9 @@ def test_integration_settings_patch_can_explicitly_clear_fields() -> None:
     assert row.dingtalk_app_key == ""
     assert row.dingtalk_app_secret == ""
     assert row.dingtalk_agent_id == ""
+    assert row.dingtalk_notify_app_key == ""
+    assert row.dingtalk_notify_app_secret == ""
+    assert row.dingtalk_notify_agent_id == ""
 
 
 def test_integration_settings_patch_rejects_null_instead_of_treating_it_as_omitted() -> None:

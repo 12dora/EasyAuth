@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
@@ -18,6 +19,7 @@ from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.integration_settings import (
     INTEGRATION_SETTINGS_SINGLETON_ID,
+    DingTalkRuntimeConfig,
     IntegrationSettings,
     authentik_runtime_config,
     dingtalk_runtime_config,
@@ -45,6 +47,9 @@ class IntegrationSettingsPatch(BaseModel):
     dingtalk_app_key: str = Field(default="", max_length=128)
     dingtalk_app_secret: str = Field(default="", max_length=512)
     dingtalk_agent_id: str = Field(default="", max_length=64)
+    dingtalk_notify_app_key: str = Field(default="", max_length=128)
+    dingtalk_notify_app_secret: str = Field(default="", max_length=512)
+    dingtalk_notify_agent_id: str = Field(default="", max_length=64)
 
     @field_validator("authentik_base_url")
     @classmethod
@@ -63,6 +68,9 @@ class IntegrationSettingsPatch(BaseModel):
         "dingtalk_app_key",
         "dingtalk_app_secret",
         "dingtalk_agent_id",
+        "dingtalk_notify_app_key",
+        "dingtalk_notify_app_secret",
+        "dingtalk_notify_agent_id",
     )
     @classmethod
     def normalize_string(cls, value: str) -> str:
@@ -102,34 +110,38 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
         )
         # 必须在锁内读取当前生效凭证, 避免并发 PATCH 失效另一个请求之前的陈旧缓存键。
         previous_dingtalk = dingtalk_runtime_config()
-        (
-            update_fields,
-            api_token_changed,
-            dingtalk_secret_changed,
-            dingtalk_credentials_changed,
-        ) = _apply_settings_patch(row, payload)
+        applied = _apply_settings_patch(row, payload)
         row.updated_by = actor_id
-        row.save(update_fields=[*update_fields, "updated_by", "updated_at"])
+        row.save(update_fields=[*applied.update_fields, "updated_by", "updated_at"])
         _record_settings_update(
             actor_id=actor_id,
             base_url=row.authentik_base_url,
-            api_token_changed=api_token_changed,
-            dingtalk_secret_changed=dingtalk_secret_changed,
+            api_token_changed=applied.api_token_changed,
+            dingtalk_secret_changed=applied.dingtalk_secret_changed,
+            notify_secret_changed=applied.notify_secret_changed,
         )
-        if dingtalk_credentials_changed:
-            transaction.on_commit(
-                lambda: invalidate_access_token(
-                    app_key=previous_dingtalk.app_key,
-                    app_secret=previous_dingtalk.app_secret,
-                ),
-            )
+        _invalidate_changed_dingtalk_tokens(
+            previous_dingtalk,
+            dingtalk_credentials_changed=applied.dingtalk_credentials_changed,
+            notify_credentials_changed=applied.notify_credentials_changed,
+        )
     return _settings_response()
+
+
+@dataclass(frozen=True, slots=True)
+class _SettingsPatchResult:
+    update_fields: tuple[str, ...]
+    api_token_changed: bool
+    dingtalk_secret_changed: bool
+    dingtalk_credentials_changed: bool
+    notify_secret_changed: bool
+    notify_credentials_changed: bool
 
 
 def _apply_settings_patch(
     row: IntegrationSettings,
     payload: IntegrationSettingsPatch,
-) -> tuple[list[str], bool, bool, bool]:
+) -> _SettingsPatchResult:
     fields_set = payload.model_fields_set
     update_fields: list[str] = []
     if "authentik_base_url" in fields_set:
@@ -140,26 +152,96 @@ def _apply_settings_patch(
         api_token_changed = payload.authentik_api_token != row.authentik_api_token
         row.authentik_api_token = payload.authentik_api_token
         update_fields.append("authentik_api_token")
-    dingtalk_secret_changed = False
-    dingtalk_credentials_changed = False
+    dingtalk = _apply_dingtalk_fields(row, payload, update_fields)
+    notify = _apply_notify_fields(row, payload, update_fields)
+    return _SettingsPatchResult(
+        update_fields=tuple(update_fields),
+        api_token_changed=api_token_changed,
+        dingtalk_secret_changed=dingtalk.secret_changed,
+        dingtalk_credentials_changed=dingtalk.credentials_changed,
+        notify_secret_changed=notify.secret_changed,
+        notify_credentials_changed=notify.credentials_changed,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _CredentialPatchFlags:
+    secret_changed: bool
+    credentials_changed: bool
+
+
+def _apply_dingtalk_fields(
+    row: IntegrationSettings,
+    payload: IntegrationSettingsPatch,
+    update_fields: list[str],
+) -> _CredentialPatchFlags:
+    fields_set = payload.model_fields_set
+    secret_changed = False
+    credentials_changed = False
     if "dingtalk_app_key" in fields_set:
-        dingtalk_credentials_changed = payload.dingtalk_app_key != row.dingtalk_app_key
+        credentials_changed = payload.dingtalk_app_key != row.dingtalk_app_key
         row.dingtalk_app_key = payload.dingtalk_app_key
         update_fields.append("dingtalk_app_key")
     if "dingtalk_app_secret" in fields_set:
-        dingtalk_secret_changed = payload.dingtalk_app_secret != row.dingtalk_app_secret
-        dingtalk_credentials_changed = dingtalk_credentials_changed or dingtalk_secret_changed
+        secret_changed = payload.dingtalk_app_secret != row.dingtalk_app_secret
+        credentials_changed = credentials_changed or secret_changed
         row.dingtalk_app_secret = payload.dingtalk_app_secret
         update_fields.append("dingtalk_app_secret")
     if "dingtalk_agent_id" in fields_set:
         row.dingtalk_agent_id = payload.dingtalk_agent_id
         update_fields.append("dingtalk_agent_id")
-    return (
-        update_fields,
-        api_token_changed,
-        dingtalk_secret_changed,
-        dingtalk_credentials_changed,
+    return _CredentialPatchFlags(
+        secret_changed=secret_changed,
+        credentials_changed=credentials_changed,
     )
+
+
+def _apply_notify_fields(
+    row: IntegrationSettings,
+    payload: IntegrationSettingsPatch,
+    update_fields: list[str],
+) -> _CredentialPatchFlags:
+    fields_set = payload.model_fields_set
+    secret_changed = False
+    credentials_changed = False
+    if "dingtalk_notify_app_key" in fields_set:
+        credentials_changed = payload.dingtalk_notify_app_key != row.dingtalk_notify_app_key
+        row.dingtalk_notify_app_key = payload.dingtalk_notify_app_key
+        update_fields.append("dingtalk_notify_app_key")
+    if "dingtalk_notify_app_secret" in fields_set:
+        secret_changed = payload.dingtalk_notify_app_secret != row.dingtalk_notify_app_secret
+        credentials_changed = credentials_changed or secret_changed
+        row.dingtalk_notify_app_secret = payload.dingtalk_notify_app_secret
+        update_fields.append("dingtalk_notify_app_secret")
+    if "dingtalk_notify_agent_id" in fields_set:
+        row.dingtalk_notify_agent_id = payload.dingtalk_notify_agent_id
+        update_fields.append("dingtalk_notify_agent_id")
+    return _CredentialPatchFlags(
+        secret_changed=secret_changed,
+        credentials_changed=credentials_changed,
+    )
+
+
+def _invalidate_changed_dingtalk_tokens(
+    previous: DingTalkRuntimeConfig,
+    *,
+    dingtalk_credentials_changed: bool,
+    notify_credentials_changed: bool,
+) -> None:
+    if dingtalk_credentials_changed:
+        transaction.on_commit(
+            lambda: invalidate_access_token(
+                app_key=previous.app_key,
+                app_secret=previous.app_secret,
+            ),
+        )
+    if notify_credentials_changed:
+        transaction.on_commit(
+            lambda: invalidate_access_token(
+                app_key=previous.notify.app_key,
+                app_secret=previous.notify.app_secret,
+            ),
+        )
 
 
 def console_dingtalk_connectivity_test(request: HttpRequest) -> JsonResponse:
@@ -207,6 +289,11 @@ def _settings_response() -> JsonResponse:
         "dingtalk_app_key": dingtalk.app_key,
         "dingtalk_app_secret_configured": bool(dingtalk.app_secret),
         "dingtalk_agent_id": dingtalk.agent_id,
+        "dingtalk_notify_app_key": row.dingtalk_notify_app_key if row is not None else "",
+        "dingtalk_notify_app_secret_configured": bool(row.dingtalk_notify_app_secret)
+        if row is not None
+        else False,
+        "dingtalk_notify_agent_id": row.dingtalk_notify_agent_id if row is not None else "",
         "updated_at": datetime_value(row.updated_at) if row is not None else None,
         "updated_by": row.updated_by if row is not None else "",
     }
@@ -219,6 +306,7 @@ def _record_settings_update(
     base_url: str,
     api_token_changed: bool,
     dingtalk_secret_changed: bool,
+    notify_secret_changed: bool,
 ) -> None:
     # 审计记录不得包含 token/secret 明文。
     _ = AuditService.record(
@@ -232,6 +320,7 @@ def _record_settings_update(
                 "authentik_base_url": base_url,
                 "api_token_changed": api_token_changed,
                 "dingtalk_secret_changed": dingtalk_secret_changed,
+                "dingtalk_notify_secret_changed": notify_secret_changed,
             },
         ),
     )

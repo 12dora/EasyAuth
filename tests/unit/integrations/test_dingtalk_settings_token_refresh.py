@@ -9,6 +9,7 @@ from django.test import RequestFactory
 
 from easyauth.admin_console import settings_api
 from easyauth.applications.integration_settings import (
+    DingTalkCredentialTriple,
     DingTalkRuntimeConfig,
     IntegrationSettings,
 )
@@ -66,6 +67,7 @@ def test_credential_update_invalidates_previous_token(monkeypatch: pytest.Monkey
         app_secret="old-secret",
         agent_id="",
         timeout_seconds=5,
+        notify=DingTalkCredentialTriple(app_key="old-app", app_secret="old-secret", agent_id=""),
     )
     monkeypatch.setattr(settings_api, "dingtalk_runtime_config", lambda: previous)
 
@@ -90,3 +92,47 @@ def test_credential_update_invalidates_previous_token(monkeypatch: pytest.Monkey
 
     assert response.status_code == HTTPStatus.OK
     assert invalidated == [("old-app", "old-secret")]
+
+
+def test_notify_credential_update_invalidates_previous_notify_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = IntegrationSettings.objects.create(
+        pk=1,
+        dingtalk_app_key="main-app",
+        dingtalk_app_secret="main-secret",
+        dingtalk_notify_app_key="old-svc",
+        dingtalk_notify_app_secret="old-svc-secret",
+        dingtalk_notify_agent_id="9001",
+    )
+    invalidated: list[tuple[str, str]] = []
+    previous = DingTalkRuntimeConfig(
+        app_key="main-app",
+        app_secret="main-secret",
+        agent_id="1001",
+        timeout_seconds=5,
+        notify=DingTalkCredentialTriple(
+            app_key="old-svc",
+            app_secret="old-svc-secret",
+            agent_id="9001",
+        ),
+    )
+    monkeypatch.setattr(settings_api, "dingtalk_runtime_config", lambda: previous)
+
+    def invalidate(*, app_key: str, app_secret: str) -> None:
+        invalidated.append((app_key, app_secret))
+
+    monkeypatch.setattr(settings_api, "invalidate_access_token", invalidate)
+    request = RequestFactory().patch(
+        "/",
+        data=dumps({"dingtalk_notify_app_key": "new-svc"}),
+        content_type="application/json",
+    )
+
+    response = settings_api._update_settings(  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        request,
+        actor_id="admin",
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert invalidated == [("old-svc", "old-svc-secret")]

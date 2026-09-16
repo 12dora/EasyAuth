@@ -142,6 +142,19 @@ class DingTalkApiClient:
             timeout_seconds=config.timeout_seconds,
         )
 
+    @classmethod
+    def from_notify_settings(cls) -> DingTalkApiClient:
+        """工作通知换票: 使用运行时 notify 三元组(服务号, 未配齐则回退主应用)。"""
+        config = dingtalk_runtime_config()
+        notify = config.notify
+        if not notify.is_configured():
+            raise DingTalkNotConfiguredError
+        return cls(
+            app_key=notify.app_key,
+            app_secret=notify.app_secret,
+            timeout_seconds=config.timeout_seconds,
+        )
+
     def get_access_token(
         self,
         *,

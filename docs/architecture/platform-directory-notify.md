@@ -83,16 +83,18 @@ generation 未变也会刷新本地 `last_synced_at`——新鲜度表示「已�
 
 ## 4. 通知通道与投递保证
 
-每个 App 在自己的 workspace 配置**独立、版本化**的钉钉通知通道
-（`dingtalk_app_key` / `app_secret` / `agent_id` + 目录 `source_slug` / `corp_id`），而不是共用
-全局 `IntegrationSettings`。这样通知的展示身份按业务应用隔离。
+每个 App 在自己的 workspace 配置**独立、版本化**的钉钉通知通道，绑定目录作用域
+（`directory_source_slug` / `corp_id`）。**工作通知发送与回执**不再使用通道上的钉钉应用
+凭证，而是走公司级「服务号」：`IntegrationSettings` 的
+`dingtalk_notify_app_key` / `dingtalk_notify_app_secret` / `dingtalk_notify_agent_id`。
+仅当这三项均非空时使用该三元组换票与 `agent_id`；任一留空则回退到主应用三元组
+（目录同步 / Stream / 登录用的 `dingtalk_app_*`）。notify-worker 投递与对账与此同一口径。
 
 - 目录作用域只能从控制台返回的权威列表里选；作用域失效会让健康检查 unhealthy，越界收件人
   记 `USER_SCOPE_MISMATCH`。
 - 每个 App 最多一条 active 通道；每次更新创建新版本。
-- **消息受理时冻结通道版本**，之后换通道不影响已受理的消息。
-- 首次配置必须填 secret；更新其他字段时可省略 secret 复用已有密文。控制台不回显 secret，
-  连通性失败也不暴露钉钉底层错误原文。
+- **消息受理时冻结通道版本**，之后换通道不影响已受理消息的目录作用域。
+- 全局集成设置里服务号 secret 为写入型字段；控制台不回显 secret，连通性失败也不暴露钉钉底层错误原文。
 
 ### 状态语义
 

@@ -49,6 +49,19 @@ class IntegrationSettings(models.Model):
         max_length=64,
         blank=True,
     )
+    # 工作通知专用钉钉应用(服务号)。三项均非空才覆盖主应用; 否则发送回退主应用三元组。
+    dingtalk_notify_app_key: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
+    )
+    dingtalk_notify_app_secret: EncryptedCharField = EncryptedCharField(
+        max_length=1024,
+        blank=True,
+    )
+    dingtalk_notify_agent_id: models.CharField[str, str] = models.CharField(
+        max_length=64,
+        blank=True,
+    )
     updated_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now=True,
@@ -128,27 +141,74 @@ def _source(*, override: str, env: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class DingTalkCredentialTriple:
+    app_key: str
+    app_secret: str
+    agent_id: str
+
+    def is_configured(self) -> bool:
+        return bool(self.app_key and self.app_secret)
+
+
+@dataclass(frozen=True, slots=True)
 class DingTalkRuntimeConfig:
     app_key: str
     app_secret: str
     agent_id: str
     timeout_seconds: float
+    # 工作通知生效凭证。仅当设置行 notify 三项均非空时用服务号; 否则等于主应用三元组。
+    notify: DingTalkCredentialTriple
 
     def is_configured(self) -> bool:
         return bool(self.app_key and self.app_secret)
 
 
 def dingtalk_runtime_config() -> DingTalkRuntimeConfig:
-    # 钉钉出站凭证: 数据库设置优先, 其次环境变量(与 Authentik 配置同一回退口径)。
+    """钉钉出站凭证: 数据库设置优先, 其次环境变量(与 Authentik 配置同一回退口径)。
+
+    主三元组(`app_key` / `app_secret` / `agent_id`)用于目录同步、Stream 与登录。
+    `notify` 三元组用于工作通知发送: 仅当设置行的
+    `dingtalk_notify_app_key` / `dingtalk_notify_app_secret` / `dingtalk_notify_agent_id`
+    均非空时使用该服务号; 任一留空则回退到上面的主应用三元组。
+    """
     row = IntegrationSettings.objects.filter(pk=INTEGRATION_SETTINGS_SINGLETON_ID).first()
+    main = _dingtalk_main_credentials(row)
+    return DingTalkRuntimeConfig(
+        app_key=main.app_key,
+        app_secret=main.app_secret,
+        agent_id=main.agent_id,
+        timeout_seconds=float(getattr(settings, "EASYAUTH_DINGTALK_HTTP_TIMEOUT_SECONDS", 5)),
+        notify=_dingtalk_notify_credentials(row, main),
+    )
+
+
+def _dingtalk_main_credentials(row: IntegrationSettings | None) -> DingTalkCredentialTriple:
     override_app_key = row.dingtalk_app_key.strip() if row is not None else ""
     override_app_secret = row.dingtalk_app_secret.strip() if row is not None else ""
     override_agent_id = row.dingtalk_agent_id.strip() if row is not None else ""
-    return DingTalkRuntimeConfig(
-        app_key=override_app_key or str(getattr(settings, "EASYAUTH_DINGTALK_APP_KEY", "")).strip(),
+    return DingTalkCredentialTriple(
+        app_key=override_app_key
+        or str(getattr(settings, "EASYAUTH_DINGTALK_APP_KEY", "")).strip(),
         app_secret=override_app_secret
         or str(getattr(settings, "EASYAUTH_DINGTALK_APP_SECRET", "")).strip(),
         agent_id=override_agent_id
         or str(getattr(settings, "EASYAUTH_DINGTALK_AGENT_ID", "")).strip(),
-        timeout_seconds=float(getattr(settings, "EASYAUTH_DINGTALK_HTTP_TIMEOUT_SECONDS", 5)),
     )
+
+
+def _dingtalk_notify_credentials(
+    row: IntegrationSettings | None,
+    main: DingTalkCredentialTriple,
+) -> DingTalkCredentialTriple:
+    if row is None:
+        return main
+    notify_app_key = row.dingtalk_notify_app_key.strip()
+    notify_app_secret = row.dingtalk_notify_app_secret.strip()
+    notify_agent_id = row.dingtalk_notify_agent_id.strip()
+    if notify_app_key and notify_app_secret and notify_agent_id:
+        return DingTalkCredentialTriple(
+            app_key=notify_app_key,
+            app_secret=notify_app_secret,
+            agent_id=notify_agent_id,
+        )
+    return main

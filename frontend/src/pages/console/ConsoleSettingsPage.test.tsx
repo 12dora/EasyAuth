@@ -19,6 +19,9 @@ const SETTINGS = {
   dingtalk_app_key: "old-key",
   dingtalk_app_secret_configured: true,
   dingtalk_agent_id: "1001",
+  dingtalk_notify_app_key: "",
+  dingtalk_notify_app_secret_configured: false,
+  dingtalk_notify_agent_id: "",
   updated_at: "2026-07-10T08:00:00Z",
   updated_by: "admin",
 };
@@ -35,9 +38,9 @@ describe("ConsoleSettingsPage", () => {
 
     renderSettings();
 
-    const dingtalkForm = (await screen.findByLabelText(/AppKey/)).closest("form");
+    const dingtalkForm = (await screen.findByLabelText("钉钉 AppKey")).closest("form");
     expect(dingtalkForm).not.toBeNull();
-    const appKeyInput = within(dingtalkForm!).getByLabelText(/AppKey/);
+    const appKeyInput = within(dingtalkForm!).getByLabelText("钉钉 AppKey");
     await waitFor(() => expect(appKeyInput).toHaveValue("old-key"));
     fireEvent.change(appKeyInput, { target: { value: "new-key" } });
     await user.click(within(dingtalkForm!).getByRole("button", { name: "保存设置" }));
@@ -82,6 +85,39 @@ describe("ConsoleSettingsPage", () => {
       expect(requestBody(fetchMock)).toEqual({ authentik_base_url: "" });
     });
   });
+
+  test("通知应用块可单独保存且不回显 secret", async () => {
+    const fetchMock = settingsFetchMock({
+      dingtalk_notify_app_key: "svc-key",
+      dingtalk_notify_app_secret_configured: true,
+      dingtalk_notify_agent_id: "9001",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSettings();
+
+    expect(await screen.findByRole("heading", { name: "通知应用（服务号）" })).toBeVisible();
+    expect(screen.getByText("用于工作通知发送；留空则沿用上方应用。")).toBeVisible();
+    const notifyKey = await screen.findByLabelText("服务号 AppKey");
+    await waitFor(() => expect(notifyKey).toHaveValue("svc-key"));
+    expect(await screen.findByText("已设置")).toBeVisible();
+    expect(screen.getByLabelText("服务号 AppSecret")).toHaveValue("");
+    expect(document.body).not.toHaveTextContent("must-never-render");
+    fireEvent.change(notifyKey, { target: { value: "svc-key-2" } });
+    await user.type(screen.getByLabelText("服务号 AppSecret"), "one-time-notify-secret");
+    const dingtalkForm = notifyKey.closest("form");
+    expect(dingtalkForm).not.toBeNull();
+    await user.click(within(dingtalkForm!).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => {
+      expect(requestBody(fetchMock)).toEqual({
+        dingtalk_notify_app_key: "svc-key-2",
+        dingtalk_notify_app_secret: "one-time-notify-secret",
+      });
+    });
+    expect(JSON.stringify(requestBody(fetchMock))).not.toContain("must-never-render");
+  });
 });
 
 function renderSettings() {
@@ -100,14 +136,15 @@ function renderSettings() {
   );
 }
 
-function settingsFetchMock() {
+function settingsFetchMock(overrides: Partial<typeof SETTINGS> = {}) {
+  const payload = { ...SETTINGS, ...overrides };
   return vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input);
     if (url === SETTINGS_URL && (!init?.method || init.method === "GET")) {
-      return jsonResponse(SETTINGS);
+      return jsonResponse(payload);
     }
     if (url === SETTINGS_URL && init?.method === "PATCH") {
-      return jsonResponse(SETTINGS);
+      return jsonResponse(payload);
     }
     if (url === TWO_FACTOR_URL && (!init?.method || init.method === "GET")) {
       return jsonResponse({ supported: true, totp: { enabled: false }, passkeys: [] });

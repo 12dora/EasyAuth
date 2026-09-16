@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from django.conf import settings
-
+from easyauth.applications.integration_settings import dingtalk_runtime_config
 from easyauth.applications.models import AppNotificationChannel
 from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiClient,
@@ -25,9 +24,16 @@ def active_notification_channel(app_id: int) -> AppNotificationChannel | None:
 def dingtalk_client_and_agent(
     channel: AppNotificationChannel,
 ) -> tuple[DingTalkApiClient, str | int]:
-    if not channel.dingtalk_app_key.strip() or not channel.dingtalk_app_secret:
+    """工作通知客户端: token 与 agent_id 取运行时 notify 三元组, 不用通道自带钉钉凭证。
+
+    通道仍冻结在消息上(目录作用域); 发送身份走公司服务号, 未配齐则回退主应用。
+    """
+    _ = channel
+    config = dingtalk_runtime_config()
+    notify = config.notify
+    if not notify.is_configured():
         raise DingTalkNotConfiguredError
-    agent_id = channel.agent_id.strip()
+    agent_id = notify.agent_id.strip()
     if not agent_id:
         raise ValueError(DINGTALK_AGENT_MISSING_MESSAGE)
     # agent_id 优先 int, 否则原样字符串。
@@ -35,12 +41,11 @@ def dingtalk_client_and_agent(
         agent: str | int = int(agent_id)
     except ValueError:
         agent = agent_id
-    timeout_seconds = float(getattr(settings, "EASYAUTH_DINGTALK_HTTP_TIMEOUT_SECONDS", 5))
     return (
         DingTalkApiClient(
-            app_key=channel.dingtalk_app_key,
-            app_secret=channel.dingtalk_app_secret,
-            timeout_seconds=timeout_seconds,
+            app_key=notify.app_key,
+            app_secret=notify.app_secret,
+            timeout_seconds=config.timeout_seconds,
         ),
         agent,
     )

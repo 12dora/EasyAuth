@@ -82,7 +82,7 @@ ACK 契约(`EasyAuthDingTalkEventHandler`):
 1. 开发者后台 → 应用 → 开发配置 → **事件订阅**: 推送方式选择 **Stream 模式**(替代 HTTP 回调, 无需公网地址与加解密配置)。
 2. 订阅通讯录事件(员工与部门变更)。应用需具备**通讯录只读权限**(与既有目录同步共用同一钉钉应用即可)。
 3. 如需审批事件, 为对应审批模板订阅 **OA 审批事件**(`bpms_instance_change`)。
-4. 应用凭证复用 EasyAuth 控制台"集成设置"里的 `dingtalk_app_key/app_secret`(数据库优先, 环境变量兜底), 无新增配置项。
+4. 应用凭证复用 EasyAuth 控制台「集成设置」里的主应用 `dingtalk_app_key/app_secret`(数据库优先, 环境变量兜底)。工作通知另走「通知应用（服务号）」三元组, 与 Stream 凭证分离。
 
 ### 运维观测
 

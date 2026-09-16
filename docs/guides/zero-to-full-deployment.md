@@ -68,7 +68,8 @@
    端口只发布到 `127.0.0.1:8001`，由反代对外为 iam 域名。
    **之后每次改代码都要 `build web` 再 `up -d`**——源码 `COPY` 进镜像，只重启不重建等于没上线。
 5. 本地管理员登录 `/auth/local/` → `/auth/local/security/` 绑定 TOTP 或通行密钥 →
-   `/console/settings` 填钉钉 AppKey / AppSecret →「测试连通性」应显示"钉钉凭证有效"。
+   `/console/settings` 填钉钉主应用 AppKey / AppSecret →「测试连通性」应显示"钉钉凭证有效"。
+   工作通知可另填「通知应用（服务号）」三项；留空则沿用上方主应用。
    之后 stream 容器就能连上钉钉 WebSocket。
 6. **目录同步有个先后依赖**：EasyAuth 的目录同步依赖 Authentik 侧的钉钉目录，而 Authentik 的
    目录同步需要 corp_id——**首次钉钉登录之后才有**。着急可手动触发：
