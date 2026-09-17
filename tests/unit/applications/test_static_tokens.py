@@ -162,6 +162,30 @@ def test_wrong_token_is_rejected_without_rewriting_hash() -> None:
     assert AppCredential.objects.get(id=issued_token.credential.id).token_hash == stored_hash
 
 
+def test_lookup_hit_with_mismatched_sha256_digest_is_rejected() -> None:
+    # Given: token_lookup 仍是签发 token 的 sha256, token_hash 却是另一份 sha256$ 摘要。
+    app = App.objects.create(
+        app_key="crm-token-lookup-mismatch",
+        name="CRM Token Lookup Mismatch",
+    )
+    issued_token = AppCredentialService.create_static_token(app)
+    credential_id = issued_token.credential.id
+    issued_lookup = sha256(issued_token.plaintext_token.encode("utf-8")).hexdigest()
+    mismatched_hash = _fast_token_hash(f"{STATIC_APP_CREDENTIAL_PREFIX}other-plaintext-token")
+    updated = AppCredential.objects.filter(id=credential_id).update(token_hash=mismatched_hash)
+    assert updated == 1
+    assert AppCredential.objects.get(id=credential_id).token_lookup == issued_lookup
+
+    # When: 出示签发 token, 查找会命中, 但摘要比对必须失败。
+    principal = AppCredentialService.authenticate_static_token(issued_token.plaintext_token)
+
+    # Then
+    assert principal is None
+    credential = AppCredential.objects.get(id=credential_id)
+    assert credential.token_hash == mismatched_hash
+    assert credential.token_lookup == issued_lookup
+
+
 def test_unknown_hash_format_is_rejected() -> None:
     unknown_hash = "md5$not-supported"
     app = App.objects.create(app_key="crm-token-unknown", name="CRM Token Unknown")
