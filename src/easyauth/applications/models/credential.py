@@ -37,8 +37,8 @@ class AppCredential(models.Model):
         validators=[validate_credential_capabilities],
     )
     token_hash: models.CharField[str, str] = models.CharField(max_length=256)
-    # 令牌的确定性查找键(SHA-256), 认证时先索引定位单行再做 PBKDF2 校验,
-    # 避免对全部 active 凭据线性跑慢哈希被打成 CPU DoS。
+    # 令牌的确定性查找键(SHA-256), 认证时先索引定位单行再比对 token_hash,
+    # 避免对全部 active 凭据线性校验被打成 CPU DoS。
     token_lookup: models.CharField[str, str] = models.CharField(
         max_length=64,
         blank=True,

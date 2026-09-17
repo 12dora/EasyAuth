@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from hashlib import sha256
+from hmac import compare_digest
 from secrets import token_urlsafe
 from typing import TYPE_CHECKING, Final, override
 
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from easyauth.applications.credential_capabilities import normalize_credential_capabilities
@@ -22,6 +24,9 @@ if TYPE_CHECKING:
 __all__ = ["APP_CREDENTIAL_STATIC_KIND"]
 STATIC_APP_TOKEN_ENTROPY_BYTES: Final = 32
 STATIC_APP_CREDENTIAL_PREFIX: Final = "eat_"
+# 高熵随机秘密用 SHA-256 即可, 不绑定 SECRET_KEY; 轮换密钥不得使已签发 token 失效。
+STATIC_TOKEN_HASH_PREFIX: Final = "sha256$"  # noqa: S105 - 哈希方案前缀, 非秘密.
+LEGACY_STATIC_TOKEN_HASH_PREFIX: Final = "pbkdf2_sha256$"  # noqa: S105 - 历史方案前缀.
 APP_CREDENTIAL_CREATED_EVENT: Final = "app_credential_created"
 APP_CREDENTIAL_ROTATED_EVENT: Final = "app_credential_rotated"
 
@@ -142,24 +147,29 @@ def _authenticate_static_token(plaintext_token: str) -> AppPrincipal:
     if not plaintext_token.startswith(STATIC_APP_CREDENTIAL_PREFIX):
         raise StaticTokenAuthenticationError
 
-    # 先用确定性查找键索引到唯一候选行, 再对单行跑 PBKDF2;
-    # 垃圾令牌只花一次 SHA-256, 不会诱发全表慢哈希扫描。
+    # 先用确定性查找键索引到唯一候选行, 再对单行比对 token_hash;
+    # 垃圾令牌只花一次 SHA-256 查找, 不会诱发全表慢哈希扫描。
     credentials = AppCredential.objects.select_related("app").filter(
         credential_type=APP_CREDENTIAL_STATIC_KIND,
         is_active=True,
         token_lookup=_static_token_lookup(plaintext_token),
     )
     for credential in credentials:
-        if _verify_static_token(plaintext_token, credential.token_hash):
-            if not credential.app.is_active:
-                raise StaticTokenAppDisabledError(app_id=_model_id(credential.app))
-            return AppPrincipal(
-                app_id=_model_id(credential.app),
-                app_key=credential.app.app_key,
-                credential_type=credential.credential_type,
-                credential_id=_model_id(credential),
-                capabilities=frozenset(credential.capabilities),
-            )
+        if not _verify_static_token(plaintext_token, credential.token_hash):
+            continue
+        _maybe_upgrade_legacy_static_token_hash(
+            credential=credential,
+            plaintext_token=plaintext_token,
+        )
+        if not credential.app.is_active:
+            raise StaticTokenAppDisabledError(app_id=_model_id(credential.app))
+        return AppPrincipal(
+            app_id=_model_id(credential.app),
+            app_key=credential.app.app_key,
+            credential_type=credential.credential_type,
+            credential_id=_model_id(credential),
+            capabilities=frozenset(credential.capabilities),
+        )
 
     raise StaticTokenAuthenticationError
 
@@ -171,8 +181,8 @@ StaticTokenAppDisabled = StaticTokenAppDisabledError
 
 
 def _hash_static_token(plaintext_token: str) -> str:
-    hasher = PBKDF2PasswordHasher()
-    return hasher.encode(plaintext_token, hasher.salt())
+    digest = sha256(plaintext_token.encode("utf-8")).hexdigest()
+    return f"{STATIC_TOKEN_HASH_PREFIX}{digest}"
 
 
 def _static_token_lookup(plaintext_token: str) -> str:
@@ -180,10 +190,40 @@ def _static_token_lookup(plaintext_token: str) -> str:
 
 
 def _verify_static_token(plaintext_token: str, token_hash: str) -> bool:
+    if token_hash.startswith(STATIC_TOKEN_HASH_PREFIX):
+        return _compare_fast_static_token_hash(plaintext_token, token_hash)
+    if token_hash.startswith(LEGACY_STATIC_TOKEN_HASH_PREFIX):
+        return _verify_legacy_pbkdf2_static_token(plaintext_token, token_hash)
+    return False
+
+
+def _compare_fast_static_token_hash(plaintext_token: str, token_hash: str) -> bool:
+    try:
+        return compare_digest(_hash_static_token(plaintext_token), token_hash)
+    except (TypeError, ValueError):
+        return False
+
+
+def _verify_legacy_pbkdf2_static_token(plaintext_token: str, token_hash: str) -> bool:
     try:
         return PBKDF2PasswordHasher().verify(plaintext_token, token_hash)
-    except ValueError:
+    except (TypeError, ValueError):
         return False
+
+
+def _maybe_upgrade_legacy_static_token_hash(
+    *,
+    credential: AppCredential,
+    plaintext_token: str,
+) -> None:
+    old_hash = credential.token_hash
+    if not old_hash.startswith(LEGACY_STATIC_TOKEN_HASH_PREFIX):
+        return
+    # 按旧哈希值条件更新, 并发校验时只有一行胜出; 升级失败不得阻断已成功的认证。
+    with suppress(DatabaseError):
+        _ = AppCredential.objects.filter(id=_model_id(credential), token_hash=old_hash).update(
+            token_hash=_hash_static_token(plaintext_token),
+        )
 
 
 def _issue_static_token(
