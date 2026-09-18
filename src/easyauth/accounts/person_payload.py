@@ -14,21 +14,25 @@ from easyauth.accounts.directory_identity import has_directory_identity
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from easyauth.accounts.models import UserMirror
+    from easyauth.accounts.models import DingTalkUserMirror, UserMirror
     from easyauth.api.errors import JsonValue
 
 ACCOUNT_KIND_DIRECTORY: Final = "directory"
+ACCOUNT_KIND_DIRECTORY_UNREGISTERED: Final = "directory_unregistered"
 ACCOUNT_KIND_LOCAL: Final = "local"
 ACCOUNT_KIND_UNRESOLVED: Final = "unresolved"
 
-type AccountKind = Literal["directory", "local", "unresolved"]
+type AccountKind = Literal["directory", "directory_unregistered", "local", "unresolved"]
 type ResolvedAccountKind = Literal["directory", "local"]
 
 __all__ = [
     "ACCOUNT_KIND_DIRECTORY",
+    "ACCOUNT_KIND_DIRECTORY_UNREGISTERED",
     "ACCOUNT_KIND_LOCAL",
     "ACCOUNT_KIND_UNRESOLVED",
     "account_kind",
+    "directory_unregistered_person_payload",
+    "directory_user_triple",
     "person_payload",
     "person_row_fields",
     "unresolved_person_payload",
@@ -51,6 +55,38 @@ def person_payload(user: UserMirror, labels: Mapping[str, str]) -> dict[str, Jso
         "department": labels.get(user.authentik_user_id, user.department),
         "account_kind": account_kind(user),
         "avatar_url": safe_avatar_url(user.avatar_url),
+    }
+
+
+def directory_user_triple(user: UserMirror) -> dict[str, JsonValue] | None:
+    """UserMirror 的钉钉三元组; 无绑定时为 null, 不得编造。"""
+    if not has_directory_identity(user):
+        return None
+    payload: dict[str, JsonValue] = {
+        "source_slug": user.dingtalk_source_slug,
+        "corp_id": user.dingtalk_corp_id,
+        "user_id": user.dingtalk_userid,
+    }
+    return payload
+
+
+def directory_unregistered_person_payload(
+    user: DingTalkUserMirror,
+    department: str,
+) -> dict[str, JsonValue]:
+    """通讯录在职且尚未镜像为 UserMirror 的人员选项。"""
+    triple: dict[str, JsonValue] = {
+        "source_slug": user.source_slug,
+        "corp_id": user.corp_id,
+        "user_id": user.user_id,
+    }
+    return {
+        "user_id": None,
+        "name": user.name,
+        "department": department,
+        "account_kind": ACCOUNT_KIND_DIRECTORY_UNREGISTERED,
+        "avatar_url": safe_avatar_url(user.avatar),
+        "directory_user": triple,
     }
 
 

@@ -18,6 +18,7 @@ from easyauth.admin_console.users_api import (
     SELF_REVOKE_ADMIN_MESSAGE,
     _person_item,
     _user_item,
+    _user_option_item,
     console_user_console_admin,
 )
 from easyauth.api.errors import ErrorCode, JsonValue
@@ -57,6 +58,8 @@ def test_person_item_includes_console_admin_flag() -> None:
     assert ordinary_item["is_console_admin"] is False
     assert admin_item["is_console_admin"] is True
     assert "is_console_admin" not in _user_item(ordinary)
+    assert "directory_user" not in _user_item(ordinary)
+    assert _user_option_item(ordinary)["directory_user"] is None
 
 
 @override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))
@@ -258,6 +261,25 @@ def test_put_console_admin_rejects_wrong_method() -> None:
         "code": ErrorCode.VALIDATION_ERROR,
         "message": "不支持的请求方法。",
         "details": {},
+    }
+
+
+def test_user_option_item_emits_directory_triple_for_bound_user() -> None:
+    user = UserMirror.objects.create(
+        authentik_user_id="option-bound",
+        name="已登录目录用户",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-opt",
+        dingtalk_userid="u-opt",
+    )
+
+    item = _user_option_item(user)
+
+    assert item["user_id"] == "option-bound"
+    assert item["directory_user"] == {
+        "source_slug": "dingtalk",
+        "corp_id": "corp-opt",
+        "user_id": "u-opt",
     }
 
 

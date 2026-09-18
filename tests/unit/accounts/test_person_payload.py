@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.accounts.person_payload import (
     ACCOUNT_KIND_DIRECTORY,
+    ACCOUNT_KIND_DIRECTORY_UNREGISTERED,
     ACCOUNT_KIND_LOCAL,
     ACCOUNT_KIND_UNRESOLVED,
     account_kind,
+    directory_unregistered_person_payload,
+    directory_user_triple,
     person_payload,
     person_row_fields,
     unresolved_person_payload,
@@ -175,3 +178,64 @@ def test_local_admin_owner_is_local() -> None:
     )
 
     assert person_payload(owner, {})["account_kind"] == ACCOUNT_KIND_LOCAL
+
+
+def test_directory_user_triple_is_null_without_dingtalk_binding() -> None:
+    user = UserMirror.objects.create(
+        authentik_user_id="ak-local-triple",
+        name="本地用户",
+    )
+
+    assert directory_user_triple(user) is None
+
+
+def test_directory_user_triple_emits_bound_identity() -> None:
+    user = UserMirror.objects.create(
+        authentik_user_id="ak-bound-triple",
+        name="目录用户",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="dt-bound",
+    )
+
+    assert directory_user_triple(user) == {
+        "source_slug": "dingtalk",
+        "corp_id": "corp-1",
+        "user_id": "dt-bound",
+    }
+
+
+def test_directory_unregistered_person_payload_shape() -> None:
+    user = DingTalkUserMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-1",
+        user_id="0220123456",
+        name="张甜",
+        avatar="https://static-legacy.dingtalk.com/media/zhangtian.jpg",
+        department_ids=["11"],
+    )
+
+    assert directory_unregistered_person_payload(user, "捷发-安环部") == {
+        "user_id": None,
+        "name": "张甜",
+        "department": "捷发-安环部",
+        "account_kind": ACCOUNT_KIND_DIRECTORY_UNREGISTERED,
+        "avatar_url": "https://static-legacy.dingtalk.com/media/zhangtian.jpg",
+        "directory_user": {
+            "source_slug": "dingtalk",
+            "corp_id": "corp-1",
+            "user_id": "0220123456",
+        },
+    }
+
+
+def test_directory_unregistered_person_payload_drops_unsafe_avatar() -> None:
+    user = DingTalkUserMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-1",
+        user_id="u-unsafe-avatar",
+        name="不安全头像",
+        avatar="http://legacy.example/a.png",
+    )
+
+    assert directory_unregistered_person_payload(user, "")["avatar_url"] == ""

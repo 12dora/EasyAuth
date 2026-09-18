@@ -4,7 +4,7 @@ import pytest
 from django.db.models import Q
 
 from easyauth.accounts.models import UserMirror
-from easyauth.accounts.user_search import apply_user_search, user_search_q
+from easyauth.accounts.user_search import apply_user_search, directory_user_search_q, user_search_q
 
 pytestmark = pytest.mark.django_db
 
@@ -56,3 +56,10 @@ def test_apply_user_search_matches_name_id_and_pinyin_initials() -> None:
     assert list(by_initials) == [matched]
     assert list(by_email) == [matched]
     assert list(by_employee) == [matched]
+
+
+def test_directory_user_search_q_matches_name_employee_exact_userid() -> None:
+    query = "0220abcd"
+    assert directory_user_search_q(query) == (
+        Q(name__icontains=query) | Q(employee_number__iexact=query) | Q(user_id=query)
+    )

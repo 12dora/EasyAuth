@@ -4,14 +4,22 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 
-from easyauth.accounts.department_paths import department_path_labels
+from easyauth.accounts.department_paths import (
+    department_path_labels,
+    directory_department_path_labels,
+)
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.accounts.person_payload import person_payload
-from easyauth.accounts.user_search import apply_user_search
+from easyauth.accounts.models import USER_STATUS_ACTIVE, DingTalkUserMirror, UserMirror
+from easyauth.accounts.person_payload import (
+    directory_unregistered_person_payload,
+    directory_user_triple,
+    person_payload,
+)
+from easyauth.accounts.user_search import apply_user_search, directory_user_search_q
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
 from easyauth.admin_console.api_responses import (
     error_response,
@@ -91,9 +99,19 @@ def _user_options_payload(request: HttpRequest) -> JsonResponse:
     lookup_ids = _parse_user_option_ids(request)
     if isinstance(lookup_ids, JsonResponse):
         return lookup_ids
+    include_directory = _parse_include_directory(request)
+    if isinstance(include_directory, JsonResponse):
+        return include_directory
     if lookup_ids is not None:
+        if include_directory:
+            return error_response(
+                ErrorCode.VALIDATION_ERROR,
+                "include_directory 不能与 user_ids 同时使用。",
+                {"field": "include_directory"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
         return _user_options_lookup(request, lookup_ids)
-    return _user_options_search(request)
+    return _user_options_search(request, include_directory=include_directory)
 
 
 def console_user_console_admin(request: HttpRequest, user_id: str) -> JsonResponse:
@@ -187,7 +205,7 @@ def _user_options_lookup(request: HttpRequest, user_ids: tuple[str, ...]) -> Jso
             return _user_options_for_ids(purpose, user_ids)
 
 
-def _user_options_search(request: HttpRequest) -> JsonResponse:
+def _user_options_search(request: HttpRequest, *, include_directory: bool) -> JsonResponse:
     query = request.GET.get("q", "").strip()
     if query == "":
         return error_response(
@@ -201,9 +219,23 @@ def _user_options_search(request: HttpRequest) -> JsonResponse:
             return response
         case str() as purpose:
             pass
+    if include_directory and purpose != USER_SEARCH_PURPOSE_EMPLOYEE:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "include_directory 仅允许与 purpose=employee 同时使用。",
+            {"field": "include_directory"},
+            status=HTTPStatus.BAD_REQUEST,
+        )
     users = apply_user_search(_active_option_users(purpose), query)
-    matched = tuple(users.order_by("name", "authentik_user_id")[: _limit(request)])
-    return json_response(list_payload(_user_items(matched)))
+    limit = _limit(request)
+    matched = tuple(users.order_by("name", "authentik_user_id")[:limit])
+    if not include_directory:
+        return json_response(list_payload(_user_items(matched)))
+    items = _user_option_items(matched)
+    remaining = limit - len(matched)
+    if remaining > 0:
+        items.extend(_directory_option_items(_directory_matches(query, remaining)))
+    return json_response(list_payload(items))
 
 
 def _user_options_for_ids(purpose: str, user_ids: tuple[str, ...]) -> JsonResponse:
@@ -216,6 +248,65 @@ def _user_items(users: Iterable[UserMirror]) -> list[JsonValue]:
     user_list = tuple(users)
     department_labels = department_path_labels(user_list)
     return [_user_item(user, department_labels=department_labels) for user in user_list]
+
+
+def _user_option_items(users: Iterable[UserMirror]) -> list[JsonValue]:
+    user_list = tuple(users)
+    department_labels = department_path_labels(user_list)
+    return [_user_option_item(user, department_labels=department_labels) for user in user_list]
+
+
+def _user_option_item(
+    user: UserMirror,
+    *,
+    department_labels: Mapping[str, str] | None = None,
+) -> dict[str, JsonValue]:
+    item = _user_item(user, department_labels=department_labels)
+    item["directory_user"] = directory_user_triple(user)
+    return item
+
+
+def _directory_option_items(users: Iterable[DingTalkUserMirror]) -> list[JsonValue]:
+    user_list = tuple(users)
+    labels = directory_department_path_labels(user_list)
+    return [
+        directory_unregistered_person_payload(
+            user,
+            labels.get((user.source_slug, user.corp_id, user.user_id), ""),
+        )
+        for user in user_list
+    ]
+
+
+def _directory_matches(query: str, limit: int) -> tuple[DingTalkUserMirror, ...]:
+    registered = UserMirror.objects.filter(
+        dingtalk_source_slug=OuterRef("source_slug"),
+        dingtalk_corp_id=OuterRef("corp_id"),
+        dingtalk_userid=OuterRef("user_id"),
+    )
+    queryset = (
+        DingTalkUserMirror.objects.filter(status=USER_STATUS_ACTIVE, is_tombstone=False)
+        .filter(directory_user_search_q(query))
+        .filter(~Exists(registered))
+        .order_by("name", "source_slug", "corp_id", "user_id")
+    )
+    return tuple(queryset[:limit])
+
+
+def _parse_include_directory(request: HttpRequest) -> bool | JsonResponse:
+    if "include_directory" not in request.GET:
+        return False
+    raw = request.GET["include_directory"]
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    return error_response(
+        ErrorCode.VALIDATION_ERROR,
+        "include_directory 仅支持 true 或 false。",
+        {"field": "include_directory"},
+        status=HTTPStatus.BAD_REQUEST,
+    )
 
 
 def _user_item(

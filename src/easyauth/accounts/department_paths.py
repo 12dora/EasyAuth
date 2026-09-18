@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from easyauth.accounts.models import UserMirror
 
-__all__ = ["department_path_labels"]
+__all__ = ["department_path_labels", "directory_department_path_labels"]
 
 _PATH_JOIN: Final = "-"
 _MULTI_PATH_JOIN: Final = " / "
@@ -35,18 +35,35 @@ def department_path_labels(users: Iterable[UserMirror]) -> dict[str, str]:
         return labels
 
     dt_users = _dingtalk_users(bindings)
-    trees = _department_trees(dt_users.values())
+    directory_labels = directory_department_path_labels(dt_users.values())
     for user, key in bindings:
-        dt_user = dt_users.get(key)
-        if dt_user is None:
-            continue
-        dept_ids = _department_ids(dt_user.department_ids)
+        path = directory_labels.get(key)
+        if path:
+            labels[user.authentik_user_id] = path
+    return labels
+
+
+def directory_department_path_labels(
+    users: Iterable[DingTalkUserMirror],
+) -> dict[_UserKey, str]:
+    """按钉钉部门链解析部门路径标签, 键为 (source_slug, corp_id, user_id)。
+
+    规则与 `department_path_labels` 相同: 跳过空名根部门, 多部门以 " / " 拼接。
+    无部门或无法解析时不写入该键, 由调用方决定回退值。
+    """
+    user_list = tuple(users)
+    trees = _department_trees(user_list)
+    labels: dict[_UserKey, str] = {}
+    for user in user_list:
+        dept_ids = _department_ids(user.department_ids)
         if not dept_ids:
             continue
-        nodes = trees.get((key[0], key[1]), {})
+        nodes = trees.get((user.source_slug, user.corp_id), {})
         paths = [path for dept_id in dept_ids if (path := _path_label(dept_id, nodes))]
         if paths:
-            labels[user.authentik_user_id] = _MULTI_PATH_JOIN.join(paths)
+            labels[(user.source_slug, user.corp_id, user.user_id)] = _MULTI_PATH_JOIN.join(
+                paths,
+            )
     return labels
 
 

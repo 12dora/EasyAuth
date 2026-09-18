@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from easyauth.accounts.department_paths import department_path_labels
+from easyauth.accounts.department_paths import (
+    department_path_labels,
+    directory_department_path_labels,
+)
 from easyauth.accounts.models import DingTalkDepartmentMirror, DingTalkUserMirror, UserMirror
 
 pytestmark = pytest.mark.django_db
@@ -74,6 +77,38 @@ def test_department_path_missing_parent_keeps_known_names() -> None:
     labels = department_path_labels((user,))
 
     assert labels[user.authentik_user_id] == "叶子"
+
+
+def test_directory_department_path_labels_match_usermirror_helper() -> None:
+    _dept("1", "", "")
+    _dept("10", "1", "捷发")
+    _dept("11", "10", "安环部")
+    user = _bound_user("ak-dir-label", "u-dir-label", ["11"])
+    dt_user = DingTalkUserMirror.objects.get(
+        source_slug=_SOURCE,
+        corp_id=_CORP,
+        user_id="u-dir-label",
+    )
+
+    labels = directory_department_path_labels((dt_user,))
+
+    assert labels[(_SOURCE, _CORP, "u-dir-label")] == "捷发-安环部"
+    assert (
+        labels[(_SOURCE, _CORP, "u-dir-label")]
+        == department_path_labels((user,))[user.authentik_user_id]
+    )
+
+
+def test_directory_department_path_labels_omits_empty_departments() -> None:
+    dt_user = DingTalkUserMirror.objects.create(
+        source_slug=_SOURCE,
+        corp_id=_CORP,
+        user_id="u-no-dept",
+        name="无部门",
+        department_ids=[],
+    )
+
+    assert directory_department_path_labels((dt_user,)) == {}
 
 
 def _dept(dept_id: str, parent_id: str, name: str) -> None:
