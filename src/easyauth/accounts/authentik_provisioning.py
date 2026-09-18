@@ -109,6 +109,10 @@ def provision_user_from_authentik(sub: str) -> ProvisionOutcome:
     return _sync_core_user(sub, fetched, cache_key=cache_key)
 
 
+def forget_provision_miss(sub: str) -> None:
+    _ = cache.delete(_provision_miss_cache_key(sub))
+
+
 def ensure_user_mirror_for_permission_query(user_id: str) -> bool:
     outcome = provision_user_from_authentik(user_id)
     if outcome.kind is ProvisionKind.UNAVAILABLE:

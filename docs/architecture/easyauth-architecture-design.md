@@ -80,7 +80,7 @@ src/easyauth/
 `uid` 字段是另一套只读散列，**不能**用来查找或对账。管理 API 按用户查询必须使用
 `GET /api/v3/core/users/?uuid=<sub>`（期望恰好 1 条；0 条为找不到，多于 1 条为契约错误）。
 
-UserMirror 由以下三条路径创建，避免把「只登录过下游、从未打开 EasyAuth 门户」的员工漏掉：
+UserMirror 由以下四条路径创建，避免把「只登录过下游、从未打开 EasyAuth 门户」的员工漏掉：
 
 1. **门户登录**：OIDC 回调 `accounts/auth.py::bind_oidc_session`
 2. **权限查询即时供给**：`GET /api/v1/apps/{app}/users/{sub}/permissions` 在
@@ -96,6 +96,11 @@ UserMirror 由以下三条路径创建，避免把「只登录过下游、从未
    分页遍历 `/api/v3/core/users/?is_active=true&ordering=pk`，
    为有钉钉目录身份且尚无镜像的用户建档。**不覆盖**已有镜像——画像更新仍由目录同步负责。
    扫描中途 Authentik 失败只记警告并继续目录同步，不丢本轮目录计数。
+4. **控制台直接授权物化**：管理员对尚未登录的钉钉通讯录人员提交 `POST /direct-grants`
+   （`directory_user` 三元组）时，先调用 Authentik 目录 `materialize` 创建账号并绑定
+   `unionId` source connection，再 `provision_user_from_authentik` 建档。对方首次钉钉登录时
+   Authentik 按 `user_matching_mode=identifier` 命中既有绑定，不会再建第二个账号。
+   授权失败不回滚已开通的账号；审计事件为 `directory_user_materialized`。
 
 无 `attributes.dingtalk` 的账号（`akadmin`、服务账号）不建镜像。运维回填：
 `python manage.py mirror_authentik_users`（打印 `scanned` / `created` /

@@ -8,6 +8,7 @@ type DirectoryJson = dict[str, JsonValue]
 type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
 
 INVALID_MANAGED_USERS_FIELD_TYPE = "invalid managed users field type"
+INVALID_MATERIALIZE_FIELD = "invalid materialize field"
 EMPTY_MANAGED_USERS_FIELD = "empty managed users field"
 MISSING_DIRECTORY_IDENTITY_FIELD = "missing directory identity field"
 UNSUPPORTED_DIRECTORY_USER_STATUS = "unsupported directory user status"
@@ -81,6 +82,15 @@ class DingTalkManagedUsers:
     active_authentik_user_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class MaterializedDirectoryUser:
+    created: bool
+    uuid: str
+    username: str
+    name: str
+    is_active: bool
+
+
 def parse_status(payload: DirectoryJson, *, source_slug: str) -> DingTalkDirectoryStatus:
     return DingTalkDirectoryStatus(
         source_slug=_string(payload.get("source_slug")) or source_slug,
@@ -148,6 +158,26 @@ def parse_org_context(payload: DirectoryJson, *, source_slug: str) -> DingTalkDi
         manager_chain=tuple(_safe_mapping(item) for item in _list(payload.get("manager_chain"))),
         stale=payload.get("stale") is True,
         last_synced_at=_string(payload.get("last_synced_at")),
+    )
+
+
+def parse_materialized_user(payload: DirectoryJson) -> MaterializedDirectoryUser:
+    created = payload.get("created")
+    if not isinstance(created, bool):
+        raise TypeError(INVALID_MATERIALIZE_FIELD)
+    user = payload.get("user")
+    if not isinstance(user, dict):
+        raise TypeError(INVALID_MATERIALIZE_FIELD)
+    user_payload = cast("DirectoryJson", user)
+    is_active = user_payload.get("is_active")
+    if not isinstance(is_active, bool):
+        raise TypeError(INVALID_MATERIALIZE_FIELD)
+    return MaterializedDirectoryUser(
+        created=created,
+        uuid=_required_string(user_payload, "uuid"),
+        username=_required_string(user_payload, "username"),
+        name=_required_string(user_payload, "name", allow_empty=True),
+        is_active=is_active,
     )
 
 

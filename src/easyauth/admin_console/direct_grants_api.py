@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import ClassVar
 
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
-from pydantic import ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.api_responses import (
@@ -15,6 +14,15 @@ from easyauth.admin_console.api_responses import (
     require_method,
 )
 from easyauth.admin_console.authz import require_superuser
+from easyauth.admin_console.direct_grants_payloads import (
+    IDENTITY_XOR_CODE,
+    IDENTITY_XOR_MESSAGE,
+    DirectGrantRequestPayload,
+)
+from easyauth.admin_console.directory_user_materialize import (
+    USER_INACTIVE_MESSAGE,
+    resolve_directory_user_for_grant,
+)
 from easyauth.admin_console.grant_row_payloads import (
     access_grant_row_queryset,
     serialize_access_grant_row,
@@ -25,7 +33,6 @@ from easyauth.admin_console.grant_write_common import (
     TIMED_EXPIRY_REQUIRED_MESSAGE,
     AdminGrantLookupError,
     AdminGrantSemanticError,
-    AdminGrantWritePayload,
     ResolvedAdminGrantTargets,
     resolve_admin_grant_targets,
 )
@@ -53,15 +60,8 @@ from easyauth.portal.access_request_payloads import (
 )
 
 USER_NOT_FOUND_MESSAGE = "用户不存在。"
-USER_INACTIVE_MESSAGE = "用户当前不是在职状态,无法授予权限。"
 GRANT_EXPIRED_MESSAGE = "授权到期时间必须晚于当前时间。"
 APP_NOT_FOUND_MESSAGE = "应用不存在。"
-
-
-class DirectGrantRequestPayload(AdminGrantWritePayload):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
-
-    user_id: str = Field(min_length=1, max_length=128)
 
 
 def console_direct_grants(request: HttpRequest) -> JsonResponse:
@@ -78,8 +78,8 @@ def console_direct_grants(request: HttpRequest) -> JsonResponse:
 def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse:
     try:
         payload = DirectGrantRequestPayload.model_validate_json(request.body)
-        user = _active_user_for_id(payload.user_id)
         targets = _resolve_direct_grant_targets(payload)
+        user = _user_for_direct_grant(payload, actor_id=actor_id)
         directory_cache: ManagedUsersDirectoryCache = {}
         _warm_managed_users_directory_cache(
             user=user,
@@ -93,12 +93,7 @@ def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse
                 managed_users_cache=directory_cache,
             )
     except ValidationError as exc:
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求参数无效。",
-            {"errors": str(exc)},
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        )
+        return _direct_grant_validation_error(exc)
     except AdminGrantLookupError as exc:
         return error_response(exc.code, exc.message, exc.details, status=exc.status)
     except (AdminGrantSemanticError, DirectGrantEmptyReplaceError) as exc:
@@ -122,6 +117,36 @@ def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse
         {"data": {"grant": row}},
         status=HTTPStatus.CREATED,
     )
+
+
+def _direct_grant_validation_error(exc: ValidationError) -> JsonResponse:
+    if any(item.get("type") == IDENTITY_XOR_CODE for item in exc.errors()):
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            IDENTITY_XOR_MESSAGE,
+            {"fields": ["user_id", "directory_user"]},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    return error_response(
+        ErrorCode.VALIDATION_ERROR,
+        "请求参数无效。",
+        {"errors": str(exc)},
+        status=HTTPStatus.UNPROCESSABLE_ENTITY,
+    )
+
+
+def _user_for_direct_grant(payload: DirectGrantRequestPayload, *, actor_id: str) -> UserMirror:
+    if payload.user_id is not None:
+        return _active_user_for_id(payload.user_id)
+    directory_user = payload.directory_user
+    if directory_user is None:
+        raise AdminGrantLookupError(
+            IDENTITY_XOR_MESSAGE,
+            {"fields": ["user_id", "directory_user"]},
+            HTTPStatus.BAD_REQUEST,
+            ErrorCode.VALIDATION_ERROR,
+        )
+    return resolve_directory_user_for_grant(directory_user, actor_id=actor_id)
 
 
 def _resolve_direct_grant_targets(payload: DirectGrantRequestPayload) -> ResolvedAdminGrantTargets:

@@ -386,7 +386,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | 方法 | 路径 | URL name | 说明 |
 | --- | --- | --- | --- |
 | GET | `/grant-catalog` | `console-grant-catalog` | 管理员授权目录（全量 active 应用/授权组/权限） |
-| GET | `/user-options` | `console-user-options` | 被授权人联想或按 ID 回填；项含 `user_id`、`name`、`department`、`account_kind`、`avatar_url` |
+| GET | `/user-options` | `console-user-options` | 被授权人联想或按 ID 回填；项含 `user_id`、`name`、`department`、`account_kind`、`avatar_url`；`include_directory=true` 时另含 `directory_user`，并可出现尚未登录的通讯录人员 |
 | POST | `/direct-grants` | `console-direct-grants` | 管理员直接授予，立即合并进用户当前授权 |
 | GET | `/users/{user_id}/apps/{app_key}/current-grant` | `console-user-app-current-grant` | 读取该用户在该应用的当前授权行 |
 | GET | `/departments/tree` | `console-departments-tree` | 钉钉组织树 |
@@ -397,10 +397,12 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 
 ### 用户选项
 
-**GET `/user-options`** 要求 **superuser**。成功信封 `{ "data": [...] }`，项形状固定为
+**GET `/user-options`** 要求 **superuser**。成功信封 `{ "data": [...] }`。
+
+未传 `include_directory` 或 `include_directory=false` 时，行为与原先一致：项形状为
 `{ "user_id", "name", "department", "account_kind", "avatar_url" }`。`department` 为部门路径（如「捷发-安环部」，
 多部门按钉钉顺序以 ` / ` 拼接）；人员列表 `GET /users` 的 `department` 同口径。
-`account_kind` 为 `directory` / `local` / `unresolved`，口径见上文人员对象；本接口只返回已有
+`account_kind` 为 `directory` / `local` / `unresolved`，口径见上文人员对象；本路径只返回已有
 UserMirror 的人员，因此只有 `directory` 或 `local`。
 人员对象一律由 `accounts/person_payload.py` 生成。
 
@@ -412,15 +414,41 @@ UserMirror 的人员，因此只有 `directory` 或 `local`。
 | `q` | 联想搜索关键字；未给 `user_ids` 时不得为空 |
 | `purpose` | `employee`（默认）或 `approver`；给出则必须合法 |
 | `limit` | 仅联想搜索生效，默认 10、最大 50 |
+| `include_directory` | 可选，默认 `false`。只接受字面量 `true` / `false`，其它值 → 400 `VALIDATION_ERROR`（`details.field=include_directory`）。仅允许与 `purpose=employee` 组合，否则 400。与 `user_ids` 同时给出（`include_directory=true`）→ 400。读取全组织通讯录是管理员能力；本接口本身已要求 superuser，非超级管理员仍为 403。仅直接授权页应传 `true` |
 
 `user_ids` 去空白后须为 1–50 个，否则 400 `VALIDATION_ERROR`（`details.field=user_ids`）。
 超过 50 个或解析结果为空均拒绝。回填结果只含在职用户；`purpose=employee` 排除本地管理员，
 `approver` 可包含。未知 ID、停用用户不出现在 `data` 中，顺序无约定。
+`include_directory=true` 与 `user_ids` 不得同时使用，否则 400 `VALIDATION_ERROR`
+（`details.field=include_directory`）。
 
 未给 `user_ids` 时保持既有联想：空 `q` 为 422；匹配规则由 `accounts/user_search.py`
 统一提供（姓名、邮箱、用户 ID、工号模糊匹配，纯字母数字可含空格时另按姓名全拼/首字母匹配，
 如 `huyu`、`hyq` 可命中「胡玉琴A」），运营授权列表 `user_query` 使用同一套规则，
 并受 `limit` 截断。非法 `purpose` 无论哪条路径均为 422。
+
+`include_directory=true` 时，结果 = 既有 UserMirror 命中（排在前面，形状见下）+ 钉钉通讯录人员
+（`DingTalkUserMirror`：`status=active`、`is_tombstone=false`，且不存在相同
+`(dingtalk_source_slug, dingtalk_corp_id, dingtalk_userid)` 三元组的 UserMirror）。
+未注册通讯录人员只按姓名（包含）、工号（`employee_number`，大小写不敏感全等）和钉钉
+`user_id`（精确全等）匹配 `q`，不按拼音匹配。总数仍受既有 `limit` 截断。
+
+带通讯录时的项形状（UserMirror 命中也带上新字段）：
+
+```json
+{
+  "user_id": "<authentik uuid>",
+  "name": "张甜",
+  "department": "<与既有口径相同的部门路径>",
+  "account_kind": "directory",
+  "avatar_url": "...",
+  "directory_user": {"source_slug": "dingtalk", "corp_id": "ding...", "user_id": "0220..."}
+}
+```
+
+- 已有 UserMirror：`user_id` 为 Authentik uuid；`account_kind` 为 `directory` 或 `local`；`directory_user` 为其钉钉三元组，没有绑定则为 `null`。
+- 仅通讯录、尚未登录：`user_id` 为 `null`，`account_kind` 为 `directory_unregistered`，
+  `directory_user` 为三元组；部门路径按 `DingTalkUserMirror.department_ids` 走控制台同一套部门标签辅助函数；头像取通讯录行。
 
 ### 授权目录
 
@@ -443,7 +471,8 @@ UserMirror 的人员，因此只有 `directory` 或 `local`。
 
 ### 直接授权
 
-`POST /direct-grants` 请求体：
+`POST /direct-grants` 请求体必须且只能指定 `user_id` 或 `directory_user` 其中一项
+（同时给出或都缺 → 400 `VALIDATION_ERROR`）：
 
 ```json
 {
@@ -457,7 +486,41 @@ UserMirror 的人员，因此只有 `directory` 或 `local`。
 }
 ```
 
-校验：用户必须存在且 `active`；应用 active；组/权限/范围必须存在、启用且受支持。
+或对尚未登录的钉钉通讯录人员：
+
+```json
+{
+  "directory_user": {
+    "source_slug": "dingtalk",
+    "corp_id": "ding...",
+    "user_id": "0220..."
+  },
+  "app_key": "easytrade",
+  "authorization_group_keys": ["sales"],
+  "direct_grants": [{"permission": "order.order.view", "scope": "GLOBAL"}],
+  "grant_type": "timed",
+  "grant_expires_at": "2026-12-31T15:59:59Z",
+  "reason": "说明"
+}
+```
+
+`directory_user` 禁止额外字段。解析顺序：先按既有规则校验应用 / 授权组 / 权限 / 期限 / 理由
+（此时不写 Authentik）；再要求 `DingTalkUserMirror` 存在、`status=active` 且非 tombstone。
+通讯录中无此人 → 404「钉钉通讯录中不存在该人员。」；不是在职 → 409「该人员在钉钉通讯录中不是在职状态。」。
+若已有相同三元组的 UserMirror（例如对方刚好登录了），走既有 `user_id` 授权路径。
+否则调用 Authentik `materialize` 开通账号并绑定钉钉 source connection，再
+`provision_user_from_authentik` 建 UserMirror（建档时仍会跑该用户的部门预授权对账）。
+供给结果必须是新建或已存在；其它结果快速失败。Authentik 409 码映射为 409 中文：
+`union_id_missing` →「该人员缺少钉钉 unionId,无法开通账号。」；
+`username_conflict` / `binding_conflict` →「Authentik 中已有冲突账号,需管理员处理。」；
+`directory_user_inactive` 与通讯录非在职相同。传输失败或上游 5xx → 503 `DEPENDENCY_UNAVAILABLE`。
+开通账号后若授权写入失败，Authentik 账号与 UserMirror **保留**（重试幂等），不回滚 Authentik。
+
+Authentik 报告新建，或本次新建了 UserMirror 时，写审计 `directory_user_materialized`
+（`actor_type=admin`，`target_type=user`，`target_id` 为 Authentik uuid；
+metadata：`source_slug`、`corp_id`、钉钉 `user_id`、`created` 布尔）。
+
+校验：以 `user_id` 提交时用户必须存在且 `active`；应用 active；组/权限/范围必须存在、启用且受支持。
 管理员授予**忽略** `requestable` 与审批规则。限时必须未来到期，永久必须
 `grant_expires_at=null`。控制台表单会预加载被授权人在该应用上的当前用户来源成员，
 提交后用户来源集合必须与本次提交相等。
@@ -484,7 +547,8 @@ UserMirror 的人员，因此只有 `directory` 或 `local`。
 `direct_grant_applied` 成功审计一并回滚，不留下半成功状态。空目标收回最后一条用户来源成员后，
 响应展开的是已收回的历史行：只保留权限/范围名称，不解析管理对象名单，也不访问组织目录；
 目录不可用不得回滚这次收回。成功 201，
-`data` 为 `{ "grant": <授权行> }`，形状见下方「授权行」。
+`data` 为 `{ "grant": <授权行> }`，形状见下方「授权行」；行上的 `user_id` 始终是真实 Authentik uuid
+（通讯录人员会在开通账号后写入）。
 
 ### 当前授权
 

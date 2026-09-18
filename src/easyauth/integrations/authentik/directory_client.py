@@ -25,8 +25,10 @@ from easyauth.integrations.authentik.directory_payloads import (
     DingTalkManagedUsers,
     DirectoryJson,
     JsonValue,
+    MaterializedDirectoryUser,
     parse_departments,
     parse_managed_users,
+    parse_materialized_user,
     parse_org_context,
     parse_status,
     parse_users,
@@ -63,6 +65,14 @@ class AuthentikDirectoryNotFoundError(AuthentikDirectoryError):
 
 class AuthentikDirectoryUnavailableError(AuthentikDirectoryError):
     pass
+
+
+class AuthentikDirectoryConflictError(AuthentikDirectoryError):
+    code: str
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +138,20 @@ class AuthentikDirectoryClient:
                     f"managed-users/by-manager/{quoted_corp}/{quoted_manager}/",
                 ),
                 source_slug=self.source_slug,
+            )
+        except (TypeError, ValueError) as error:
+            raise AuthentikDirectoryUnavailableError(DIRECTORY_INVALID_FORMAT_MESSAGE) from error
+
+    def materialize_user(self, corp_id: str, user_id: str) -> MaterializedDirectoryUser:
+        quoted_corp = quote(corp_id, safe="")
+        quoted_user = quote(user_id, safe="")
+        try:
+            return parse_materialized_user(
+                self._request_json(
+                    f"users/{quoted_corp}/{quoted_user}/materialize/",
+                    method="POST",
+                    body={},
+                ),
             )
         except (TypeError, ValueError) as error:
             raise AuthentikDirectoryUnavailableError(DIRECTORY_INVALID_FORMAT_MESSAGE) from error
@@ -215,7 +239,24 @@ def _raise_http_error(error: HTTPError) -> None:
         raise AuthentikDirectoryPermissionError(DIRECTORY_PERMISSION_MESSAGE) from error
     if error.code == HTTPStatus.NOT_FOUND:
         raise AuthentikDirectoryNotFoundError(DIRECTORY_NOT_FOUND_MESSAGE) from error
+    if error.code == HTTPStatus.CONFLICT:
+        raise AuthentikDirectoryConflictError(_conflict_code(error)) from error
     raise AuthentikDirectoryUnavailableError(DIRECTORY_UNAVAILABLE_MESSAGE) from error
+
+
+def _conflict_code(error: HTTPError) -> str:
+    try:
+        raw_body = error.read(DIRECTORY_MAX_RESPONSE_BYTES)
+    except (OSError, TimeoutError, ValueError):
+        return ""
+    try:
+        parsed = cast("JsonValue", loads(raw_body.decode("utf-8")))
+    except (JSONDecodeError, UnicodeDecodeError):
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    code = parsed.get("code")
+    return code if isinstance(code, str) else ""
 
 
 def _next_page(payload: DirectoryJson) -> int | None:
