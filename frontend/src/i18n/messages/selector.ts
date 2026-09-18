@@ -10,6 +10,8 @@ export const zhCN = {
 
   "userSelect.remove": "移除 {name}",
 
+  "userSelect.notSignedIn": "未登录",
+
   "selector.ariaLabel": "权限选择",
 
   "selector.column.permission": "权限",
@@ -69,6 +71,8 @@ export const en: Record<keyof typeof zhCN, string> = {
   "userSelect.loadFailed": "Failed to load user suggestions. Try again.",
 
   "userSelect.remove": "Remove {name}",
+
+  "userSelect.notSignedIn": "Not signed in",
 
   "selector.ariaLabel": "Permission selection",
 

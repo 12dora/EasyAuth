@@ -9,10 +9,12 @@ import {
   UserOptionList,
   useUserCombobox,
   useUserOptionsByIds,
+  userOptionDisplayName,
+  userOptionKey,
   userOptionName,
   userSecondaryLabel,
 } from "./UserCombobox";
-import type { UserOption, UserSearchPurpose } from "./UserCombobox";
+import type { DirectoryOnlyUserOption, UserOption, UserSearchOption, UserSearchPurpose } from "./UserCombobox";
 
 export type { UserOption } from "./UserCombobox";
 
@@ -37,10 +39,15 @@ interface UserSearchInputProps {
   onResolvedOptionChange?: (option: UserOption | null) => void;
   /**
    * 当前选中的候选项: 有它(且与 value 同一个人)时输入框显示姓名。
+   * 尚无账号的通讯录人员没有用户 ID, 调用方选中他时 value 传空串。
    *
    * 调用方手输 ID 时应传 null —— 那时没有可信姓名, 只能原样显示 ID。
    */
-  selectedOption?: UserOption | null;
+  selectedOption?: UserSearchOption | null;
+  /** 连同尚无账号的通讯录人员一起搜; 打开时必须提供 onSelectDirectoryOption。只有直接授权页用。 */
+  includeDirectory?: boolean;
+  /** 选中尚无账号的通讯录人员: 他没有用户 ID, 不经过 onChange。 */
+  onSelectDirectoryOption?: (option: DirectoryOnlyUserOption) => void;
   placeholder?: string;
   required?: boolean;
   "aria-label"?: string;
@@ -52,7 +59,7 @@ interface UserSearchInputProps {
  *
  * 次行不再画在输入框正下方, 避免和 Field hint 挤在一起。
  */
-export function userSearchFieldHint(option: UserOption | null, t: Translator, emptyHint: string): string {
+export function userSearchFieldHint(option: UserSearchOption | null, t: Translator, emptyHint: string): string {
   const secondary = option ? userSecondaryLabel(option, t) : "";
   return secondary || emptyHint;
 }
@@ -65,6 +72,8 @@ export function UserSearchInput({
   onSelectOption,
   onResolvedOptionChange,
   selectedOption = null,
+  includeDirectory = false,
+  onSelectDirectoryOption,
   placeholder,
   required,
   ...aria
@@ -80,9 +89,9 @@ export function UserSearchInput({
    */
   const [seenOptions, setSeenOptions] = useState<Record<string, UserOption>>({});
   // selectedOption 优先: 调用方手里的候选项可能比本组件见过的更新。
-  const resolved =
-    selectedOption && selectedOption.user_id === value ? selectedOption : value ? (seenOptions[value] ?? null) : null;
-  const inputValue = resolved ? userOptionName(resolved) : value;
+  const resolved = resolveSearchInputOption(selectedOption, value, seenOptions);
+  const resolvedAccount = resolved && resolved.user_id !== null ? resolved : null;
+  const inputValue = resolved ? userOptionDisplayName(resolved) : value;
   /**
    * 本组件最近一次自己发出去的 value(手输 onChange 或 onPick)。
    *
@@ -90,13 +99,22 @@ export function UserSearchInput({
    * 不能把「张」一类的自由文本拿去打 user_ids。
    */
   const lastEmittedValueRef = useRef<string | undefined>(undefined);
-  const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } = useUserCombobox({
+  const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } = useUserCombobox<UserSearchOption>({
     query: inputValue.trim(),
     purpose: "employee",
+    includeDirectory,
     navigateWhenClosed: false,
     openOnArrowDown: false,
     closeOnPick: true,
     onPick: (option) => {
+      if (option.user_id === null) {
+        if (!onSelectDirectoryOption) {
+          throw new Error("UserSearchInput received a directory-only option without onSelectDirectoryOption");
+        }
+        lastEmittedValueRef.current = "";
+        onSelectDirectoryOption(option);
+        return;
+      }
       setSeenOptions((current) => ({ ...current, [option.user_id]: option }));
       lastEmittedValueRef.current = option.user_id;
       onChange(option.user_id);
@@ -121,10 +139,10 @@ export function UserSearchInput({
   }, [lookupQuery.data, value]);
 
   useEffect(() => {
-    onResolvedOptionChange?.(resolved);
-  }, [onResolvedOptionChange, resolved]);
+    onResolvedOptionChange?.(resolvedAccount);
+  }, [onResolvedOptionChange, resolvedAccount]);
 
-  const getOptionId = (option: UserOption) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
+  const getOptionId = (option: UserSearchOption) => `${listId}-option-${encodeURIComponent(userOptionKey(option))}`;
 
   return (
     <div className="relative" ref={containerRef}>
@@ -162,6 +180,19 @@ export function UserSearchInput({
       ) : null}
     </div>
   );
+}
+
+/** 输入框当前代表的人: 调用方给的候选项(与 value 同一个人)优先, 其次是本组件见过的候选。 */
+function resolveSearchInputOption(
+  selectedOption: UserSearchOption | null,
+  value: string,
+  seenOptions: Record<string, UserOption>,
+): UserSearchOption | null {
+  // 尚无账号的通讯录人员没有用户 ID: 选中他时 value 为空串。
+  if (selectedOption && (selectedOption.user_id === null ? value === "" : selectedOption.user_id === value)) {
+    return selectedOption;
+  }
+  return value ? (seenOptions[value] ?? null) : null;
 }
 
 interface UserMultiSelectProps {

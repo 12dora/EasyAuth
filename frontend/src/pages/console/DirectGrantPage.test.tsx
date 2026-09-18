@@ -171,6 +171,41 @@ const GRANT_AFTER_DIRECT_GRANT = {
   },
 };
 
+/** 通讯录里尚无账号的人。 */
+const DIRECTORY_USER = { source_slug: "dingtalk", corp_id: "dingcorp", user_id: "0220" };
+
+/** 直接授权页的搜索带 include_directory: 已有账号的人在前, 通讯录里尚无账号的人在后。 */
+const DIRECTORY_USER_OPTIONS = {
+  data: [
+    ...USER_OPTIONS.data,
+    {
+      user_id: null,
+      name: "张甜",
+      department: "研发部",
+      account_kind: "directory_unregistered",
+      avatar_url: "",
+      directory_user: DIRECTORY_USER,
+    },
+  ],
+};
+
+/** 为张甜开通账号并授权之后的授权行: 带着真实的用户 ID。 */
+const MATERIALIZED_GRANT = {
+  ...CURRENT_GRANT.grant,
+  id: 20,
+  version: 1,
+  user_id: "u-new",
+  user_name: "张甜",
+  grant_type: "permanent",
+  grant_expires_at: null,
+  authorization_groups: [{ key: "sales", kind: "role", name: "销售", expires_at: null, source: "user" }],
+  direct_grants: [],
+  groups: [{ key: "sales", kind: "role", name: "销售" }],
+};
+
+/** 授予权限的 201 响应: `{data: {grant: <授权行>}}`。 */
+const GRANT_CREATED = { data: { grant: GRANT_AFTER_DIRECT_GRANT.grant } };
+
 describe("DirectGrantPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -190,21 +225,7 @@ describe("DirectGrantPage", () => {
     const fetchMock = stubFetch(async (url, init) => {
       if (url === "/console/api/v1/direct-grants") {
         expect(init?.method).toBe("POST");
-        return jsonResponse(
-          {
-            data: {
-              grant_id: 9,
-              version: 1,
-              user_id: "u-1",
-              app_key: "crm",
-              authorization_group_keys: ["sales"],
-              direct_grants: [],
-              grant_type: "permanent",
-              grant_expires_at: null,
-            },
-          },
-          201,
-        );
+        return jsonResponse(GRANT_CREATED, 201);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -230,6 +251,97 @@ describe("DirectGrantPage", () => {
     expect(screen.getByLabelText("被授权人")).toHaveValue("张三");
     expect(screen.getByText("销售部")).toBeVisible();
     await waitFor(() => expect(screen.getByLabelText("应用")).toHaveValue(""));
+  });
+
+  test("通讯录里尚无账号的人: 不读现状, 提交带 directory_user, 成功后按真实账号读回现状", async () => {
+    const currentGrantUrls: string[] = [];
+    const fetchMock = stubFetch(
+      async (url) => {
+        if (url === "/console/api/v1/direct-grants") {
+          return jsonResponse({ data: { grant: MATERIALIZED_GRANT } }, 201);
+        }
+        if (url.endsWith("/current-grant")) {
+          currentGrantUrls.push(url);
+          return jsonResponse({ grant: MATERIALIZED_GRANT });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+      CURRENT_GRANT_FROM_HANDLER,
+      DIRECTORY_USER_OPTIONS,
+    );
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    const grantee = await screen.findByLabelText("被授权人");
+    await user.type(grantee, "张");
+    const option = await screen.findByRole("option", { name: /张甜/ });
+    expect(within(option).getByText("未登录")).toBeVisible();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).startsWith("/console/api/v1/user-options?q=%E5%BC%A0&purpose=employee&include_directory=true"),
+      ),
+    ).toBe(true);
+    await user.click(option);
+    expect(grantee).toHaveValue("张甜");
+    expect(screen.getByText("研发部")).toBeVisible();
+
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    await user.click(await authorizationGroupOption(user, "销售"));
+    await user.type(screen.getByLabelText("说明"), "新同事入职");
+    await waitFor(() => expect(screen.getByRole("button", { name: "授予权限" })).toBeEnabled());
+    // 这个人还没有账号, 也就没有现状可读。
+    expect(currentGrantUrls).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "授予权限" }));
+
+    await waitFor(() => expect(directGrantBody(fetchMock)).not.toBeNull());
+    expect(directGrantBody(fetchMock)).toEqual({
+      directory_user: DIRECTORY_USER,
+      app_key: "crm",
+      authorization_group_keys: ["sales"],
+      direct_grants: [],
+      grant_type: "permanent",
+      grant_expires_at: null,
+      reason: "新同事入职",
+    });
+    expect(await screen.findByText("已授予 张甜 客户管理 (CRM) 的权限")).toBeVisible();
+    expect(grantee).toHaveValue("张甜");
+
+    // 选中已切到新开通的账号: 再选应用就像普通员工一样读回现状。
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    await waitFor(() =>
+      expect(currentGrantUrls).toEqual(["/console/api/v1/users/u-new/apps/crm/current-grant"]),
+    );
+    await waitFor(async () => expect(await selectedAuthorizationGroupNames(user)).toEqual(["销售"]));
+  });
+
+  test("通讯录人员开通失败时展示后端原因", async () => {
+    stubFetch(
+      async (url) => {
+        if (url === "/console/api/v1/direct-grants") {
+          return jsonResponse(
+            { error: { code: "CONFLICT", message: "Authentik 中已有冲突账号，需管理员处理。" } },
+            409,
+          );
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+      NO_CURRENT_GRANT,
+      DIRECTORY_USER_OPTIONS,
+    );
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await user.type(await screen.findByLabelText("被授权人"), "张");
+    await user.click(await screen.findByRole("option", { name: /张甜/ }));
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    await user.click(await authorizationGroupOption(user, "销售"));
+    await user.type(screen.getByLabelText("说明"), "新同事入职");
+    await waitFor(() => expect(screen.getByRole("button", { name: "授予权限" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "授予权限" }));
+
+    expect(await screen.findByText("授权失败")).toBeVisible();
+    expect(screen.getByText("Authentik 中已有冲突账号，需管理员处理。")).toBeVisible();
+    expect(screen.getByLabelText("被授权人")).toHaveValue("张甜");
   });
 
   test("到期时间在填完之后走进过去, 点提交给出提示且不发请求", async () => {
@@ -262,7 +374,7 @@ describe("DirectGrantPage", () => {
   test("选定被授权人与应用后回填现有权限, 组织授权来源只读", async () => {
     const fetchMock = stubFetch(async (url) => {
       if (url === "/console/api/v1/direct-grants") {
-        return jsonResponse({ data: { grant_id: 9 } }, 201);
+        return jsonResponse(GRANT_CREATED, 201);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }, CURRENT_GRANT);
@@ -380,7 +492,7 @@ describe("DirectGrantPage", () => {
       if (url === "/console/api/v1/direct-grants") {
         // 这次授权改写了现状: 之后读回来的应该是新的一份。
         currentGrant = GRANT_AFTER_DIRECT_GRANT;
-        return jsonResponse({ data: { grant_id: 9 } }, 201);
+        return jsonResponse(GRANT_CREATED, 201);
       }
       if (url.endsWith("/current-grant")) {
         return jsonResponse(currentGrant);
@@ -537,7 +649,7 @@ describe("DirectGrantPage", () => {
   test("工具栏全选/清空与授权组 allowClear 都不拿掉组织授权锁定项, 提交只含本人来源", async () => {
     const fetchMock = stubFetch(async (url) => {
       if (url === "/console/api/v1/direct-grants") {
-        return jsonResponse({ data: { grant_id: 9 } }, 201);
+        return jsonResponse(GRANT_CREATED, 201);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }, CURRENT_GRANT);
@@ -619,7 +731,7 @@ describe("DirectGrantPage", () => {
   test("勾选一项本人权限后提交, 载荷不含组织授权锁定的组与权限", async () => {
     const fetchMock = stubFetch(async (url) => {
       if (url === "/console/api/v1/direct-grants") {
-        return jsonResponse({ data: { grant_id: 9 } }, 201);
+        return jsonResponse(GRANT_CREATED, 201);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }, CURRENT_GRANT);
@@ -675,6 +787,7 @@ function directGrantBody(fetchMock: ReturnType<typeof stubFetch>): unknown {
 function stubFetch(
   handler: (url: string, init?: RequestInit) => Promise<Response>,
   currentGrant: unknown = NO_CURRENT_GRANT,
+  userOptions: unknown = USER_OPTIONS,
 ) {
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input);
@@ -682,7 +795,7 @@ function stubFetch(
       return jsonResponse(CATALOG);
     }
     if (url.startsWith("/console/api/v1/user-options?")) {
-      return jsonResponse(USER_OPTIONS);
+      return jsonResponse(userOptions);
     }
     if (url.endsWith("/current-grant") && currentGrant !== CURRENT_GRANT_FROM_HANDLER) {
       return jsonResponse(currentGrant);

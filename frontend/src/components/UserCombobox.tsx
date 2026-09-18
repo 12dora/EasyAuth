@@ -12,22 +12,58 @@ import { cn } from "../lib/cn";
 import type { AccountKind } from "../lib/domain/person";
 import { joinLabels } from "../lib/joinLabels";
 import type { Translator } from "../lib/status";
+import { Badge } from "./Badge";
 import { TruncatedText } from "./TruncatedText";
 
+/** 钉钉通讯录里的一个人: 来源 + 企业 + 钉钉 userid 三元组。 */
+export type DirectoryUserRef = {
+  source_slug: string;
+  corp_id: string;
+  user_id: string;
+};
+
+/** 已有账号的候选人。 */
 export interface UserOption {
   user_id: string;
   name: string;
   /** 部门名; 后端目录未同步到部门时为空串。 */
   department?: string;
   account_kind?: AccountKind;
+  /** 对应的钉钉通讯录人员; 不是通讯录人员时为 null。 */
+  directory_user?: DirectoryUserRef | null;
+}
+
+/**
+ * 通讯录里有、但从未登录过(还没有账号)的人。
+ *
+ * 只在显式带 `include_directory=true` 的搜索里出现(目前只有直接授权页); 选中他提交时后端先为他开通账号。
+ */
+export interface DirectoryOnlyUserOption {
+  user_id: null;
+  name: string;
+  department?: string;
+  account_kind: "directory_unregistered";
+  directory_user: DirectoryUserRef;
+}
+
+/** user-options 候选项: 带 include_directory 时可能是尚无账号的通讯录人员。 */
+export type UserSearchOption = UserOption | DirectoryOnlyUserOption;
+
+/** 候选项的稳定键: 有账号用 user_id, 通讯录人员用三元组。 */
+export function userOptionKey(option: UserSearchOption): string {
+  if (option.user_id !== null) {
+    return option.user_id;
+  }
+  const { source_slug, corp_id, user_id } = option.directory_user;
+  return `directory:${source_slug}:${corp_id}:${user_id}`;
 }
 
 export type UserSearchPurpose = "employee" | "approver";
 
 /** 可插拔候选源: 交接候选人、转出方列表等走自己的接口, 键盘与下拉仍共用 combobox。 */
-export interface UserOptionQuerySource {
+export interface UserOptionQuerySource<O extends UserSearchOption = UserOption> {
   queryKey: readonly unknown[];
-  queryFn: (debouncedQuery: string) => Promise<UserOption[]>;
+  queryFn: (debouncedQuery: string) => Promise<O[]>;
   /** 除下拉打开外的额外开关; 默认 true。 */
   enabled?: boolean;
   /** 空搜索词也请求; 交接候选人打开即拉取。默认 false。 */
@@ -39,25 +75,31 @@ const OPTION_BASE_CLASS =
 
 const DEFAULT_DEBOUNCE_MS = 250;
 
-interface UserComboboxOptions {
+interface UserComboboxOptions<O extends UserSearchOption> {
   query: string;
   /** 控制台 user-options 的 purpose; 与 optionSource 二选一。 */
   purpose?: UserSearchPurpose;
+  /**
+   * 连同尚无账号的通讯录人员一起搜(`include_directory=true`, 仅 employee 口径)。
+   * 只有直接授权页打开; 候选类型必须是 `UserSearchOption`。
+   */
+  includeDirectory?: boolean;
   /** 自定义候选源; 提供时不再打 user-options。 */
-  optionSource?: UserOptionQuerySource;
+  optionSource?: UserOptionQuerySource<O>;
   excludedUserIds?: string[];
   debounceMs?: number;
   navigateWhenClosed: boolean;
   openOnArrowDown: boolean;
   closeOnPick: boolean;
-  onPick: (option: UserOption) => void;
+  onPick: (option: O) => void;
   onEnterWithoutOption?: () => void;
   onEmptyBackspace?: () => void;
 }
 
-export function useUserCombobox({
+export function useUserCombobox<O extends UserSearchOption = UserOption>({
   query,
   purpose,
+  includeDirectory = false,
   optionSource,
   excludedUserIds = EMPTY_USER_IDS,
   debounceMs = DEFAULT_DEBOUNCE_MS,
@@ -67,13 +109,16 @@ export function useUserCombobox({
   onPick,
   onEnterWithoutOption,
   onEmptyBackspace,
-}: UserComboboxOptions) {
+}: UserComboboxOptions<O>) {
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const containerRef = useCloseOnOutsidePointerDown(() => setOpen(false));
-  const optionsQuery = useUserOptionQuery(query, open, purpose, optionSource, debounceMs);
+  const optionsQuery = useUserOptionQuery(query, open, purpose, includeDirectory, optionSource, debounceMs);
   const options = useMemo(
-    () => (optionsQuery.data ?? []).filter((option) => !excludedUserIds.includes(option.user_id)),
+    () =>
+      (optionsQuery.data ?? []).filter(
+        (option) => option.user_id === null || !excludedUserIds.includes(option.user_id),
+      ),
     [excludedUserIds, optionsQuery.data],
   );
 
@@ -115,7 +160,7 @@ export function useUserCombobox({
     }
   };
 
-  const pick = (option: UserOption) => {
+  const pick = (option: O) => {
     onPick(option);
     if (closeOnPick) {
       setOpen(false);
@@ -137,11 +182,12 @@ export function useUserCombobox({
 
 const EMPTY_USER_IDS: string[] = [];
 
-function useUserOptionQuery(
+function useUserOptionQuery<O extends UserSearchOption>(
   query: string,
   open: boolean,
   purpose: UserSearchPurpose | undefined,
-  optionSource: UserOptionQuerySource | undefined,
+  includeDirectory: boolean,
+  optionSource: UserOptionQuerySource<O> | undefined,
   debounceMs: number,
 ) {
   const [debouncedQuery, setDebouncedQuery] = useState(query);
@@ -158,18 +204,19 @@ function useUserOptionQuery(
   return useQuery({
     queryKey: optionSource
       ? [...optionSource.queryKey, debouncedQuery]
-      : ["console", "user-search", purpose, debouncedQuery],
-    queryFn: async (): Promise<UserOption[]> => {
+      : ["console", "user-search", purpose, includeDirectory, debouncedQuery],
+    queryFn: async (): Promise<O[]> => {
       if (optionSource) {
         return optionSource.queryFn(debouncedQuery);
       }
       if (!purpose) {
         throw new Error("useUserCombobox 需要 purpose 或 optionSource");
       }
-      const payload = await apiRequest<ListPayload<UserOption>>(
-        `/console/api/v1/user-options?q=${encodeURIComponent(debouncedQuery)}&purpose=${purpose}`,
+      const directoryParam = includeDirectory ? "&include_directory=true" : "";
+      const payload = await apiRequest<ListPayload<O>>(
+        `/console/api/v1/user-options?q=${encodeURIComponent(debouncedQuery)}&purpose=${purpose}${directoryParam}`,
       );
-      return itemsFromPayload<UserOption>(payload);
+      return itemsFromPayload<O>(payload);
     },
     enabled,
     placeholderData: (previous) => previous,
@@ -215,7 +262,7 @@ function useCloseOnOutsidePointerDown(onClose: () => void) {
   return containerRef;
 }
 
-export function UserOptionList({
+export function UserOptionList<O extends UserSearchOption>({
   listId,
   options,
   isLoading,
@@ -229,12 +276,12 @@ export function UserOptionList({
   emptyTestId,
 }: {
   listId: string;
-  options: UserOption[];
+  options: O[];
   isLoading: boolean;
   error: Error | null;
   highlightIndex: number;
-  getOptionId: (option: UserOption) => string;
-  onPick: (option: UserOption) => void;
+  getOptionId: (option: O) => string;
+  onPick: (option: O) => void;
   onRetry: () => void;
   emptyLabel?: string;
   loadingLabel?: string;
@@ -272,7 +319,7 @@ export function UserOptionList({
       {!error
         ? options.map((option, index) => (
             <UserOptionRow
-              key={option.user_id}
+              key={userOptionKey(option)}
               option={option}
               optionId={getOptionId(option)}
               highlighted={index === highlightIndex}
@@ -284,16 +331,16 @@ export function UserOptionList({
   );
 }
 
-export function UserOptionRow({
+export function UserOptionRow<O extends UserSearchOption>({
   option,
   optionId,
   highlighted,
   onPick,
 }: {
-  option: UserOption;
+  option: O;
   optionId: string;
   highlighted: boolean;
-  onPick: (option: UserOption) => void;
+  onPick: (option: O) => void;
 }) {
   const { t } = useI18n();
   const secondary = userSecondaryLabel(option, t);
@@ -311,7 +358,12 @@ export function UserOptionRow({
         onPick(option);
       }}
     >
-      <span className="text-body font-medium">{userOptionDisplayName(option)}</span>
+      <span className="flex items-center gap-1.5">
+        <span className="text-body font-medium">{userOptionDisplayName(option)}</span>
+        {option.account_kind === "directory_unregistered" ? (
+          <Badge tone="faint">{t("userSelect.notSignedIn")}</Badge>
+        ) : null}
+      </span>
       {secondary ? <TruncatedText className="w-full text-xs text-ink-faint" text={secondary} /> : null}
     </div>
   );
@@ -328,17 +380,27 @@ export const LOCAL_ADMIN_USER_ID_PREFIX = "local-admin:";
  * 次行留空, 不得标成「本地用户」。既不是本地账号又没有部门时返回空串, 调用方不要渲染次行。
  */
 export function userSecondaryLabel(
-  option: Pick<UserOption, "user_id"> & { department?: string | null; account_kind?: AccountKind | null },
+  option: {
+    user_id: string | null;
+    department?: string | null;
+    account_kind?: UserSearchOption["account_kind"] | null;
+  },
   t: Translator,
 ): string {
-  if (option.account_kind === "local" || option.user_id.startsWith(LOCAL_ADMIN_USER_ID_PREFIX)) {
+  if (option.account_kind === "local" || option.user_id?.startsWith(LOCAL_ADMIN_USER_ID_PREFIX)) {
     return t("user.localAccount");
   }
   return option.department?.trim() ?? "";
 }
 
-/** 候选行主标题: 只展示姓名(缺失时退回用户 ID)。部门走次行, 避免「姓名 · 部门」与次行重复。 */
-export function userOptionDisplayName(option: UserOption): string {
+/**
+ * 候选行主标题: 只展示姓名(缺失时退回用户 ID; 尚无账号的通讯录人员退回钉钉 userid)。
+ * 部门走次行, 避免「姓名 · 部门」与次行重复。
+ */
+export function userOptionDisplayName(option: UserSearchOption): string {
+  if (option.user_id === null) {
+    return option.name || option.directory_user.user_id;
+  }
   return userOptionName(option);
 }
 

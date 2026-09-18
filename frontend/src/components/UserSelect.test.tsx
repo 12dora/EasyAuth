@@ -93,6 +93,75 @@ describe("UserSelect", () => {
     });
   });
 
+  test("默认不带 include_directory; 显式打开后才搜通讯录, 尚无账号的人带「未登录」标签", async () => {
+    const user = userEvent.setup();
+    const fetchMock = stubDirectoryUserOptions();
+
+    const { unmount } = renderWithProviders(<UserSearchInput id="owner" value="张" onChange={vi.fn()} />);
+    await user.click(screen.getByRole("combobox"));
+    await screen.findByRole("option", { name: /张三/ });
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("include_directory");
+    unmount();
+
+    renderWithProviders(
+      <UserSearchInput
+        id="owner"
+        value="张"
+        onChange={vi.fn()}
+        includeDirectory
+        onSelectDirectoryOption={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("combobox"));
+    const directoryOption = await screen.findByRole("option", { name: /张甜/ });
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe(
+      "/console/api/v1/user-options?q=%E5%BC%A0&purpose=employee&include_directory=true",
+    );
+    expect(within(directoryOption).getByText("未登录")).toBeVisible();
+    expect(within(directoryOption).getByText("研发部")).toBeVisible();
+    expect(directoryOption).toHaveAttribute("id", "owner-listbox-option-directory%3Adingtalk%3Adingcorp%3A0220");
+    expect(within(screen.getByRole("option", { name: /张三/ })).queryByText("未登录")).toBeNull();
+  });
+
+  test("选中尚无账号的通讯录人员走 onSelectDirectoryOption, 不把空 ID 交给 onChange", async () => {
+    const user = userEvent.setup();
+    stubDirectoryUserOptions();
+    const onChange = vi.fn();
+    const onSelectOption = vi.fn();
+    const onSelectDirectoryOption = vi.fn();
+
+    renderWithProviders(
+      <UserSearchInput
+        id="owner"
+        value="张"
+        onChange={onChange}
+        onSelectOption={onSelectOption}
+        includeDirectory
+        onSelectDirectoryOption={onSelectDirectoryOption}
+      />,
+    );
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByRole("option", { name: /张甜/ }));
+
+    expect(onSelectDirectoryOption).toHaveBeenCalledWith(DIRECTORY_ONLY_OPTION);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onSelectOption).not.toHaveBeenCalled();
+  });
+
+  test("选中的通讯录人员(value 为空)在输入框里显示姓名", () => {
+    renderWithProviders(
+      <UserSearchInput
+        id="owner"
+        value=""
+        onChange={vi.fn()}
+        selectedOption={DIRECTORY_ONLY_OPTION}
+        includeDirectory
+        onSelectDirectoryOption={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("combobox")).toHaveValue("张甜");
+  });
+
   test("选中候选后输入框显示姓名, 部门落到 Field hint, 不再显示用户 ID", async () => {
     const user = userEvent.setup();
     stubUserOptions();
@@ -373,6 +442,36 @@ function SearchInputHarness() {
       </Field>
     </>
   );
+}
+
+const DIRECTORY_ONLY_OPTION = {
+  user_id: null,
+  name: "张甜",
+  department: "研发部",
+  account_kind: "directory_unregistered" as const,
+  avatar_url: "",
+  directory_user: { source_slug: "dingtalk", corp_id: "dingcorp", user_id: "0220" },
+};
+
+/** include_directory 搜索: 已有账号的人在前, 通讯录里尚无账号的人在后。 */
+function stubDirectoryUserOptions() {
+  const fetchMock = vi.fn<typeof fetch>(async () =>
+    jsonResponse({
+      data: [
+        {
+          user_id: "u-1",
+          name: "张三",
+          department: "销售部",
+          account_kind: "directory",
+          avatar_url: "",
+          directory_user: { source_slug: "dingtalk", corp_id: "dingcorp", user_id: "0110" },
+        },
+        DIRECTORY_ONLY_OPTION,
+      ],
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 function stubUserOptions() {

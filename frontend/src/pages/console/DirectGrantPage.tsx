@@ -95,7 +95,9 @@ function DirectGrantHeader({ page }: { page: ReturnType<typeof useDirectGrant> }
           selectedOption={grantee}
           // 手输 ID 没有可信姓名, 清掉上一次候选带来的展示名。
           onChange={(value) => page.changeGrantee(value, null)}
+          includeDirectory
           onSelectOption={(option) => page.changeGrantee(option.user_id, option)}
+          onSelectDirectoryOption={page.selectDirectoryGrantee}
           onResolvedOptionChange={(option) => {
             if (option) {
               page.setGrantee(option);
