@@ -350,17 +350,29 @@ def test_include_directory_forbidden_for_non_superuser() -> None:
     assert error["code"] == "PERMISSION_DENIED"
 
 
-def test_include_directory_does_not_pinyin_match_unregistered() -> None:
+def test_include_directory_pinyin_matches_unregistered() -> None:
     client = _logged_in_superuser("include-dir-pinyin-admin")
-    _unregistered(user_id="u-pinyin", name="胡玉琴未登录")
+    person = _unregistered(user_id="u-pinyin", name="张甜")
 
-    response = client.get(
+    full_response = client.get(
         USER_OPTIONS_API_URL,
-        {"q": "hyq", "include_directory": "true"},
+        {"q": "zhangtian", "include_directory": "true"},
+    )
+    prefix_response = client.get(
+        USER_OPTIONS_API_URL,
+        {"q": "zhang", "include_directory": "true"},
+    )
+    initials_response = client.get(
+        USER_OPTIONS_API_URL,
+        {"q": "zt", "include_directory": "true"},
     )
 
-    assert response.status_code == HTTPStatus.OK
-    assert response.json()["data"] == []
+    assert full_response.status_code == HTTPStatus.OK
+    assert prefix_response.status_code == HTTPStatus.OK
+    assert initials_response.status_code == HTTPStatus.OK
+    assert [item["directory_user"] for item in _items(full_response)] == [_triple(person)]
+    assert [item["directory_user"] for item in _items(prefix_response)] == [_triple(person)]
+    assert [item["directory_user"] for item in _items(initials_response)] == [_triple(person)]
 
 
 def _items(response: HttpResponse) -> list[dict[str, JsonValue]]:

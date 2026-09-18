@@ -250,6 +250,40 @@ def test_directory_sync_backfills_empty_user_mirror_avatar_url() -> None:
     assert user.avatar_url == "https://static-legacy.dingtalk.com/media/user-avatar.jpg"
 
 
+def test_directory_sync_updates_dingtalk_user_name_pinyin() -> None:
+    first = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-pinyin",
+                "name": "张甜",
+                "status": "active",
+            }
+        ],
+    )
+    _ = sync_authentik_dingtalk_directory(first)
+    user = DingTalkUserMirror.objects.get(corp_id="corp-1", user_id="user-pinyin")
+    assert user.name_pinyin == "zhangtian"
+    assert user.name_pinyin_initials == "zt"
+
+    renamed = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-pinyin",
+                "name": "李四",
+                "status": "active",
+            }
+        ],
+    )
+    renamed.generation = 2
+    _ = sync_authentik_dingtalk_directory(renamed)
+    user.refresh_from_db()
+    assert user.name == "李四"
+    assert user.name_pinyin == "lisi"
+    assert user.name_pinyin_initials == "ls"
+
+
 def test_directory_sync_user_mirror_updates_are_scoped_by_source() -> None:
     _ = UserMirror.objects.create(
         authentik_user_id="ak-source-a",

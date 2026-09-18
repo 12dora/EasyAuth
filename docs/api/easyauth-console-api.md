@@ -430,8 +430,10 @@ UserMirror 的人员，因此只有 `directory` 或 `local`。
 `include_directory=true` 时，结果 = 既有 UserMirror 命中（排在前面，形状见下）+ 钉钉通讯录人员
 （`DingTalkUserMirror`：`status=active`、`is_tombstone=false`，且不存在相同
 `(dingtalk_source_slug, dingtalk_corp_id, dingtalk_userid)` 三元组的 UserMirror）。
-未注册通讯录人员只按姓名（包含）、工号（`employee_number`，大小写不敏感全等）和钉钉
-`user_id`（精确全等）匹配 `q`，不按拼音匹配。总数仍受既有 `limit` 截断。
+未注册通讯录人员按姓名（包含）、工号（`employee_number`，大小写不敏感全等）和钉钉
+`user_id`（精确全等）匹配 `q`；纯字母数字可含空格时另按姓名全拼/首字母匹配，规则与已注册用户相同
+（如 `zhangtian`、`zhang`、`zt` 可命中「张甜」）。不按邮箱或 Authentik 用户 ID 匹配。
+总数仍受既有 `limit` 截断。
 
 带通讯录时的项形状（UserMirror 命中也带上新字段）：
 

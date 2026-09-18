@@ -60,6 +60,13 @@ def test_apply_user_search_matches_name_id_and_pinyin_initials() -> None:
 
 def test_directory_user_search_q_matches_name_employee_exact_userid() -> None:
     query = "0220abcd"
+    expected = Q(name__icontains=query) | Q(employee_number__iexact=query) | Q(user_id=query)
+    expected |= Q(name_pinyin__icontains=query) | Q(name_pinyin_initials__icontains=query)
+    assert directory_user_search_q(query) == expected
+
+
+def test_directory_user_search_q_skips_pinyin_for_non_ascii() -> None:
+    query = "张甜"
     assert directory_user_search_q(query) == (
         Q(name__icontains=query) | Q(employee_number__iexact=query) | Q(user_id=query)
     )

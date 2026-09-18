@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from django.db.models import Q
 
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.accounts.pinyin import name_pinyin_fields, pinyin_query_filter
 
 pytestmark = pytest.mark.django_db
@@ -82,3 +82,100 @@ def test_user_mirror_update_and_bulk_update_fill_pinyin_when_name_written() -> N
     assert bulk == 1
     assert user.name_pinyin == "lisib"
     assert user.name_pinyin_initials == "lsb"
+
+
+def test_dingtalk_user_mirror_save_fills_pinyin_when_name_set() -> None:
+    user = DingTalkUserMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-pinyin-save",
+        user_id="user-pinyin-save",
+        name="张甜",
+    )
+
+    assert user.name_pinyin == "zhangtian"
+    assert user.name_pinyin_initials == "zt"
+
+    user.name = "李四"
+    user.save(update_fields=["name", "last_synced_at"])
+    user.refresh_from_db()
+
+    assert user.name_pinyin == "lisi"
+    assert user.name_pinyin_initials == "ls"
+
+
+def test_dingtalk_user_mirror_update_and_bulk_update_fill_pinyin_when_name_written() -> None:
+    user = DingTalkUserMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-pinyin-update",
+        user_id="user-pinyin-update",
+        name="旧名",
+    )
+
+    updated = DingTalkUserMirror.objects.filter(pk=user.pk).update(name="张甜")
+    user.refresh_from_db()
+    assert updated == 1
+    assert user.name_pinyin == "zhangtian"
+    assert user.name_pinyin_initials == "zt"
+
+    user.name = "李四B"
+    bulk = DingTalkUserMirror.objects.bulk_update([user], ["name"])
+    user.refresh_from_db()
+    assert bulk == 1
+    assert user.name_pinyin == "lisib"
+    assert user.name_pinyin_initials == "lsb"
+
+
+def test_user_mirror_bulk_create_fills_pinyin_on_insert_and_upsert() -> None:
+    created = UserMirror.objects.bulk_create(
+        [UserMirror(authentik_user_id="ak-pinyin-bulk-create", name="胡玉琴A")],
+    )
+    assert len(created) == 1
+    created[0].refresh_from_db()
+    assert created[0].name_pinyin == "huyuqina"
+    assert created[0].name_pinyin_initials == "hyqa"
+
+    _ = UserMirror.objects.bulk_create(
+        [UserMirror(authentik_user_id="ak-pinyin-bulk-create", name="李四B")],
+        update_conflicts=True,
+        update_fields=["name"],
+        unique_fields=["authentik_user_id"],
+    )
+    created[0].refresh_from_db()
+    assert created[0].name == "李四B"
+    assert created[0].name_pinyin == "lisib"
+    assert created[0].name_pinyin_initials == "lsb"
+
+
+def test_dingtalk_user_mirror_bulk_create_fills_pinyin_on_insert_and_upsert() -> None:
+    created = DingTalkUserMirror.objects.bulk_create(
+        [
+            DingTalkUserMirror(
+                source_slug="dingtalk",
+                corp_id="corp-pinyin-bulk-create",
+                user_id="user-pinyin-bulk-create",
+                name="张甜",
+            ),
+        ],
+    )
+    assert len(created) == 1
+    created[0].refresh_from_db()
+    assert created[0].name_pinyin == "zhangtian"
+    assert created[0].name_pinyin_initials == "zt"
+
+    _ = DingTalkUserMirror.objects.bulk_create(
+        [
+            DingTalkUserMirror(
+                source_slug="dingtalk",
+                corp_id="corp-pinyin-bulk-create",
+                user_id="user-pinyin-bulk-create",
+                name="李四B",
+            ),
+        ],
+        update_conflicts=True,
+        update_fields=["name"],
+        unique_fields=["source_slug", "corp_id", "user_id"],
+    )
+    created[0].refresh_from_db()
+    assert created[0].name == "李四B"
+    assert created[0].name_pinyin == "lisib"
+    assert created[0].name_pinyin_initials == "lsb"

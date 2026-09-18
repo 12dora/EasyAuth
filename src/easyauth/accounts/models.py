@@ -12,7 +12,7 @@ from easyauth.accounts.pinyin import name_pinyin_fields
 from easyauth.config.crypto import EncryptedCharField
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Collection, Iterable
     from datetime import date, datetime
 
     from django.db.models.base import ModelBase
@@ -30,56 +30,7 @@ USER_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
-class UserMirrorQuerySet(models.QuerySet["UserMirror"]):
-    @override
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise ValidationError(USER_MIRROR_DELETE_ERROR)
-
-    @override
-    def update(self, **kwargs: object) -> int:
-        name = kwargs.get("name")
-        if isinstance(name, str):
-            pinyin, initials = name_pinyin_fields(name)
-            kwargs["name_pinyin"] = pinyin
-            kwargs["name_pinyin_initials"] = initials
-        return super().update(**kwargs)
-
-    @override
-    def bulk_update(
-        self,
-        objs: Iterable[UserMirror],
-        fields: Iterable[str],
-        batch_size: int | None = None,
-    ) -> int:
-        field_names = list(fields)
-        to_update: Iterable[UserMirror] = objs
-        if "name" in field_names:
-            to_update = list(objs)
-            for obj in to_update:
-                pinyin, initials = name_pinyin_fields(obj.name)
-                obj.name_pinyin = pinyin
-                obj.name_pinyin_initials = initials
-            if "name_pinyin" not in field_names:
-                field_names.append("name_pinyin")
-            if "name_pinyin_initials" not in field_names:
-                field_names.append("name_pinyin_initials")
-        return super().bulk_update(to_update, field_names, batch_size=batch_size)
-
-
-class UserMirrorManager(models.Manager["UserMirror"]):
-    @override
-    def get_queryset(self) -> UserMirrorQuerySet:
-        return UserMirrorQuerySet(self.model, using=self._db)
-
-
-class UserMirror(models.Model):
-    if TYPE_CHECKING:
-        id: int = 0
-
-    authentik_user_id: models.CharField[str, str] = models.CharField(
-        max_length=128,
-        unique=True,
-    )
+class NamePinyinFieldsMixin(models.Model):
     name: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     name_pinyin: models.CharField[str, str] = models.CharField(
         max_length=768,
@@ -92,6 +43,123 @@ class UserMirror(models.Model):
         blank=True,
         default="",
         db_index=True,
+    )
+
+    class Meta:
+        abstract: ClassVar[bool] = True
+
+    @override
+    def save(
+        self,
+        *,
+        force_insert: bool | tuple[ModelBase, ...] = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: Iterable[str] | None = None,
+    ) -> None:
+        effective_update_fields = None if update_fields is None else set(update_fields)
+        if effective_update_fields is None or "name" in effective_update_fields:
+            pinyin, initials = name_pinyin_fields(self.name)
+            self.name_pinyin = pinyin
+            self.name_pinyin_initials = initials
+            if effective_update_fields is not None:
+                effective_update_fields.add("name_pinyin")
+                effective_update_fields.add("name_pinyin_initials")
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=effective_update_fields,
+        )
+
+
+class NamePinyinQuerySet[T: NamePinyinFieldsMixin](models.QuerySet[T]):
+    @override
+    def update(self, **kwargs: object) -> int:
+        name = kwargs.get("name")
+        if isinstance(name, str):
+            pinyin, initials = name_pinyin_fields(name)
+            kwargs["name_pinyin"] = pinyin
+            kwargs["name_pinyin_initials"] = initials
+        return super().update(**kwargs)
+
+    @override
+    def bulk_update(
+        self,
+        objs: Iterable[T],
+        fields: Iterable[str],
+        batch_size: int | None = None,
+    ) -> int:
+        field_names = list(fields)
+        to_update: Iterable[T] = objs
+        if "name" in field_names:
+            to_update = list(objs)
+            for obj in to_update:
+                pinyin, initials = name_pinyin_fields(obj.name)
+                obj.name_pinyin = pinyin
+                obj.name_pinyin_initials = initials
+            if "name_pinyin" not in field_names:
+                field_names.append("name_pinyin")
+            if "name_pinyin_initials" not in field_names:
+                field_names.append("name_pinyin_initials")
+        return super().bulk_update(to_update, field_names, batch_size=batch_size)
+
+    @override
+    def bulk_create(
+        self,
+        objs: Iterable[T],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Collection[str] | None = None,
+        unique_fields: Collection[str] | None = None,
+    ) -> list[T]:
+        to_create = list(objs)
+        for obj in to_create:
+            pinyin, initials = name_pinyin_fields(obj.name)
+            obj.name_pinyin = pinyin
+            obj.name_pinyin_initials = initials
+        effective_update_fields = None if update_fields is None else list(update_fields)
+        if effective_update_fields is not None and "name" in effective_update_fields:
+            if "name_pinyin" not in effective_update_fields:
+                effective_update_fields.append("name_pinyin")
+            if "name_pinyin_initials" not in effective_update_fields:
+                effective_update_fields.append("name_pinyin_initials")
+        return super().bulk_create(
+            to_create,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=effective_update_fields,
+            unique_fields=unique_fields,
+        )
+
+
+class NamePinyinManager[T: NamePinyinFieldsMixin](models.Manager[T]):
+    @override
+    def get_queryset(self) -> NamePinyinQuerySet[T]:
+        return NamePinyinQuerySet(self.model, using=self._db)
+
+
+class UserMirrorQuerySet(NamePinyinQuerySet["UserMirror"]):
+    @override
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ValidationError(USER_MIRROR_DELETE_ERROR)
+
+
+class UserMirrorManager(NamePinyinManager["UserMirror"]):
+    @override
+    def get_queryset(self) -> UserMirrorQuerySet:
+        return UserMirrorQuerySet(self.model, using=self._db)
+
+
+class UserMirror(NamePinyinFieldsMixin):
+    if TYPE_CHECKING:
+        id: int = 0
+
+    authentik_user_id: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        unique=True,
     )
     email: models.EmailField[str, str] = models.EmailField(blank=True)
     avatar_url: models.TextField[str, str] = models.TextField(blank=True, default="")
@@ -129,7 +197,8 @@ class UserMirror(models.Model):
         auto_now=True,
     )
 
-    class Meta:
+    class Meta(NamePinyinFieldsMixin.Meta):
+        abstract: ClassVar[bool] = False
         ordering: ClassVar[list[str]] = ["authentik_user_id"]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.CheckConstraint(
@@ -170,30 +239,6 @@ class UserMirror(models.Model):
         return self.authentik_user_id
 
     @override
-    def save(
-        self,
-        *,
-        force_insert: bool | tuple[ModelBase, ...] = False,
-        force_update: bool = False,
-        using: str | None = None,
-        update_fields: Iterable[str] | None = None,
-    ) -> None:
-        effective_update_fields = None if update_fields is None else set(update_fields)
-        if effective_update_fields is None or "name" in effective_update_fields:
-            pinyin, initials = name_pinyin_fields(self.name)
-            self.name_pinyin = pinyin
-            self.name_pinyin_initials = initials
-            if effective_update_fields is not None:
-                effective_update_fields.add("name_pinyin")
-                effective_update_fields.add("name_pinyin_initials")
-        super().save(
-            force_insert=force_insert,
-            force_update=force_update,
-            using=using,
-            update_fields=effective_update_fields,
-        )
-
-    @override
     def delete(
         self,
         using: str | None = None,
@@ -227,12 +272,11 @@ class DingTalkDepartmentMirror(models.Model):
         return f"{self.source_slug}:{self.corp_id}:{self.dept_id}"
 
 
-class DingTalkUserMirror(models.Model):
+class DingTalkUserMirror(NamePinyinFieldsMixin):
     source_slug: models.CharField[str, str] = models.CharField(max_length=128)
     corp_id: models.CharField[str, str] = models.CharField(max_length=128)
     user_id: models.CharField[str, str] = models.CharField(max_length=128)
     union_id: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
-    name: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     avatar: models.TextField[str, str] = models.TextField(blank=True, default="")
     title: models.CharField[str, str] = models.CharField(max_length=128, blank=True, default="")
     email: models.EmailField[str, str] = models.EmailField(blank=True, default="")
@@ -260,7 +304,8 @@ class DingTalkUserMirror(models.Model):
         auto_now=True,
     )
 
-    class Meta:
+    class Meta(NamePinyinFieldsMixin.Meta):
+        abstract: ClassVar[bool] = False
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
                 fields=["source_slug", "corp_id", "user_id"],
@@ -278,6 +323,9 @@ class DingTalkUserMirror(models.Model):
             ),
         ]
         ordering: ClassVar[list[str]] = ["source_slug", "corp_id", "user_id"]
+        base_manager_name: ClassVar[str] = "objects"
+
+    objects: ClassVar[NamePinyinManager[DingTalkUserMirror]] = NamePinyinManager()  # pyright: ignore[reportIncompatibleVariableOverride]
 
     @override
     def __str__(self) -> str:

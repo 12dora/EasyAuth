@@ -1,7 +1,8 @@
 """用户模糊检索: 姓名/拼音/用户 ID/邮箱/工号。
 
 控制台人员选项与授权明细 `user_query` 共用同一套匹配, 不得各写一份 icontains。
-通讯录未注册人员另用 `directory_user_search_q`: 姓名 icontains、工号 iexact、钉钉 user_id exact。
+通讯录未注册人员另用 `directory_user_search_q`: 姓名 icontains、工号 iexact、钉钉 user_id exact;
+纯字母数字另按全拼/首字母匹配, 规则与已注册用户相同。
 """
 
 from __future__ import annotations
@@ -31,11 +32,16 @@ def user_search_q(query: str, *, prefix: str = "") -> Q:
 
 
 def directory_user_search_q(query: str) -> Q:
-    """钉钉通讯录未注册人员匹配: 姓名子串、工号全等、钉钉 user_id 全等。
+    """钉钉通讯录未注册人员匹配: 姓名子串、工号全等、钉钉 user_id 全等; 纯字母数字另匹配拼音。
 
-    DingTalkUserMirror 无拼音列, 不得用 UserMirror 的拼音/邮箱/Authentik ID 规则冒充。
+    拼音规则与已注册用户相同(全拼/首字母 icontains); `pinyin_query_filter` 对非拼音查询返回 None。
+    不按邮箱或 Authentik 用户 ID 匹配。
     """
-    return Q(name__icontains=query) | Q(employee_number__iexact=query) | Q(user_id=query)
+    filters = Q(name__icontains=query) | Q(employee_number__iexact=query) | Q(user_id=query)
+    pinyin_filter = pinyin_query_filter(query)
+    if pinyin_filter is not None:
+        filters |= pinyin_filter
+    return filters
 
 
 def apply_user_search[T: Model](
