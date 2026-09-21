@@ -15,7 +15,6 @@ export const ENDPOINTS: Record<string, OperationSectionConfig> = {
     descriptionKey: "console.operations.accessRequests.description",
   },
   "access-grants": { titleKey: "nav.console.accessGrants", endpoint: "/console/api/v1/operations/access-grants" },
-  "dependency-health": { titleKey: "nav.console.dependencyHealth", endpoint: "/console/api/v1/operations/dependency-health" },
   "blocked-apps": {
     titleKey: "nav.console.blockedApps",
     endpoint: "/console/api/v1/lifecycle/handover-blocked-apps",

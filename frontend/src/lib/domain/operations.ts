@@ -91,10 +91,6 @@ export interface OperationRow {
   approvers?: OperationApprover[];
   /** 决定人显示名; 尚未决定时为空串。 */
   decided_by_name?: string;
-  component?: string;
-  summary?: string;
-  error_summary?: string;
-  last_checked_at?: string | null;
   // 审计日志(audit-logs)行字段: 与后端 audit_api._audit_item 序列化器一一对应, 审计行无 id。
   actor_type?: string;
   actor_id?: string;

@@ -18,11 +18,7 @@ import type { JsonValue, ListPayload } from "../../../lib/api";
 import type { AccessGrantRow } from "../../../lib/domain/accessGrantRow";
 import { accessGrantColumns, operationColumns, type OperationFilterValues } from "./operationColumns";
 import { SECTION_FILTER_MAPS, filterValuesFromSearchParams } from "./operationFilterMap";
-import {
-  useAccessRequestMutations,
-  useRevokeGrantMutation,
-  useHealthCheckMutation,
-} from "./operationMutations";
+import { useAccessRequestMutations, useRevokeGrantMutation } from "./operationMutations";
 import { operationsPayload, type OperationsPayload } from "./operationPayload";
 import { operationQueryString, SECTION_ORDERING_FIELDS, type OperationSectionConfig } from "./operationQuery";
 import type { AccessRequestAction, OperationNotice, OperationRow } from "./operationRow";
@@ -53,29 +49,20 @@ export type OperationsTableState =
 
 export function useOperationsSection(section: string, config: OperationSectionConfig) {
   const { t } = useI18n();
-  // 依赖健康返回非分页的 list_payload; 其余分区走后端分页, 需按分区区分表格模式。
-  const isPaginated = section !== "dependency-health";
   const isAccessGrants = section === "access-grants";
   const params = useOperationsSearchParams();
   const [pendingAction, setPendingAction] = useState<AccessRequestAction | null>(null);
   const [pendingRevokeGrant, setPendingRevokeGrant] = useState<AccessGrantRow | null>(null);
   const [operationNotice, setOperationNotice] = useState<OperationNotice | null>(null);
-  const queryString = isPaginated
-    ? operationQueryString(section, params.searchParams, params.pagination)
-    : "";
+  const queryString = operationQueryString(section, params.searchParams, params.pagination);
 
   const query = useQuery({
-    queryKey: isPaginated
-      ? ["console", "operations", section, queryString]
-      : ["console", "operations", section],
+    queryKey: ["console", "operations", section, queryString],
     queryFn: async (): Promise<OperationsPayload> => {
-      const payload = await apiRequest<ListPayload<JsonValue>>(
-        isPaginated ? `${config.endpoint}?${queryString}` : config.endpoint,
-      );
+      const payload = await apiRequest<ListPayload<JsonValue>>(`${config.endpoint}?${queryString}`);
       return operationsPayload(section, payload);
     },
   });
-  const healthCheckMutation = useHealthCheckMutation();
   const controls = { setPendingAction, setPendingRevokeGrant, setOperationNotice };
   const accessRequestMutations = useAccessRequestMutations(controls);
   const { revokeGrantMutation, openRevokeGrant } = useRevokeGrantMutation(controls);
@@ -122,16 +109,14 @@ export function useOperationsSection(section: string, config: OperationSectionCo
     }
   };
 
-  const tableProps = isPaginated
-    ? {
-        pagination: {
-          current: params.pagination.page,
-          pageSize: params.pagination.pageSize,
-          total: totalItems,
-        },
-        onChange,
-      }
-    : {};
+  const tableProps = {
+    pagination: {
+      current: params.pagination.page,
+      pageSize: params.pagination.pageSize,
+      total: totalItems,
+    },
+    onChange,
+  };
 
   const requestActionsDisabled =
     accessRequestMutations.decisionMutation.isPending ||
@@ -189,7 +174,6 @@ export function useOperationsSection(section: string, config: OperationSectionCo
     query,
     rowCount,
     table,
-    healthCheckMutation,
     operationNotice,
     pendingAction,
     closePendingAction: () => setPendingAction(null),
@@ -202,9 +186,6 @@ export function useOperationsSection(section: string, config: OperationSectionCo
 
 /** 行身份只能取自数据字段; 审计行没有 id, 用后端返回的事件要素组合。 */
 function sectionRowKey(section: string): (row: OperationRow) => string {
-  if (section === "dependency-health") {
-    return (row) => String(row.component);
-  }
   if (section === "audit") {
     return (row) => [row.created_at, row.event_type, row.actor_id, row.target_type, row.target_id].join("|");
   }

@@ -14,7 +14,7 @@ export const zhCN = {
 
   "settings.integration.title": "Authentik 统一认证",
   "settings.integration.cardDescription": "目录 API 地址与管理 token；留空回退到环境变量。",
-  "settings.integration.description": "配置 Authentik 地址与 API token，留空回退到环境变量配置。修改后可在依赖健康页发起立即检测验证连通性。",
+  "settings.integration.description": "配置 Authentik 地址与 API token，留空回退到环境变量配置。修改后可在状态健康页发起立即检测验证连通性。",
   "settings.integration.baseUrl": "Authentik Base URL",
   "settings.integration.baseUrlHint": "例如 https://auth.jiefakj.com；留空使用环境变量配置。",
   "settings.integration.baseUrlSourceHint": "当前值来自{source}；留空则回退到环境变量配置。",
@@ -29,7 +29,7 @@ export const zhCN = {
   "settings.integration.saveSuccess": "设置已保存",
   "settings.integration.saveFailed": "设置保存失败",
   "settings.integration.loadFailed": "设置加载失败",
-  "settings.integration.healthLink": "前往依赖健康",
+  "settings.integration.healthLink": "前往状态健康",
 
   "settings.dingtalk.appTitle": "钉钉 · 统一认证应用",
   "settings.dingtalk.appDescription": "用于目录同步、事件订阅与登录的企业内部应用。",
@@ -139,7 +139,7 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "settings.integration.title": "Authentik SSO",
   "settings.integration.cardDescription": "Directory API base URL and admin token; empty falls back to the environment.",
-  "settings.integration.description": "Configure the Authentik base URL and API token; empty fields fall back to environment variables. After changing, run an on-demand check on the dependency health page.",
+  "settings.integration.description": "Configure the Authentik base URL and API token; empty fields fall back to environment variables. After changing, run an on-demand check on the system health page.",
   "settings.integration.baseUrl": "Authentik Base URL",
   "settings.integration.baseUrlHint": "For example https://auth.jiefakj.com; leave empty to use the environment configuration.",
   "settings.integration.baseUrlSourceHint": "Current value comes from {source}; leave empty to fall back to the environment configuration.",
@@ -154,7 +154,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "settings.integration.saveSuccess": "Settings saved",
   "settings.integration.saveFailed": "Failed to save settings",
   "settings.integration.loadFailed": "Failed to load settings",
-  "settings.integration.healthLink": "Open dependency health",
+  "settings.integration.healthLink": "Open system health",
 
   "settings.dingtalk.appTitle": "DingTalk · SSO app",
   "settings.dingtalk.appDescription": "The internal app used for directory sync, event subscription, and login.",

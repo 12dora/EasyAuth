@@ -12,7 +12,7 @@
     "pages/console/lifecycle/OnboardingTemplateItemComposer.tsx:TemplateItemComposer": 148,
     "pages/console/lifecycle/useHandoverWizardExecution.ts:useHandoverWizardExecution": 121,
     "pages/console/onboarding/AutoOnboardPanel.tsx:AutoOnboardPanel": 123,
-    "pages/console/operations/useOperationsSection.ts:useOperationsSection": 148,
+    "pages/console/operations/useOperationsSection.ts:useOperationsSection": 136,
     "pages/console/useConsoleTeamDetail.ts:useConsoleTeamDetail": 142,
     "pages/console/workspace/connector/useConnectorMappings.ts:useConnectorMappings": 121,
     "pages/console/workspace/integration/NotificationChannelForm.tsx:NotificationChannelForm": 143,

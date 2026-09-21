@@ -53,16 +53,3 @@ export function auditAppKey(row: OperationRow): string {
   const appKey = row.metadata && typeof row.metadata === "object" ? row.metadata.app_key : undefined;
   return typeof appKey === "string" && appKey !== "" ? appKey : "-";
 }
-
-export function healthTone(status: string): "evergreen" | "amber" | "neutral" | "signal" {
-  if (status === "healthy") {
-    return "evergreen";
-  }
-  if (status === "warning") {
-    return "amber";
-  }
-  if (status === "unknown") {
-    return "neutral";
-  }
-  return "signal";
-}

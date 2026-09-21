@@ -15,6 +15,9 @@ import { zhCN as approvalsZhCN, en as approvalsEn } from "./messages/approvals";
 import { zhCN as peopleZhCN, en as peopleEn } from "./messages/people";
 import { zhCN as consoleDirectGrantZhCN, en as consoleDirectGrantEn } from "./messages/console-direct-grant";
 import { zhCN as consoleDepartmentGrantsZhCN, en as consoleDepartmentGrantsEn } from "./messages/console-department-grants";
+import { zhCN as systemHealthZhCN, en as systemHealthEn } from "./messages/systemHealth";
+import { zhCN as usageMonitorZhCN, en as usageMonitorEn } from "./messages/usageMonitor";
+import { zhCN as usageSettingsZhCN, en as usageSettingsEn } from "./messages/usageSettings";
 
 
 export type Locale = "zh-CN" | "en";
@@ -46,6 +49,9 @@ const zhCN = {
   ...peopleZhCN,
   ...consoleDirectGrantZhCN,
   ...consoleDepartmentGrantsZhCN,
+  ...systemHealthZhCN,
+  ...usageMonitorZhCN,
+  ...usageSettingsZhCN,
 } as const;
 
 export type MessageKey = keyof typeof zhCN;
@@ -68,6 +74,9 @@ const en: Record<MessageKey, string> = {
   ...peopleEn,
   ...consoleDirectGrantEn,
   ...consoleDepartmentGrantsEn,
+  ...systemHealthEn,
+  ...usageMonitorEn,
+  ...usageSettingsEn,
 };
 
 export const MESSAGES: Record<Locale, Record<MessageKey, string>> = {

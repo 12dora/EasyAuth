@@ -1,4 +1,4 @@
-import { Activity, RefreshCcw } from "lucide-react";
+import { RefreshCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
@@ -146,24 +146,12 @@ function OperationsHeaderActions({
   controller: OperationsSectionController;
 }) {
   const { t } = useI18n();
-  const { query, healthCheckMutation } = controller;
+  const { query } = controller;
 
   return (
-    <>
-      {controller.section === "dependency-health" ? (
-        <Button
-          variant="primary"
-          icon={<Activity size={16} />}
-          loading={healthCheckMutation.isPending}
-          onClick={() => healthCheckMutation.mutate()}
-        >
-          {t("ops.dependencyHealth.runCheck")}
-        </Button>
-      ) : null}
-      <Button icon={<RefreshCcw size={16} />} loading={query.isFetching} onClick={() => void query.refetch()}>
-        {t("common.refresh")}
-      </Button>
-    </>
+    <Button icon={<RefreshCcw size={16} />} loading={query.isFetching} onClick={() => void query.refetch()}>
+      {t("common.refresh")}
+    </Button>
   );
 }
 

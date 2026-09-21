@@ -25,7 +25,7 @@ export function ConsoleSettingsPage() {
         eyebrow={t("settingsPlaceholder.eyebrow")}
         title={t("settingsPlaceholder.console.title")}
         description={t("settings.integration.description")}
-        actions={<ButtonLink to="/console/operations/dependency-health">{t("settings.integration.healthLink")}</ButtonLink>}
+        actions={<ButtonLink to="/console/operations/system-health">{t("settings.integration.healthLink")}</ButtonLink>}
       />
       {settingsQuery.error ? (
         <StatusBanner live="alert" tone="signal" title={t("settings.integration.loadFailed")} message={(settingsQuery.error as Error).message} />

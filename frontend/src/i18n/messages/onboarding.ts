@@ -8,9 +8,6 @@ export const zhCN = {
   "ops.grantStatus.revoked": "已撤销",
   "ops.grantStatus.expired": "已过期",
 
-  "ops.dependencyHealth.runCheck": "立即检测",
-  "ops.dependencyHealth.runCheckFailed": "依赖检测执行失败",
-
   "manifest.current.title": "当前 Manifest",
   "manifest.current.description": "实时读取当前权限目录导出的 manifest，可直接编辑后保存为新版本。",
   "manifest.current.refresh": "刷新",
@@ -79,9 +76,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "ops.grantStatus.active": "Active",
   "ops.grantStatus.revoked": "Revoked",
   "ops.grantStatus.expired": "Expired",
-
-  "ops.dependencyHealth.runCheck": "Run check now",
-  "ops.dependencyHealth.runCheckFailed": "Dependency check failed",
 
   "manifest.current.title": "Current Manifest",
   "manifest.current.description": "Live view of the manifest exported from the current permission catalog; edit it directly and save as a new version.",

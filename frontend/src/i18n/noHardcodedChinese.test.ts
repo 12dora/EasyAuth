@@ -21,6 +21,8 @@ const GUARDED_FILES = [
   "components/shell/UserSummaryMenu.tsx",
   "components/shell/useUserSummaryMenu.ts",
   "pages/console/OperationsPage.tsx",
+  "pages/console/systemHealth/SystemHealthPage.tsx",
+  "pages/console/systemHealth/DependencyStatusTab.tsx",
   "pages/console/ConsoleAppWorkspace.tsx",
   "pages/console/ConsoleSettingsPage.tsx",
   "pages/console/ConsoleTeamList.tsx",

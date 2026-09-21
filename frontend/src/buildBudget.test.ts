@@ -17,7 +17,7 @@ describe("前端构建预算脚本", () => {
       });
 
       expect(output).toContain("前端构建预算通过");
-      expect(output).toContain("异步路由 chunk: 18");
+      expect(output).toContain("异步路由 chunk: 19");
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }
@@ -137,6 +137,7 @@ function requiredRoutes() {
     ["src/pages/console/DepartmentGrantsPage.tsx", "DepartmentGrantsPage"],
     ["src/pages/console/DirectGrantPage.tsx", "DirectGrantPage"],
     ["src/pages/console/OperationsPage.tsx", "OperationsPage"],
+    ["src/pages/console/systemHealth/SystemHealthPage.tsx", "SystemHealthPage"],
     ["src/pages/console/lifecycle/ConsolePeopleList.tsx", "ConsolePeopleList"],
     ["src/pages/console/lifecycle/HandoverTaskDetail.tsx", "HandoverTaskDetail"],
     ["src/pages/console/lifecycle/HandoverTaskList.tsx", "HandoverTaskList"],

@@ -2,8 +2,8 @@
  * 运营分区列表载荷的唯一归一化出口。
  *
  * 分区查询把后端的 `{ data, pagination }` 归一成带判别标签的 `OperationsPayload` 存进
- * react-query 缓存, 因此任何直接写这份缓存的地方(如依赖健康的「立即检测」)必须走
- * 同一个函数, 否则缓存里会混进原始信封, 表格读不出行。
+ * react-query 缓存, 因此任何直接写这份缓存的地方必须走同一个函数,
+ * 否则缓存里会混进原始信封, 表格读不出行。
  *
  * 授权明细的行按 A1 契约(`parseAccessGrantRow`)解析; 访问申请的审批人按
  * `parseOperationAccessRequestRow` 校验 account_kind; 审计行按
@@ -44,9 +44,6 @@ export function operationsPayload(section: string, payload: ListPayload<JsonValu
       rows: itemsFromPayload<JsonValue>(payload).map(parseAuditLogRow),
     };
   }
-  return {
-    kind: "generic",
-    pagination: payload.pagination,
-    rows: itemsFromPayload<OperationRow>(payload),
-  };
+  // 未知分区没有解析器可用, 与其静默返回未校验的行, 不如就地失败。
+  throw new Error(`Unknown operations section: ${section}`);
 }

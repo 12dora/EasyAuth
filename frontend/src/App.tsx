@@ -39,6 +39,9 @@ const ConsoleTeamList = lazy(() =>
 const OperationsPage = lazy(() =>
   import("./pages/console/OperationsPage").then((module) => ({ default: module.OperationsPage })),
 );
+const SystemHealthPage = lazy(() =>
+  import("./pages/console/systemHealth/SystemHealthPage").then((module) => ({ default: module.SystemHealthPage })),
+);
 const ConsolePeopleList = lazy(() =>
   import("./pages/console/lifecycle/ConsolePeopleList").then((module) => ({ default: module.ConsolePeopleList })),
 );
@@ -166,6 +169,8 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
         <Route path="/console/lifecycle/onboarding" element={isSuperuser ? <LazyRoute routeName="lifecycle"><OnboardingPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/approval-templates" element={isSuperuser ? <LazyRoute routeName="console"><ApprovalTemplatesPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/operations/approval-instances" element={isSuperuser ? <LazyRoute routeName="operations"><ApprovalInstancesPage /></LazyRoute> : <Navigate to="/console" replace />} />
+        {/* 页签由 ?tab= 承载, 不进路径; 静态段优先于下面的 :section 匹配。 */}
+        <Route path="/console/operations/system-health" element={isSuperuser ? <LazyRoute routeName="operations"><SystemHealthPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/operations/:section" element={isSuperuser ? <LazyRoute routeName="operations"><ParamScoped param="section"><OperationsPage /></ParamScoped></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/operations" element={<Navigate to="/console/operations/access-requests" replace />} />
         <Route path="/console/settings" element={<LazyRoute routeName="console"><ConsoleSettingsPage /></LazyRoute>} />

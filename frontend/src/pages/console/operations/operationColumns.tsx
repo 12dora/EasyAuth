@@ -25,14 +25,12 @@ import {
   accessRequestStatusLabel,
   badgeToneForAccessRequestStatus,
   grantStatusLabel,
-  healthStatusLabel,
 } from "../../../lib/status";
 import { requestTypeLabel } from "../../portal/components/portalApprovalFacts";
 import { ACCESS_GRANT_STATUSES, ACCESS_REQUEST_STATUSES, ALL_STATUSES_VALUE } from "./operationQuery";
 import {
   auditAppKey,
   auditPair,
-  healthTone,
   operationAppDisplayName,
   operationApproverNames,
   type AccessRequestActionType,
@@ -52,7 +50,7 @@ export interface AccessGrantColumnActions {
 /** 列 key -> 当前选中的筛选值(来自 URL), 交给 antd 做受控表头筛选。 */
 export type OperationFilterValues = Record<string, string[]>;
 
-/** 授权明细以外的分区(申请 / 审计 / 依赖健康)共用松散的运营行类型。 */
+/** 授权明细以外的分区(申请 / 审计)共用松散的运营行类型。 */
 export function operationColumns(
   section: string,
   t: Translator,
@@ -60,37 +58,10 @@ export function operationColumns(
   sort: ServerSortState,
   accessRequestActions?: AccessRequestColumnActions,
 ): ColumnsType<OperationRow> {
-  if (section === "dependency-health") {
-    return dependencyHealthColumns(t);
-  }
   if (section === "audit") {
     return auditColumns(t, filters, sort);
   }
   return accessRequestColumns(t, filters, sort, accessRequestActions);
-}
-
-function dependencyHealthColumns(t: Translator): ColumnsType<OperationRow> {
-  // 依赖健康是一次性返回的数组, 筛选与排序都在客户端完成。
-  return [
-    textColumn<OperationRow>({
-      key: "component",
-      title: t("console.operations.column.component"),
-      mono: true,
-      filter: true,
-      sorter: true,
-      width: 240,
-    }),
-    statusColumn<OperationRow>({
-      key: "status",
-      title: t("common.status"),
-      options: healthStatusOptions(t),
-      sorter: true,
-      width: 130,
-    }),
-    textColumn<OperationRow>({ key: "summary", title: t("console.operations.column.summary"), sorter: true }),
-    textColumn<OperationRow>({ key: "error_summary", title: t("console.operations.column.error"), sorter: true }),
-    dateTimeColumn<OperationRow>({ key: "last_checked_at", title: t("console.operations.column.checkedAt") }),
-  ];
 }
 
 function auditColumns(
@@ -445,15 +416,5 @@ function grantStatusOptions(t: Translator): StatusColumnOption[] {
     value: status,
     label: grantStatusLabel(t, status),
     tone: status === "active" ? "evergreen" : "neutral",
-  }));
-}
-
-const HEALTH_STATUSES = ["healthy", "warning", "unhealthy", "unknown"] as const;
-
-function healthStatusOptions(t: Translator): StatusColumnOption[] {
-  return HEALTH_STATUSES.map((status) => ({
-    value: status,
-    label: healthStatusLabel(t, status),
-    tone: healthTone(status),
   }));
 }

@@ -5,14 +5,13 @@ import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionD
 import { useToast } from "../../../components/ui/Toast";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { ApiError, apiRequest } from "../../../lib/api";
-import type { JsonObject, JsonValue, ListPayload } from "../../../lib/api";
+import type { JsonObject } from "../../../lib/api";
 import type { AccessGrantRow } from "../../../lib/domain/accessGrantRow";
 import {
   isActiveGrantNotFoundConflict,
   isDecisionCommittedError,
   isDepartmentSourcedGrantConflict,
 } from "./operationErrors";
-import { operationsPayload } from "./operationPayload";
 import type {
   AccessRequestAction,
   AccessRequestActionType,
@@ -24,29 +23,6 @@ export interface OperationPendingControls {
   setPendingAction: Dispatch<SetStateAction<AccessRequestAction | null>>;
   setPendingRevokeGrant: Dispatch<SetStateAction<AccessGrantRow | null>>;
   setOperationNotice: Dispatch<SetStateAction<OperationNotice | null>>;
-}
-
-export function useHealthCheckMutation() {
-  const { t } = useI18n();
-  const toast = useToast();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () =>
-      apiRequest<ListPayload<JsonValue>>(
-        "/console/api/v1/operations/dependency-health/checks",
-        { method: "POST" },
-      ),
-    // 检测结果直接写回分区缓存, 省掉一次列表往返; 形状必须与 queryFn 一致, 否则表格读不出行。
-    onSuccess: (payload) => {
-      queryClient.setQueryData(
-        ["console", "operations", "dependency-health"],
-        operationsPayload("dependency-health", payload),
-      );
-    },
-    onError: (error: Error) => {
-      toast.error(t("ops.dependencyHealth.runCheckFailed"), error.message);
-    },
-  });
 }
 
 export type AccessRequestMutations = ReturnType<typeof useAccessRequestMutations>;

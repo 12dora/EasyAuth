@@ -111,7 +111,7 @@ export const zhCN = {
   "nav.console.accessRequests": "待审批",
   "nav.console.accessGrants": "授权明细",
   "nav.console.approvalInstances": "审批实例",
-  "nav.console.dependencyHealth": "依赖健康",
+  "nav.console.systemHealth": "状态健康",
 
   "nav.portal.permissions": "权限",
   "nav.portal.myPermissions": "我的权限",
@@ -343,7 +343,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "nav.console.accessRequests": "Access Requests",
   "nav.console.accessGrants": "Access Grants",
   "nav.console.approvalInstances": "Approval Instances",
-  "nav.console.dependencyHealth": "Dependency Health",
+  "nav.console.systemHealth": "System Health",
 
   "nav.portal.permissions": "Permissions",
   "nav.portal.myPermissions": "My Permissions",

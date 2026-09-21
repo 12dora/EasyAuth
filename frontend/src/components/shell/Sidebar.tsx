@@ -52,7 +52,7 @@ const CONSOLE_GROUPS: NavGroupSpec[] = [
       { to: "/console/operations/access-requests", labelKey: "nav.console.accessRequests" },
       { to: "/console/operations/access-grants", labelKey: "nav.console.accessGrants" },
       { to: "/console/operations/approval-instances", labelKey: "nav.console.approvalInstances" },
-      { to: "/console/operations/dependency-health", labelKey: "nav.console.dependencyHealth" },
+      { to: "/console/operations/system-health", labelKey: "nav.console.systemHealth" },
       { to: "/console/operations/blocked-apps", labelKey: "nav.console.blockedApps" },
     ],
   },
