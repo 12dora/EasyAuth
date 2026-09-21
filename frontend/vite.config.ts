@@ -21,6 +21,14 @@ function packagePathAfterNodeModules(id: string): string | null {
   return id.slice(index + marker.length);
 }
 
+const RECHARTS_PACKAGE_PATTERN =
+  /^(recharts|recharts-scale|d3-[a-z-]+|victory-vendor|internmap|decimal\.js-light|fast-equals|react-smooth|eventemitter3|tiny-invariant|lodash|clsx|react-transition-group|dom-helpers|prop-types)\//;
+
+function isRechartsModule(id: string): boolean {
+  const rest = packagePathAfterNodeModules(id);
+  return rest !== null && RECHARTS_PACKAGE_PATTERN.test(rest);
+}
+
 function isAntdPickerModule(id: string): boolean {
   const rest = packagePathAfterNodeModules(id);
   if (rest === null) {
@@ -70,6 +78,11 @@ export default defineConfig(({ command }) => ({
             // 必须先于 antd 判定, 否则会回到同步 antd chunk。
             if (isAntdPickerModule(id)) {
               return "antd-picker";
+            }
+            // recharts 及其 d3 依赖只给状态健康「用量监控」趋势图用, 由 React.lazy 的
+            // UsageTrendChartImpl 异步拉取; 单独成块, 不进同步 vendor。
+            if (isRechartsModule(id)) {
+              return "recharts";
             }
             // antd 及其 rc-* 运行时体积远大于其余依赖, 单独成块,
             // 否则 vendor 会一次性突破同步 chunk 预算。

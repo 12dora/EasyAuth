@@ -17,8 +17,10 @@ const DEFAULT_BUDGETS = {
   // 实测 1732 KiB，上调到 1780 KiB；2026-09-13 运营日期范围控件引入 DatePicker + dayjs 后实测
   // 1886.5 KiB，选择器已拆到异步 antd-picker、同步 antd 未调额，总量上调到 1900 KiB；
   // 2026-09-13 晚人员头像(PersonAvatar)、审批类型列与截断提示落地后实测 1900.1 KiB，再上调到 1920 KiB；
+  // 2026-09-21 状态健康「用量监控」引入 recharts(含 d3, 404 KiB)并拆成仅趋势图懒加载的独立
+  // recharts chunk、新增 UsageMonitorTab 异步路由后实测 2419.8 KiB, 同步 chunk 均未调额, 总量上调到 2460 KiB；
   // 见 docs/operations/frontend-build-budget.md
-  totalJavaScriptRawBytes: 1920 * 1024,
+  totalJavaScriptRawBytes: 2460 * 1024,
 };
 
 /**
@@ -46,6 +48,7 @@ const REQUIRED_DYNAMIC_ROUTE_KEYS = [
   "src/pages/console/DepartmentGrantsPage.tsx",
   "src/pages/console/DirectGrantPage.tsx",
   "src/pages/console/OperationsPage.tsx",
+  "src/pages/console/systemHealth/SystemHealthPage.tsx",
   "src/pages/console/lifecycle/ConsolePeopleList.tsx",
   "src/pages/console/lifecycle/HandoverTaskDetail.tsx",
   "src/pages/console/lifecycle/HandoverTaskList.tsx",
