@@ -1,30 +1,32 @@
 from __future__ import annotations
 
-import asyncio
+import signal
 import threading
 from dataclasses import dataclass, field
 
 import pytest
-from dingtalk_stream import Credential, DingTalkStreamClient
+from dingtalk_stream import Credential
 
+from easyauth.integrations.dingtalk.errors import DingTalkCallBudgetExceededError
 from easyauth.integrations.dingtalk.stream_runner import (
+    STREAM_PAUSE_POLL_SECONDS,
+    STREAM_PAUSED_SKIP_OPEN_MESSAGE,
     STREAM_RECONNECT_HEALTHY_SECONDS,
     STREAM_RECONNECT_INITIAL_SECONDS,
     STREAM_RECONNECT_JITTER_RATIO,
     STREAM_RECONNECT_MAX_SECONDS,
-    SingleSessionDingTalkStreamClient,
     StreamClientTypeError,
     StreamOpenConnectionError,
     StreamReconnectContractError,
-    StreamStartForeverForbiddenError,
     StreamSupervisorHooks,
     apply_reconnect_jitter,
+    bind_stream_session,
     reconnect_base_seconds,
     reconnect_sleep_seconds,
-    run_one_stream_session,
     run_supervised_stream,
     supervisor_hooks_from_event,
 )
+from easyauth.integrations.dingtalk.stream_session import SingleSessionDingTalkStreamClient
 from easyauth.integrations.management.commands import run_dingtalk_stream as command_module
 from easyauth.integrations.management.commands.run_dingtalk_stream import Command
 
@@ -34,6 +36,7 @@ JUST_UNDER_HEALTHY_SECONDS = STREAM_RECONNECT_HEALTHY_SECONDS - 0.1
 JITTER_UNIT_HALF = 0.5
 JITTER_UNIT_NEAR_ONE = 0.999
 CAP_STREAK = 6
+OPEN_HANG_WALL_SECONDS = 70.0
 
 
 @dataclass(slots=True)
@@ -57,7 +60,7 @@ class _Probe:
     def sleep(self, delay: float) -> None:
         self.sleeps.append(delay)
 
-    def session(self) -> None:
+    def session(self) -> float:
         self.sessions += 1
         duration = (
             self.elapsed[self.sessions - 1] if isinstance(self.elapsed, list) else self.elapsed
@@ -65,6 +68,7 @@ class _Probe:
         self.now += duration
         if self.session_error is not None:
             raise self.session_error
+        return duration
 
     def run(self, *, unit: float = 0.0) -> None:
         run_supervised_stream(
@@ -125,6 +129,7 @@ def test_supervised_loop_applies_jitter_within_bounds() -> None:
 
 
 def test_healthy_session_resets_backoff() -> None:
+    # elapsed 是 WebSocket 已连接时长, 不是 open_connection 墙钟。
     probe = _Probe(
         elapsed=[
             SHORT_SESSION_SECONDS,
@@ -192,7 +197,7 @@ def test_session_exception_reconnects() -> None:
 def test_wrong_client_type_does_not_reconnect() -> None:
     probe = _Probe(stop_after_sleeps=3)
 
-    def session() -> None:
+    def session() -> float:
         probe.session()
         raise StreamClientTypeError
 
@@ -230,43 +235,168 @@ def test_event_sleep_returns_immediately_when_stopped() -> None:
     assert hooks.should_stop()
 
 
-def test_start_forever_is_forbidden() -> None:
-    client = SingleSessionDingTalkStreamClient(Credential("app-key", "app-secret"))
-    with pytest.raises(StreamStartForeverForbiddenError, match="start_forever"):
-        client.start_forever()
+def test_paused_stream_does_not_open_and_polls(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    probe = _Probe(stop_after_sleeps=2)
+    with caplog.at_level("WARNING"):
+        run_supervised_stream(
+            probe.session,
+            StreamSupervisorHooks(
+                should_stop=probe.should_stop,
+                sleep=probe.sleep,
+                clock=probe.clock,
+                unit_interval=lambda: 0.0,
+                stream_should_run=lambda: False,
+                pause_poll_seconds=STREAM_PAUSE_POLL_SECONDS,
+            ),
+        )
+    assert probe.sessions == 0
+    assert probe.sleeps == [STREAM_PAUSE_POLL_SECONDS, STREAM_PAUSE_POLL_SECONDS]
+    assert caplog.text.count(STREAM_PAUSED_SKIP_OPEN_MESSAGE) == 1
 
 
-def test_run_one_session_rejects_sdk_default_client() -> None:
-    client = DingTalkStreamClient(Credential("app-key", "app-secret"))
-    with pytest.raises(StreamClientTypeError, match="SingleSessionDingTalkStreamClient"):
-        run_one_stream_session(client)
+def test_paused_stream_opens_after_resume() -> None:
+    states = [False, False, True]
+
+    def should_run() -> bool:
+        return states.pop(0) if states else True
+
+    probe = _Probe(stop_after_sessions=1)
+    run_supervised_stream(
+        probe.session,
+        StreamSupervisorHooks(
+            should_stop=probe.should_stop,
+            sleep=probe.sleep,
+            clock=probe.clock,
+            unit_interval=lambda: 0.0,
+            stream_should_run=should_run,
+            pause_poll_seconds=STREAM_PAUSE_POLL_SECONDS,
+        ),
+    )
+    assert probe.sessions == 1
+    assert probe.sleeps == [STREAM_PAUSE_POLL_SECONDS, STREAM_PAUSE_POLL_SECONDS]
 
 
-def test_single_session_start_fails_fast_when_open_returns_none(
+def test_open_refusal_uses_reconnect_backoff(caplog: pytest.LogCaptureFixture) -> None:
+    probe = _Probe(session_error=DingTalkCallBudgetExceededError(), stop_after_sleeps=2)
+    with caplog.at_level("WARNING"):
+        probe.run()
+    assert probe.sessions == 2
+    assert probe.sleeps == [5.0, 10.0]
+    assert "用量策略拒绝" in caplog.text
+
+
+def test_open_hang_timeout_does_not_reset_streak_when_wall_time_exceeds_healthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = SingleSessionDingTalkStreamClient(Credential("app-key", "app-secret"))
-    monkeypatch.setattr(client, "open_connection", lambda: None)
+    now = {"t": 0.0}
     sleeps: list[float] = []
 
-    async def fail_if_slept(_delay: float) -> None:
-        sleeps.append(_delay)
-        message = "single-session start must not retry inside the SDK loop"
-        raise AssertionError(message)
+    def fake_open() -> dict[str, object]:
+        now["t"] += OPEN_HANG_WALL_SECONDS
+        raise StreamOpenConnectionError
 
-    monkeypatch.setattr(asyncio, "sleep", fail_if_slept)
-    with pytest.raises(StreamOpenConnectionError, match="打开连接失败"):
-        asyncio.run(client.start())
-    assert sleeps == []
-
-
-def test_single_session_start_fails_fast_on_incomplete_connection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
     client = SingleSessionDingTalkStreamClient(Credential("app-key", "app-secret"))
-    monkeypatch.setattr(client, "open_connection", lambda: {"endpoint": "wss://example.test"})
-    with pytest.raises(StreamOpenConnectionError, match="打开连接失败"):
-        asyncio.run(client.start())
+    monkeypatch.setattr(client, "open_connection", fake_open)
+    run_supervised_stream(
+        bind_stream_session(client),
+        StreamSupervisorHooks(
+            should_stop=lambda: len(sleeps) >= 3,
+            sleep=sleeps.append,
+            clock=lambda: now["t"],
+            unit_interval=lambda: 0.0,
+        ),
+    )
+    assert sleeps == [5.0, 10.0, 20.0]
+    assert now["t"] == OPEN_HANG_WALL_SECONDS * 3
+
+
+def test_stop_during_backoff_sleep_skips_next_session() -> None:
+    stopped = {"v": False}
+    sleeps: list[float] = []
+    sessions = {"n": 0}
+
+    def session() -> float:
+        sessions["n"] += 1
+        return 0.0
+
+    def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        stopped["v"] = True
+
+    run_supervised_stream(
+        session,
+        StreamSupervisorHooks(
+            should_stop=lambda: stopped["v"],
+            sleep=sleep,
+            unit_interval=lambda: 0.0,
+        ),
+    )
+    assert sessions["n"] == 1
+    assert sleeps == [5.0]
+
+
+def test_stop_while_policy_paused_exits_without_opening() -> None:
+    stopped = {"v": False}
+    sleeps: list[float] = []
+    sessions = {"n": 0}
+
+    def session() -> float:
+        sessions["n"] += 1
+        return 0.0
+
+    def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        stopped["v"] = True
+
+    run_supervised_stream(
+        session,
+        StreamSupervisorHooks(
+            should_stop=lambda: stopped["v"],
+            sleep=sleep,
+            unit_interval=lambda: 0.0,
+            stream_should_run=lambda: False,
+        ),
+    )
+    assert sessions["n"] == 0
+    assert sleeps == [STREAM_PAUSE_POLL_SECONDS]
+
+
+def test_sigterm_handler_only_sets_the_event() -> None:
+    stop = threading.Event()
+    handle = command_module.stop_only_signal_handler(stop)
+    handle(signal.SIGTERM, None)
+    assert stop.is_set()
+
+
+def test_sigint_handler_only_sets_the_event() -> None:
+    stop = threading.Event()
+    handle = command_module.stop_only_signal_handler(stop)
+    handle(signal.SIGINT, None)
+    assert stop.is_set()
+
+
+def test_command_wires_pause_and_open_metering(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def start_forever(self) -> None:
+            return None
+
+    monkeypatch.setattr(command_module, "build_stream_client", lambda: _Client())
+    monkeypatch.setattr(command_module, "_install_shutdown_signals", lambda _stop: None)
+    monkeypatch.setattr(command_module, "heartbeat_loop", lambda _stop: None)
+
+    def fake_supervised(session: object, hooks: StreamSupervisorHooks) -> None:
+        captured["hooks"] = hooks
+        captured["session"] = session
+
+    monkeypatch.setattr(command_module, "run_supervised_stream", fake_supervised)
+    Command().handle()
+    hooks = captured["hooks"]
+    assert isinstance(hooks, StreamSupervisorHooks)
+    assert hooks.stream_should_run is command_module.stream_should_run
 
 
 def test_command_uses_supervised_loop_not_sdk_forever(
@@ -289,3 +419,34 @@ def test_command_uses_supervised_loop_not_sdk_forever(
     monkeypatch.setattr(command_module, "run_supervised_stream", fake_supervised)
     Command().handle()
     assert calls == ["supervised"]
+
+
+def test_command_bind_passes_stop_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def start_forever(self) -> None:
+            return None
+
+    monkeypatch.setattr(command_module, "build_stream_client", lambda: _Client())
+    monkeypatch.setattr(command_module, "_install_shutdown_signals", lambda _stop: None)
+    monkeypatch.setattr(command_module, "heartbeat_loop", lambda _stop: None)
+
+    def fake_bind(
+        client: object,
+        *,
+        stream_should_run: object,
+        record_stream_open: object,
+        should_stop: object,
+    ) -> object:
+        del client, stream_should_run, record_stream_open
+        captured["should_stop"] = should_stop
+        return lambda: 0.0
+
+    def fake_supervised(session: object, hooks: object) -> None:
+        del session, hooks
+
+    monkeypatch.setattr(command_module, "bind_stream_session", fake_bind)
+    monkeypatch.setattr(command_module, "run_supervised_stream", fake_supervised)
+    Command().handle()
+    assert callable(captured["should_stop"])

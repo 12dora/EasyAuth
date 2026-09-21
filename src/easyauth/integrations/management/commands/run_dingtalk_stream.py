@@ -15,8 +15,11 @@ from easyauth.integrations.dingtalk.stream_runner import (
     run_supervised_stream,
     supervisor_hooks_from_event,
 )
+from easyauth.usage.enforcement import stream_should_run
+from easyauth.usage.recorder import record_and_check
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import FrameType
 
 STREAM_HEARTBEAT_INTERVAL_SECONDS: Final = 15.0
@@ -51,8 +54,13 @@ class Command(BaseCommand):
         try:
             _install_shutdown_signals(stop)
             run_supervised_stream(
-                bind_stream_session(client),
-                supervisor_hooks_from_event(stop),
+                bind_stream_session(
+                    client,
+                    stream_should_run=stream_should_run,
+                    record_stream_open=record_stream_open,
+                    should_stop=stop.is_set,
+                ),
+                supervisor_hooks_from_event(stop, stream_should_run=stream_should_run),
             )
         except KeyboardInterrupt:
             LOGGER.info("钉钉 Stream 消费进程收到中断, 正在退出")
@@ -61,6 +69,10 @@ class Command(BaseCommand):
             _ = signal.signal(signal.SIGTERM, previous_term)
             stop.set()
             heartbeat.join(timeout=STREAM_HEARTBEAT_INTERVAL_SECONDS)
+
+
+def record_stream_open() -> None:
+    record_and_check("stream_open")
 
 
 def heartbeat_loop(stop: threading.Event) -> None:
@@ -72,11 +84,16 @@ def heartbeat_loop(stop: threading.Event) -> None:
         _ = stop.wait(STREAM_HEARTBEAT_INTERVAL_SECONDS)
 
 
-def _install_shutdown_signals(stop: threading.Event) -> None:
+def stop_only_signal_handler(stop: threading.Event) -> Callable[[int, FrameType | None], None]:
     def handle(signum: int, frame: FrameType | None) -> None:
+        # 只置位停止事件, 禁止在 asyncio.run 之前 raise KeyboardInterrupt。
         del signum, frame
         stop.set()
-        raise KeyboardInterrupt
 
+    return handle
+
+
+def _install_shutdown_signals(stop: threading.Event) -> None:
+    handle = stop_only_signal_handler(stop)
     _ = signal.signal(signal.SIGINT, handle)
     _ = signal.signal(signal.SIGTERM, handle)
