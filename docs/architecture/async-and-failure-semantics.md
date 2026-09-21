@@ -24,7 +24,8 @@ Webhook 投递。
 | 托管用户预览遇目录错误或快照过期 | `503`，不返回空列表 |
 | 权限查询即时供给遇 Authentik 管理 API 瞬时故障 | `503 DEPENDENCY_UNAVAILABLE`，并熔断 30 秒；不得返回可被下游缓存 300 秒的空快照 |
 | 权限查询即时供给遇用户不存在、无目录身份、载荷无效或管理 API 未配置 | 空快照，对该 `sub` 负缓存 60 秒 |
-| 钉钉通知回执字段缺失或类型错误 | 只记该收件人 `error`，不推进 `last_reconciled_at` |
+| 钉钉通知回执 `*_user_id_list` / `forbidden_list` 缺 key 或 JSON null | 视为空名单，不是契约错误 |
+| 钉钉通知回执字段类型错误 | 记该收件人 `error`，仍推进对账游标（`reconcile_attempts` / `last_reconciled_at` / `next_reconcile_at`）并按退避改期；达 8 次上限后停止轮询，保持 `sent` |
 
 ## 离职禁号任务
 

@@ -15,6 +15,7 @@ from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiRequestError,
     DingTalkApiUnavailableError,
 )
+from easyauth.integrations.dingtalk.work_notification import parse_send_result
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -208,17 +209,84 @@ def test_get_send_progress_and_result(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_get_send_result_rejects_missing_receipt_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_send_result_accepts_omitted_receipt_lists(monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_token_cache(monkeypatch)
     _patch_urlopen(
         monkeypatch,
         responses=[
-            _Response(b'{"errcode":0,"send_result":{"read_user_id_list":["u1"]}}'),
+            _Response(
+                b'{"errcode":0,"send_result":{"failed_user_id_list":[],'
+                b'"forbidden_list":[],"invalid_dept_id_list":["9"],'
+                b'"invalid_user_id_list":[],"read_user_id_list":[],'
+                b'"unread_user_id_list":["u1"]}}',
+            ),
         ],
     )
 
-    with pytest.raises(DingTalkApiRequestError, match="invalid_user_id_list"):
-        _ = _client().get_send_result(agent_id=9, task_id="42")
+    result = _client().get_send_result(agent_id=9, task_id="42")
+    assert result.unread_user_ids == frozenset({"u1"})
+    assert result.forbidden_user_ids == frozenset()
+    assert result.forbidden_receipts == ()
+
+
+def test_parse_send_result_omitted_or_null_lists_are_empty() -> None:
+    omitted = parse_send_result({})
+    assert omitted.invalid_user_ids == frozenset()
+    assert omitted.failed_user_ids == frozenset()
+    assert omitted.forbidden_user_ids == frozenset()
+    assert omitted.read_user_ids == frozenset()
+    assert omitted.unread_user_ids == frozenset()
+    assert omitted.forbidden_receipts == ()
+
+    null_payload: dict[str, object] = {
+        "failed_user_id_list": None,
+        "forbidden_list": None,
+        "forbidden_user_id_list": None,
+        "invalid_user_id_list": None,
+        "read_user_id_list": None,
+        "unread_user_id_list": None,
+    }
+    nulls = parse_send_result(null_payload)
+    assert nulls.forbidden_user_ids == frozenset()
+    assert nulls.forbidden_receipts == ()
+    assert nulls.read_user_ids == frozenset()
+
+
+def test_parse_send_result_production_shape_round_trips() -> None:
+    payload: dict[str, object] = {
+        "failed_user_id_list": [],
+        "forbidden_list": [],
+        "invalid_dept_id_list": ["dept-1"],
+        "invalid_user_id_list": [],
+        "read_user_id_list": [],
+        "unread_user_id_list": ["u1"],
+    }
+    result = parse_send_result(payload)
+    assert result.unread_user_ids == frozenset({"u1"})
+    assert result.forbidden_user_ids == frozenset()
+    assert result.invalid_user_ids == frozenset()
+    assert result.failed_user_ids == frozenset()
+    assert result.read_user_ids == frozenset()
+    assert result.forbidden_receipts == ()
+
+
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        ({"invalid_user_id_list": "u1"}, "invalid_user_id_list"),
+        ({"failed_user_id_list": 1}, "failed_user_id_list"),
+        ({"read_user_id_list": {"u1": 1}}, "read_user_id_list"),
+        ({"forbidden_list": "x"}, "forbidden_list"),
+        ({"unread_user_id_list": [""]}, "无效 userid"),
+        ({"forbidden_user_id_list": [1]}, "无效 userid"),
+    ],
+)
+def test_parse_send_result_rejects_non_list_and_bad_items(
+    payload: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(DingTalkApiRequestError, match=match):
+        _ = parse_send_result(payload)
 
 
 def test_oapi_network_error_maps_to_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:

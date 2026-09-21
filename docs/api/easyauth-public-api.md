@@ -704,12 +704,14 @@ send-result 回执把该 userid 分类进 `read_user_id_list` 或 `unread_user_i
 `(message, source_slug, corp_id, dingtalk_user_id)` 唯一；不同 source/corp 下相同原始
 userid 不会互相合并。不再保留缺少完整 source/corp 的旧形态唯一约束。
 
-**状态时效：** `sent → delivered/failed` 依赖回执对账（约 60s 周期，
-钉钉 send-result 查询窗口为 24h）。对账尽力而为；回执没有明确的
-read/unread/失败名单归类时保持 `sent`，但仍持久化推进 `last_reconciled_at`；
-超过 24h 后也不推断为 `delivered`。调度每轮按最久未对账优先，公平轮转最多
-50 个唯一 `(channel, task_id)`；某批出现 failed 且仍有 sent 时，消息聚合状态为
-`partially_failed`。
+**状态时效：** `sent → delivered/failed` 依赖回执对账（beat 约 60s 扫一次，实际轮询带退避）。
+钉钉 send-result 查询窗口为 24h。`*_user_id_list` 与 `forbidden_list` 缺 key 或 JSON null
+视为空名单。对账尽力而为；回执没有明确的 read/unread/失败名单归类时保持 `sent`，
+但仍推进 `reconcile_attempts` / `last_reconciled_at` / `next_reconcile_at`。每 task 最多
+8 次轮询（退避 60s、2min、5min、15min、30min、1h、3h、6h）；达上限或超出 24h 窗口后
+不再轮询，也不推断为 `delivered`。调度只选取已到期且未达上限的任务，每轮按最久未对账
+优先，公平轮转最多 50 个唯一 `(channel, task_id)`；某批出现 failed 且仍有 sent 时，
+消息聚合状态为 `partially_failed`。
 
 ### 限流（通知）
 

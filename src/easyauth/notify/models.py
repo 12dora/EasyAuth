@@ -295,6 +295,13 @@ class NotifyRecipient(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(null=True, blank=True, db_index=True)
+    reconcile_attempts: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(
+        default=0,
+    )
+    next_reconcile_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(null=True, blank=True)
     # 服务号机器人一对一投递结果; 与工作通知 status 独立, 可空表示未尝试。
     robot_process_query_key: models.CharField[str | None, str | None] = models.CharField(
         max_length=128,

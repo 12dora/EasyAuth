@@ -60,19 +60,25 @@ def parse_send_progress(progress: DingTalkJson) -> DingTalkSendProgress:
 
 def parse_send_result(send_result: DingTalkJson) -> DingTalkSendResult:
     return DingTalkSendResult(
-        invalid_user_ids=_required_userid_set(send_result, "invalid_user_id_list"),
-        failed_user_ids=_required_userid_set(send_result, "failed_user_id_list"),
-        forbidden_user_ids=_required_userid_set(send_result, "forbidden_user_id_list"),
-        read_user_ids=_required_userid_set(send_result, "read_user_id_list"),
-        unread_user_ids=_required_userid_set(send_result, "unread_user_id_list"),
-        forbidden_receipts=_required_forbidden_receipts(send_result),
+        invalid_user_ids=_optional_userid_set(send_result, "invalid_user_id_list"),
+        failed_user_ids=_optional_userid_set(send_result, "failed_user_id_list"),
+        forbidden_user_ids=_optional_userid_set(send_result, "forbidden_user_id_list"),
+        read_user_ids=_optional_userid_set(send_result, "read_user_id_list"),
+        unread_user_ids=_optional_userid_set(send_result, "unread_user_id_list"),
+        forbidden_receipts=_optional_forbidden_receipts(send_result),
     )
 
 
-def _required_userid_set(payload: DingTalkJson, field: str) -> frozenset[str]:
+# 生产实测 getsendresult.send_result: 含 failed/forbidden/invalid/read/unread 等
+# *_user_id_list 与 forbidden_list(可空), 另有 invalid_dept_id_list(忽略), 且整段省略
+# forbidden_user_id_list。以上名单均可缺省: 缺 key 或 JSON null 视为空; 非 list、
+# 或 list 内含非字符串 / 空字符串 userid, 仍是契约错误。
+def _optional_userid_set(payload: DingTalkJson, field: str) -> frozenset[str]:
     raw = payload.get(field)
+    if raw is None:
+        return frozenset()
     if not isinstance(raw, list):
-        message = f"钉钉发送结果 {field} 缺失或类型无效。"
+        message = f"钉钉发送结果 {field} 类型无效。"
         raise DingTalkApiRequestError(message)
     userids: set[str] = set()
     for item in cast("list[object]", raw):
@@ -83,10 +89,12 @@ def _required_userid_set(payload: DingTalkJson, field: str) -> frozenset[str]:
     return frozenset(userids)
 
 
-def _required_forbidden_receipts(payload: DingTalkJson) -> tuple[DingTalkForbiddenReceipt, ...]:
+def _optional_forbidden_receipts(payload: DingTalkJson) -> tuple[DingTalkForbiddenReceipt, ...]:
     raw = payload.get("forbidden_list")
+    if raw is None:
+        return ()
     if not isinstance(raw, list):
-        message = "钉钉发送结果 forbidden_list 缺失或类型无效。"
+        message = "钉钉发送结果 forbidden_list 类型无效。"
         raise DingTalkApiRequestError(message)
     receipts: list[DingTalkForbiddenReceipt] = []
     for raw_item in cast("list[object]", raw):

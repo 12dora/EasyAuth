@@ -306,7 +306,7 @@ TTL 默认 300 秒（`EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS`）。下游�
 | `easyauth.webhooks.recover_expired_leases` | 15s | Webhook 投递租约 watchdog |
 | `easyauth.grants.cleanup_expired_grants` | 60s | 授权过期清理 |
 | `easyauth.connectors.schedule_reconciles` | 60s | 连接器对账调度 |
-| `easyauth.notify.reconcile_send_results` | 60s | 通知回执对账 |
+| `easyauth.notify.reconcile_send_results` | 60s | 通知回执对账（每 task 最多 8 次、带退避） |
 | `easyauth.authentik.sync_dingtalk_directory` | 300s | 钉钉目录同步兼离职回收 |
 | `easyauth.health.run_dependency_health_checks` | 300s | 上游依赖健康探测 |
 | `easyauth.health.data_retention_cleanup` | 1d | 数据保留矩阵清理 |
