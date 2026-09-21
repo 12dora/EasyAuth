@@ -57,9 +57,18 @@ manifest 顶层 `capabilities: ["directory", "notify"]` 只表达应用的需求
 
 ### 目录新鲜度
 
-镜像同步目标周期 300 秒，故障时可能滞后更久。beat 每次成功从上游取回权威快照后，即使
-generation 未变也会刷新本地 `last_synced_at`——新鲜度表示「已在该时刻核对镜像」，不是
-「上游上次发生变化的时间」。下游必须用响应里的
+镜像同步目标周期 300 秒，故障时可能滞后更久。beat 先请求 Authentik 目录 `status/`：`status_contract` 要求每个 corp
+为已完成的 `success` 终态。若全部 corp 的 generation 与本地已应用值相同，则不再拉取部门、用户和组织上下文
+（整轮只消耗 1 次目录 HTTP），只刷新本地 `last_synced_at` 并调度部门预授权对账；任一 corp 的 generation 高于本地
+水位时，才拉完整快照并校验拉取前后 status 一致。新鲜度表示「已在该时刻核对镜像」，不是
+「上游上次发生变化的时间」。
+
+Stream 通讯录事件以增量方式触发 Authentik 目录同步，避免每次事件风暴都打一次全量拉取（约 220 次钉钉计费调用）。
+`POST /api/v3/sources/oauth/dingtalk-directory/{slug}/sync/` 请求体为 `{"corp_id", "full": false, "user_ids"}`：
+`user_ids` 来自窗口内 `user_*` 事件的钉钉 userId（去重，最多 200；部门事件不传，增量树遍历即可覆盖；超出打警告，
+由每日全量同步兜底）。合并窗口 30 秒；同一 corp 两次触发最小间隔 120 秒。冷却期内到达的事件只累积，并保证冷却结束时
+恰好一次 trailing 刷新。Authentik 返回 `queued: false`（已有同步在排队/运行，本次 `user_ids` 未入队）时，把 userId
+放回 pending 并在冷却后再触发，连续 3 次仍未入队则记错误放弃，不忙等。下游必须用响应里的
 `directory_snapshot.authoritative` / `stale` / `complete` 判断可信性，**不能靠调度周期推断**。
 `snapshots[]` 每个 `(source_slug, corp_id)` 作用域一项，不是每个 `corp_id` 一项。
 
@@ -166,10 +175,18 @@ AppKey，权限点 `qyapi_robot_sendmsg`，EasyAuth 只发不收）。走新版
 | 应用×接口 QPS | ≤20/s | 平台通用频控 |
 | **月调用量** | 标准版（免费）**全组织 5000 次/月** | 工作通知**计入**该额度（不在豁免清单内） |
 
-回执窗口 24 小时，进度窗口 7 天。
+回执窗口 24 小时，进度窗口 7 天。`getsendresult.send_result` 的 `*_user_id_list` 与
+`forbidden_list` 均可缺省（缺 key 或 JSON null 视为空）；生产响应会带
+`invalid_dept_id_list`（忽略）并整段省略 `forbidden_user_id_list`。
 
-> **上线前必须确认企业的钉钉版本。** 若是标准版，按"发送 + 对账×2"的调用系数，月安全预算
-> 约 1600 条消息；要么升级专业版，要么关闭对账并压缩配额。
+对账每 `(channel, task_id)` 最多 8 次轮询，第 n 次之后的退避为
+60s / 2min / 5min / 15min / 30min / 1h / 3h / 6h。进度未完成、回执已应用、钉钉请求 /
+不可用 / 契约错误、通道缺失或未配置——任何结果都递增 `reconcile_attempts`、写入
+`last_reconciled_at` 与 `next_reconcile_at`。达上限或超出 24h 窗口后仍为 `sent` 的行
+停止轮询，不乐观标 `delivered`。最坏每 task 8 次轮询、至多 16 次计费调用。
+
+> **上线前必须确认企业的钉钉版本。** 若是标准版，按「发送 + 对账最多 8 轮 ×2」的调用系数
+> 估算月额度；要么升级专业版，要么关闭对账并压缩配额。
 
 发送工作通知不需要额外权限点（应用创建时默认带消息通知接口权限）。access_token 复用现有获取
 与缓存逻辑（7200 秒有效期，提前 120 秒刷新）。

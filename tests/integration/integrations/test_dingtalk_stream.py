@@ -12,6 +12,7 @@ from django.utils import timezone
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
+from easyauth.integrations.authentik.directory_sync_types import AuthentikDirectorySyncResult
 from easyauth.integrations.dingtalk import stream as stream_module
 from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
 from easyauth.integrations.dingtalk.stream import (
@@ -33,12 +34,16 @@ from easyauth.tasks import dingtalk_stream as tasks_module
 from easyauth.tasks.dingtalk_stream import (
     DIRECTORY_REFRESH_TASK_NAME,
     REFRESH_COALESCE_SECONDS,
+    REFRESH_MAX_CONSECUTIVE_REQUEUES,
+    REFRESH_MIN_INTERVAL_SECONDS,
+    REFRESH_USER_IDS_MAX,
     SKIP_REASON_INSTANCE_NOT_FOUND,
     SKIP_REASON_INSTANCE_STARTED,
     SKIP_REASON_RECORDED_NO_CONSUMER,
     SKIP_REASON_UNHANDLED_EVENT_TYPE,
     StreamEventContractError,
     process_dingtalk_stream_event_task,
+    refresh_dingtalk_directory_task,
 )
 from easyauth.workflows.models import (
     APPROVAL_STATUS_APPROVED,
@@ -89,6 +94,43 @@ class _SendTaskRecorder:
 def sent_tasks(monkeypatch: pytest.MonkeyPatch) -> _SendTaskRecorder:
     recorder = _SendTaskRecorder()
     monkeypatch.setattr(tasks_module, "enqueue_task", recorder.enqueue_task)
+    return recorder
+
+
+@dataclass(slots=True)
+class _RefreshRecorder:
+    calls: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
+    queued: bool = True
+
+    def fake_refresh(
+        self,
+        _client: object,
+        corp_id: str,
+        *,
+        user_ids: Sequence[str] = (),
+        wait_policy: object = None,
+    ) -> AuthentikDirectorySyncResult | None:
+        _ = wait_policy
+        self.calls.append((corp_id, tuple(user_ids)))
+        if not self.queued:
+            return None
+        return AuthentikDirectorySyncResult(
+            department_count=0,
+            user_count=0,
+            org_context_count=0,
+            sync_state_count=0,
+        )
+
+
+@pytest.fixture
+def refresh_recorder(monkeypatch: pytest.MonkeyPatch) -> _RefreshRecorder:
+    recorder = _RefreshRecorder()
+    monkeypatch.setattr(tasks_module, "refresh_dingtalk_directory", recorder.fake_refresh)
+    monkeypatch.setattr(
+        tasks_module.AuthentikDirectoryClient,
+        "from_settings",
+        lambda: object(),
+    )
     return recorder
 
 
@@ -291,6 +333,121 @@ def test_directory_event_queues_coalesced_refresh(sent_tasks: _SendTaskRecorder)
     assert sent_tasks.calls == [
         (DIRECTORY_REFRESH_TASK_NAME, ("corp-1",), REFRESH_COALESCE_SECONDS)
     ]
+
+
+def test_coalesced_user_events_send_deduplicated_user_ids(
+    sent_tasks: _SendTaskRecorder,
+    refresh_recorder: _RefreshRecorder,
+) -> None:
+    first = _stored_event(
+        "evt-dir-ids-1",
+        "user_add_org",
+        data={"userId": ["u-new", "u-dup"]},
+    )
+    second = _stored_event(
+        "evt-dir-ids-2",
+        "user_leave_org",
+        data={"userId": ["u-dup", "u-gone"]},
+    )
+
+    _ = process_dingtalk_stream_event_task(_pk(first))
+    _ = process_dingtalk_stream_event_task(_pk(second))
+    _ = refresh_dingtalk_directory_task("corp-1")
+
+    assert sent_tasks.calls == [
+        (DIRECTORY_REFRESH_TASK_NAME, ("corp-1",), REFRESH_COALESCE_SECONDS)
+    ]
+    assert refresh_recorder.calls == [("corp-1", ("u-new", "u-dup", "u-gone"))]
+
+
+def test_department_only_burst_sends_empty_user_ids(
+    sent_tasks: _SendTaskRecorder,
+    refresh_recorder: _RefreshRecorder,
+) -> None:
+    first = _stored_event("evt-dept-1", "org_dept_create", data={"deptId": ["1"]})
+    second = _stored_event("evt-dept-2", "org_dept_modify", data={"deptId": ["1"]})
+
+    _ = process_dingtalk_stream_event_task(_pk(first))
+    _ = process_dingtalk_stream_event_task(_pk(second))
+    _ = refresh_dingtalk_directory_task("corp-1")
+
+    assert sent_tasks.calls == [
+        (DIRECTORY_REFRESH_TASK_NAME, ("corp-1",), REFRESH_COALESCE_SECONDS)
+    ]
+    assert refresh_recorder.calls == [("corp-1", ())]
+
+
+def test_event_during_cooldown_schedules_one_trailing_with_merged_ids(
+    sent_tasks: _SendTaskRecorder,
+    refresh_recorder: _RefreshRecorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frozen = 1_700_000_000.0
+    monkeypatch.setattr(tasks_module.time, "time", lambda: frozen)
+    first = _stored_event("evt-cool-1", "user_add_org", data={"userId": ["u-1"]})
+    _ = process_dingtalk_stream_event_task(_pk(first))
+    _ = refresh_dingtalk_directory_task("corp-1")
+
+    during_a = _stored_event("evt-cool-2", "user_modify_org", data={"userId": ["u-2"]})
+    during_b = _stored_event("evt-cool-3", "user_leave_org", data={"userId": ["u-3"]})
+    _ = process_dingtalk_stream_event_task(_pk(during_a))
+    _ = process_dingtalk_stream_event_task(_pk(during_b))
+    _ = refresh_dingtalk_directory_task("corp-1")
+
+    assert sent_tasks.calls == [
+        (DIRECTORY_REFRESH_TASK_NAME, ("corp-1",), REFRESH_COALESCE_SECONDS),
+        (DIRECTORY_REFRESH_TASK_NAME, ("corp-1",), REFRESH_MIN_INTERVAL_SECONDS),
+    ]
+    assert refresh_recorder.calls == [
+        ("corp-1", ("u-1",)),
+        ("corp-1", ("u-2", "u-3")),
+    ]
+
+
+def test_queued_false_restores_ids_and_caps_trailing_reschedules(
+    sent_tasks: _SendTaskRecorder,
+    refresh_recorder: _RefreshRecorder,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    refresh_recorder.queued = False
+    event = _stored_event("evt-nq-1", "user_add_org", data={"userId": ["u-hold"]})
+    _ = process_dingtalk_stream_event_task(_pk(event))
+
+    for _attempt in range(REFRESH_MAX_CONSECUTIVE_REQUEUES):
+        _ = refresh_dingtalk_directory_task("corp-1")
+
+    assert len(sent_tasks.calls) == 1 + REFRESH_MAX_CONSECUTIVE_REQUEUES
+    assert refresh_recorder.calls == [("corp-1", ("u-hold",))] * REFRESH_MAX_CONSECUTIVE_REQUEUES
+
+    with caplog.at_level("ERROR", logger="easyauth.tasks.dingtalk_stream"):
+        _ = refresh_dingtalk_directory_task("corp-1")
+
+    assert len(sent_tasks.calls) == 1 + REFRESH_MAX_CONSECUTIVE_REQUEUES
+    assert refresh_recorder.calls == [("corp-1", ("u-hold",))] * (
+        REFRESH_MAX_CONSECUTIVE_REQUEUES + 1
+    )
+    assert "停止再调度" in caplog.text
+
+
+def test_user_ids_overflow_keeps_first_200(
+    sent_tasks: _SendTaskRecorder,
+    refresh_recorder: _RefreshRecorder,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    overflow_ids = [f"u-{index:03d}" for index in range(REFRESH_USER_IDS_MAX + 1)]
+    event = _stored_event("evt-overflow", "user_add_org", data={"userId": overflow_ids})
+
+    with caplog.at_level("WARNING", logger="easyauth.tasks.dingtalk_stream"):
+        _ = process_dingtalk_stream_event_task(_pk(event))
+    _ = refresh_dingtalk_directory_task("corp-1")
+
+    assert sent_tasks.calls == [
+        (DIRECTORY_REFRESH_TASK_NAME, ("corp-1",), REFRESH_COALESCE_SECONDS)
+    ]
+    assert refresh_recorder.calls == [
+        ("corp-1", tuple(overflow_ids[:REFRESH_USER_IDS_MAX])),
+    ]
+    assert "dropped=1" in caplog.text
 
 
 def test_directory_event_without_corp_marks_failed(sent_tasks: _SendTaskRecorder) -> None:

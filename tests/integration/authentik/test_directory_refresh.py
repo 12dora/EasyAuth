@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from easyauth.accounts.models import DingTalkUserMirror
-from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
+from easyauth.integrations.authentik.directory_client import (
+    AuthentikDirectoryUnavailableError,
+    DirectorySyncTriggerResult,
+)
 from easyauth.integrations.authentik.directory_payloads import DingTalkDirectoryStatus
 from easyauth.integrations.authentik.directory_refresh import (
     REFRESH_TIMEOUT_MESSAGE,
@@ -16,6 +19,8 @@ from easyauth.integrations.authentik.directory_refresh import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from easyauth.integrations.authentik.directory_payloads import DirectoryJson
 
 pytestmark = pytest.mark.django_db
@@ -33,6 +38,8 @@ class _RefreshClientStub:
     departments: list[dict[str, object]] = field(default_factory=list)
     org_contexts: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
     triggered_corp_ids: list[str] = field(default_factory=list)
+    triggered_user_ids: list[tuple[str, ...]] = field(default_factory=list)
+    queued: bool = True
     source_slug: str = "dingtalk"
 
     def get_status(self) -> DingTalkDirectoryStatus:
@@ -42,8 +49,15 @@ class _RefreshClientStub:
             sync=(cast("DirectoryJson", entry),),
         )
 
-    def trigger_sync(self, corp_id: str) -> None:
+    def trigger_sync(
+        self,
+        corp_id: str,
+        *,
+        user_ids: Sequence[str] = (),
+    ) -> DirectorySyncTriggerResult:
         self.triggered_corp_ids.append(corp_id)
+        self.triggered_user_ids.append(tuple(user_ids))
+        return DirectorySyncTriggerResult(queued=self.queued)
 
     def iter_departments(self) -> list[dict[str, object]]:
         return [_with_source_slug(item, self.source_slug) for item in self.departments]
@@ -126,6 +140,8 @@ def test_refresh_waits_for_new_sync_then_mirrors_directory() -> None:
 
     # Then: 触发了指定企业的同步, 并把最新目录落到镜像表。
     assert client.triggered_corp_ids == ["corp-1"]
+    assert client.triggered_user_ids == [()]
+    assert result is not None
     assert result.user_count == 1
     assert DingTalkUserMirror.objects.filter(corp_id="corp-1", user_id="user-1").exists()
 
@@ -159,3 +175,71 @@ def test_refresh_raises_on_timeout_while_running() -> None:
 
     with pytest.raises(AuthentikDirectoryUnavailableError, match=REFRESH_TIMEOUT_MESSAGE):
         _ = refresh_dingtalk_directory(client, "corp-1", wait_policy=policy)
+
+
+def test_refresh_forwards_user_ids_to_trigger_sync() -> None:
+    client = _RefreshClientStub(
+        status_script=[
+            _status_entry("success", _BASELINE_FINISHED_AT),
+            _status_entry("running", _BASELINE_FINISHED_AT),
+            _status_entry("success", _FRESH_FINISHED_AT, generation=2),
+        ],
+        users=[
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-1",
+                "union_id": "union-1",
+                "name": "在职员工",
+                "status": "active",
+                "department_ids": ["1"],
+            },
+        ],
+        departments=[
+            {"corp_id": "corp-1", "dept_id": "1", "parent_id": "", "name": "研发部", "order": 1},
+        ],
+        org_contexts={
+            ("corp-1", "user-1"): {
+                "corp_id": "corp-1",
+                "user_id": "user-1",
+                "departments": [{"dept_id": "1", "name": "研发部"}],
+                "manager": {},
+                "manager_chain": [],
+                "stale": False,
+            },
+        },
+    )
+
+    result = refresh_dingtalk_directory(
+        client,
+        "corp-1",
+        user_ids=("u-1", "u-2"),
+        wait_policy=_instant_policy(),
+    )
+
+    assert client.triggered_user_ids == [("u-1", "u-2")]
+    assert result is not None
+    assert result.user_count == 1
+
+
+def test_refresh_skips_wait_when_not_queued() -> None:
+    client = _RefreshClientStub(
+        status_script=[_status_entry("success", _BASELINE_FINISHED_AT)],
+        queued=False,
+    )
+    policy = RefreshWaitPolicy(
+        timeout_seconds=5.0,
+        poll_interval_seconds=0.0,
+        sleep=lambda _seconds: None,
+        monotonic=iter([0.0, 1.0, 6.0]).__next__,
+    )
+
+    result = refresh_dingtalk_directory(
+        client,
+        "corp-1",
+        user_ids=("u-1",),
+        wait_policy=policy,
+    )
+
+    assert result is None
+    assert client.triggered_corp_ids == ["corp-1"]
+    assert client.triggered_user_ids == [("u-1",)]

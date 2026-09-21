@@ -65,16 +65,16 @@ ACK 契约(`EasyAuthDingTalkEventHandler`):
 `easyauth.integrations.authentik.directory_refresh.refresh_dingtalk_directory`:
 
 1. 读取 Authentik 该 corp 当前 `finished_at` 作为基线(用上游自己的时间戳判断完成, 避免两台主机时钟偏差);
-2. `AuthentikDirectoryClient.trigger_sync(corp_id)` 触发 Authentik 从钉钉拉目录(响应必须确认 `queued`);
+2. `AuthentikDirectoryClient.trigger_sync(corp_id)` 以增量方式(`full: false` + 事件涉及的 `user_ids`)触发 Authentik 从钉钉拉目录; 响应 `queued: false` 表示已有同步在跑, 本次 userId 放回 pending, 冷却后重试(最多 3 次);
 3. 轮询 `status/` 直到该 corp 出现新的终态: `success` 继续、`error` 显式失败、超时(默认 180 秒)按目录不可用失败——三者都会走 Celery 重试(指数退避), 且始终有 beat 轮询兜底;
 4. 复用 `sync_authentik_dingtalk_directory` 跑完整镜像同步与离职处置。
 
-**防抖合并**: 组织调整常带来事件风暴(一次转移部门可能触发几十条事件)。`request_directory_refresh` 用缓存标记合并——窗口内(5 秒)多条事件只排一次刷新任务; 刷新任务开始执行时先清除标记, 之后到达的事件会重新排队, 保证任何事件都被其后的一次完整同步覆盖, 不存在"事件夹在两次同步之间被错过"的窗口。标记带 10 分钟 TTL, 防止任务丢失后卡死。
+**防抖合并**: 组织调整常带来事件风暴(一次转移部门可能触发几十条事件)。`request_directory_refresh` 用缓存标记合并——窗口内(30 秒)多条事件只排一次刷新任务, 同一 corp 两次触发至少间隔 120 秒(冷却期内的事件累积为恰好一次 trailing 刷新, 原因: 每次触发都会让 Authentik 产生约 80 次钉钉计费调用); 刷新任务开始执行时先清除标记, 之后到达的事件会重新排队, 保证任何事件都被其后的一次完整同步覆盖, 不存在"事件夹在两次同步之间被错过"的窗口。标记带 10 分钟 TTL, 防止任务丢失后卡死。
 
 ## 进程与部署
 
 - 新增常驻进程: `python manage.py run_dingtalk_stream`(`docker-compose.deploy.yml` 的 `stream` 服务, 与 web/worker/beat 共用镜像与 redis)。凭证未配置时进程快速失败退出, 由容器 restart 拉起重试。
-- SDK: [`dingtalk-stream`](https://github.com/open-dingtalk/dingtalk-stream-sdk-python)(`pyproject.toml` 运行时依赖), `start_forever()` 自带断线重连。
+- SDK: [`dingtalk-stream`](https://github.com/open-dingtalk/dingtalk-stream-sdk-python)(`pyproject.toml` 运行时依赖), 不使用 SDK `start_forever()` 的固定 3–10 秒无限重连(每次重连都是一次计费的 `connections/open`); 由 `stream_runner` 监督循环按 5s→300s 指数退避+抖动重连, 会话稳定 60 秒后才重置退避。
 - 单实例运行, 不要 scale: 多实例会收到重复推送, 虽有 `event_id` 幂等兜底, 但没有收益。
 
 ### 钉钉开放平台配置(一次性)

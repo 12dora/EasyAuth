@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from celery import shared_task
 from django.core.cache import cache
@@ -33,7 +35,12 @@ from easyauth.workflows.services import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
     from easyauth.applications.ops_models import JsonValue
+    from easyauth.integrations.authentik.directory_sync import AuthentikDirectorySyncResult
+
+logger = logging.getLogger(__name__)
 
 PROCESS_STREAM_EVENT_TASK_NAME: Final = "easyauth.dingtalk_stream.process_event"
 DIRECTORY_REFRESH_TASK_NAME: Final = "easyauth.dingtalk_stream.refresh_directory"
@@ -53,6 +60,15 @@ DIRECTORY_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "org_dept_remove",
     },
 )
+# 仅 user_* 事件体带钉钉 userId 列表; 部门事件靠增量树遍历覆盖, 不必传 user_ids。
+USER_DIRECTORY_EVENT_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        "user_add_org",
+        "user_modify_org",
+        "user_leave_org",
+        "user_active_org",
+    },
+)
 BPMS_INSTANCE_CHANGE_EVENT_TYPE: Final = "bpms_instance_change"
 
 # 已订阅、需要接住但当前没有本地消费方的事件: 完整落库(收件箱即处置结果),
@@ -69,12 +85,34 @@ RECORD_ONLY_EVENT_TYPES: Final[frozenset[str]] = frozenset(
     },
 )
 
-# 事件风暴合并——窗口内的多个目录事件只排一次刷新任务; 刷新任务开始执行时先清除
-# 标记, 之后到达的事件会再次排队, 保证任何事件都被其后的一次完整同步覆盖。
-REFRESH_PENDING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-pending:{corp_id}"
-REFRESH_COALESCE_SECONDS: Final = 5
+# 事件风暴合并与钉钉计费控制:
+# 1. 窗口内多个目录事件只排一次刷新(pending 标记);
+# 2. 合并窗口 30 秒——一次增量同步仍会走部门树遍历, 5 秒窗口会把调岗风暴打成多次付费拉取;
+# 3. 同一 corp 两次 trigger_sync 最小间隔 120 秒; 冷却期内到达的事件只累积 user_ids,
+#    并保证在冷却结束时恰好再排一次 trailing 刷新, 不丢事件、不叠多个 pending。
+# 刷新任务开始执行时先清除 pending 标记, 之后到达的事件会再次排队。
 # pending 标记必须有限期: 若刷新任务在执行前丢失(broker 故障), 标记过期后事件恢复排队。
+REFRESH_PENDING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-pending:{corp_id}"
+REFRESH_USER_IDS_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-user-ids:{corp_id}"
+REFRESH_USER_IDS_LOCK_CACHE_KEY_TEMPLATE: Final = (
+    "easyauth:dingtalk:stream:refresh-user-ids-lock:{corp_id}"
+)
+REFRESH_LAST_TRIGGERED_CACHE_KEY_TEMPLATE: Final = (
+    "easyauth:dingtalk:stream:refresh-last-triggered:{corp_id}"
+)
+REFRESH_REQUEUE_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-requeue:{corp_id}"
+REFRESH_COALESCE_SECONDS: Final = 30
 REFRESH_PENDING_TTL_SECONDS: Final = 600
+REFRESH_MIN_INTERVAL_SECONDS: Final = 120
+# Authentik 增量同步 user_ids 上限(与 REST 契约一致); 超出部分由每日全量同步兜底。
+REFRESH_USER_IDS_MAX: Final = 200
+# queued=false 时最多连续再调度次数, 避免在 Authentik 长事务上忙等烧配额。
+REFRESH_MAX_CONSECUTIVE_REQUEUES: Final = 3
+REFRESH_USER_IDS_LOCK_TTL_SECONDS: Final = 5
+REFRESH_USER_IDS_LOCK_ATTEMPTS: Final = 20
+REFRESH_USER_IDS_LOCK_SLEEP_SECONDS: Final = 0.05
+REFRESH_USER_IDS_LOCK_FAILED_MESSAGE: Final = "钉钉目录刷新 user_ids 缓存锁获取失败。"
+REFRESH_CACHE_TYPE_MESSAGE: Final = "钉钉目录刷新缓存值类型无效。"
 
 DIRECTORY_EVENT_MISSING_CORP_MESSAGE: Final = "钉钉目录事件缺少 corp_id。"
 BPMS_EVENT_MISSING_INSTANCE_MESSAGE: Final = "钉钉审批事件缺少 processInstanceId。"
@@ -107,15 +145,37 @@ def refresh_pending_cache_key(corp_id: str) -> str:
     return REFRESH_PENDING_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
 
 
-def request_directory_refresh(corp_id: str, *, source_event_id: str) -> bool:
+def refresh_user_ids_cache_key(corp_id: str) -> str:
+    return REFRESH_USER_IDS_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
+
+
+def refresh_user_ids_lock_cache_key(corp_id: str) -> str:
+    return REFRESH_USER_IDS_LOCK_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
+
+
+def refresh_last_triggered_cache_key(corp_id: str) -> str:
+    return REFRESH_LAST_TRIGGERED_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
+
+
+def refresh_requeue_cache_key(corp_id: str) -> str:
+    return REFRESH_REQUEUE_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
+
+
+def request_directory_refresh(
+    corp_id: str,
+    *,
+    source_event_id: str,
+    user_ids: Sequence[str] = (),
+) -> bool:
     """请求一次防抖合并的目录刷新; 返回是否真正排队了新任务。"""
+    _accumulate_refresh_user_ids(corp_id, user_ids)
     if not cache.add(refresh_pending_cache_key(corp_id), "1", timeout=REFRESH_PENDING_TTL_SECONDS):
         return False
     _ = enqueue_task(
         event_key=f"dingtalk-directory-refresh:{corp_id}:{source_event_id}",
         task_name=DIRECTORY_REFRESH_TASK_NAME,
         args=[corp_id],
-        countdown=REFRESH_COALESCE_SECONDS,
+        countdown=_refresh_countdown(corp_id),
     )
     return True
 
@@ -133,8 +193,12 @@ def refresh_dingtalk_directory_task(corp_id: str) -> dict[str, int]:
     # 先清除 pending 标记再刷新: 此后到达的事件会重新排队, 不会被本轮已经开始的
     # Authentik 拉取错过。
     _ = cache.delete(refresh_pending_cache_key(corp_id))
-    client = AuthentikDirectoryClient.from_settings()
-    result = refresh_dingtalk_directory(client, corp_id)
+    user_ids = _take_pending_user_ids(corp_id)
+    _mark_sync_triggered(corp_id)
+    result = _run_directory_refresh(corp_id, user_ids)
+    if result is None:
+        return _reschedule_after_not_queued(corp_id, user_ids)
+    _ = cache.delete(refresh_requeue_cache_key(corp_id))
     return {
         "department_count": result.department_count,
         "user_count": result.user_count,
@@ -144,6 +208,164 @@ def refresh_dingtalk_directory_task(corp_id: str) -> dict[str, int]:
         "revoked_count": result.revoked_count,
         "tombstoned_user_count": result.tombstoned_user_count,
     }
+
+
+def _run_directory_refresh(
+    corp_id: str,
+    user_ids: tuple[str, ...],
+) -> AuthentikDirectorySyncResult | None:
+    client = AuthentikDirectoryClient.from_settings()
+    try:
+        return refresh_dingtalk_directory(client, corp_id, user_ids=user_ids)
+    except AuthentikDirectoryError:
+        _accumulate_refresh_user_ids(corp_id, user_ids)
+        raise
+
+
+def _reschedule_after_not_queued(corp_id: str, user_ids: tuple[str, ...]) -> dict[str, int]:
+    _accumulate_refresh_user_ids(corp_id, user_ids)
+    requeue_count = _increment_requeue_count(corp_id)
+    if requeue_count > REFRESH_MAX_CONSECUTIVE_REQUEUES:
+        logger.error(
+            "Authentik 目录同步连续 queued=false 超过 %s 次, 停止再调度; corp=%s",
+            REFRESH_MAX_CONSECUTIVE_REQUEUES,
+            corp_id,
+        )
+        return _empty_refresh_counts()
+    _ = request_directory_refresh(
+        corp_id,
+        source_event_id=f"requeue-{requeue_count}-{time.time_ns()}",
+        user_ids=(),
+    )
+    return _empty_refresh_counts()
+
+
+def _empty_refresh_counts() -> dict[str, int]:
+    return {
+        "department_count": 0,
+        "user_count": 0,
+        "org_context_count": 0,
+        "status_applied_count": 0,
+        "departed_count": 0,
+        "revoked_count": 0,
+        "tombstoned_user_count": 0,
+    }
+
+
+def _refresh_countdown(corp_id: str) -> float:
+    remaining = _cooldown_remaining_seconds(corp_id)
+    if remaining > 0:
+        return remaining
+    return float(REFRESH_COALESCE_SECONDS)
+
+
+def _cooldown_remaining_seconds(corp_id: str) -> float:
+    raw = cast("object", cache.get(refresh_last_triggered_cache_key(corp_id)))
+    if raw is None:
+        return 0.0
+    if isinstance(raw, bool) or not isinstance(raw, int | float):
+        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
+    remaining = float(raw) + float(REFRESH_MIN_INTERVAL_SECONDS) - time.time()
+    return remaining if remaining > 0 else 0.0
+
+
+def _mark_sync_triggered(corp_id: str) -> None:
+    cache.set(
+        refresh_last_triggered_cache_key(corp_id),
+        time.time(),
+        timeout=REFRESH_MIN_INTERVAL_SECONDS,
+    )
+
+
+def _increment_requeue_count(corp_id: str) -> int:
+    key = refresh_requeue_cache_key(corp_id)
+    if cache.add(key, 1, timeout=REFRESH_PENDING_TTL_SECONDS):
+        return 1
+    try:
+        count = cast("object", cache.incr(key))
+    except ValueError:
+        cache.set(key, 1, timeout=REFRESH_PENDING_TTL_SECONDS)
+        return 1
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
+    return count
+
+
+def _accumulate_refresh_user_ids(corp_id: str, user_ids: Sequence[str]) -> None:
+    incoming = [item for item in user_ids if item]
+    if not incoming:
+        return
+
+    def _merge(current: list[str]) -> list[str]:
+        return _bounded_user_ids(corp_id, [*current, *incoming])
+
+    _ = _with_user_ids_lock(corp_id, _merge)
+
+
+def _take_pending_user_ids(corp_id: str) -> tuple[str, ...]:
+    taken: list[str] = []
+
+    def _clear(current: list[str]) -> list[str]:
+        taken.extend(current)
+        return []
+
+    _ = _with_user_ids_lock(corp_id, _clear)
+    return tuple(taken)
+
+
+def _bounded_user_ids(corp_id: str, user_ids: list[str]) -> list[str]:
+    merged = list(dict.fromkeys(user_ids))
+    overflow = len(merged) - REFRESH_USER_IDS_MAX
+    if overflow <= 0:
+        return merged
+    logger.warning(
+        "钉钉目录刷新 user_ids 超过 %s, 只保留先到的 %s 个, 其余由每日全量兜底; corp=%s dropped=%s",
+        REFRESH_USER_IDS_MAX,
+        REFRESH_USER_IDS_MAX,
+        corp_id,
+        overflow,
+    )
+    return merged[:REFRESH_USER_IDS_MAX]
+
+
+def _with_user_ids_lock(
+    corp_id: str,
+    mutator: Callable[[list[str]], list[str]],
+) -> list[str]:
+    lock_key = refresh_user_ids_lock_cache_key(corp_id)
+    ids_key = refresh_user_ids_cache_key(corp_id)
+    for _attempt in range(REFRESH_USER_IDS_LOCK_ATTEMPTS):
+        if cache.add(lock_key, "1", timeout=REFRESH_USER_IDS_LOCK_TTL_SECONDS):
+            try:
+                updated = mutator(_read_cached_user_ids(ids_key))
+                _write_cached_user_ids(ids_key, updated)
+                return updated
+            finally:
+                _ = cache.delete(lock_key)
+        time.sleep(REFRESH_USER_IDS_LOCK_SLEEP_SECONDS)
+    raise RuntimeError(REFRESH_USER_IDS_LOCK_FAILED_MESSAGE)
+
+
+def _read_cached_user_ids(ids_key: str) -> list[str]:
+    raw = cast("object", cache.get(ids_key))
+    if raw is None:
+        return []
+    if not isinstance(raw, list | tuple):
+        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
+    items: list[str] = []
+    for item in cast("list[object] | tuple[object, ...]", raw):
+        if not isinstance(item, str):
+            raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
+        if item:
+            items.append(item)
+    return items
+
+
+def _write_cached_user_ids(ids_key: str, user_ids: list[str]) -> None:
+    if not user_ids:
+        _ = cache.delete(ids_key)
+        return
+    cache.set(ids_key, user_ids, timeout=REFRESH_PENDING_TTL_SECONDS)
 
 
 @shared_task(name=PROCESS_STREAM_EVENT_TASK_NAME, acks_late=True)
@@ -195,12 +417,17 @@ def _handle_directory_event(event: DingTalkStreamEvent) -> StreamEventOutcome:
     )
     if not corp_id:
         raise StreamEventContractError(DIRECTORY_EVENT_MISSING_CORP_MESSAGE)
-    refresh_queued = request_directory_refresh(corp_id, source_event_id=event.event_id)
+    user_ids = _data_string_list(event.data, "userId") or _data_string_list(event.data, "UserId")
+    pending_ids = user_ids if event.event_type in USER_DIRECTORY_EVENT_TYPES else ()
+    refresh_queued = request_directory_refresh(
+        corp_id,
+        source_event_id=event.event_id,
+        user_ids=pending_ids,
+    )
     result: dict[str, JsonValue] = {
         "corp_id": corp_id,
         "refresh_queued": refresh_queued,
     }
-    user_ids = _data_string_list(event.data, "userId") or _data_string_list(event.data, "UserId")
     if user_ids:
         result["user_ids"] = list(user_ids)
     return StreamEventOutcome(status=STREAM_EVENT_STATUS_PROCESSED, result=result)

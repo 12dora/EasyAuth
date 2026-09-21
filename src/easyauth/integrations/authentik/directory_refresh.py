@@ -10,8 +10,9 @@ from easyauth.integrations.authentik.directory_client import (
 from easyauth.integrations.authentik.directory_sync import sync_authentik_dingtalk_directory
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Sequence
 
+    from easyauth.integrations.authentik.directory_client import DirectorySyncTriggerResult
     from easyauth.integrations.authentik.directory_payloads import DirectoryJson
     from easyauth.integrations.authentik.directory_sync import AuthentikDirectorySyncResult
 
@@ -43,7 +44,12 @@ DEFAULT_REFRESH_WAIT_POLICY: Final = RefreshWaitPolicy()
 class AuthentikDirectoryRefreshClient(Protocol):
     def get_status(self) -> object: ...
 
-    def trigger_sync(self, corp_id: str) -> None: ...
+    def trigger_sync(
+        self,
+        corp_id: str,
+        *,
+        user_ids: Sequence[str] = (),
+    ) -> DirectorySyncTriggerResult: ...
 
     def iter_departments(self) -> Iterable[object]: ...
 
@@ -56,12 +62,17 @@ def refresh_dingtalk_directory(
     client: AuthentikDirectoryRefreshClient,
     corp_id: str,
     *,
+    user_ids: Sequence[str] = (),
     wait_policy: RefreshWaitPolicy = DEFAULT_REFRESH_WAIT_POLICY,
-) -> AuthentikDirectorySyncResult:
+) -> AuthentikDirectorySyncResult | None:
     # 以 Authentik 自己记录的 finished_at 为基线判断"这次触发的同步已完成",
     # 避免 EasyAuth 与 Authentik 主机时钟偏差造成误判。
+    # queued=false: 进行中的同步可能早于本批事件启动, user_ids 未被记录;
+    # 不 round-trip 等待, 由调用方把 user_ids 放回 pending 并在冷却后 trailing。
     baseline = _corp_finished_at(client, corp_id)
-    client.trigger_sync(corp_id)
+    trigger = client.trigger_sync(corp_id, user_ids=user_ids)
+    if not trigger.queued:
+        return None
     _wait_for_sync_completion(client, corp_id, baseline=baseline, policy=wait_policy)
     return sync_authentik_dingtalk_directory(client)
 

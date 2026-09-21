@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from email.message import Message
 from http import HTTPStatus
+from json import loads
 from typing import TYPE_CHECKING, Self, override
 from urllib.error import HTTPError, URLError
 
 import pytest
 
 from easyauth.integrations.authentik.directory_client import (
+    DIRECTORY_INVALID_FORMAT_MESSAGE,
     AuthentikDirectoryClient,
     AuthentikDirectoryNotFoundError,
     AuthentikDirectoryPermissionError,
@@ -491,3 +493,71 @@ def test_directory_client_maps_network_error_without_leaking_token(
         ).get_status()
 
     assert TEST_API_TOKEN not in str(error.value)
+
+
+def test_directory_client_trigger_sync_sends_incremental_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(request: Request, *, timeout: float) -> _Response:
+        assert timeout == TIMEOUT_SECONDS
+        assert request.get_method() == "POST"
+        assert request.full_url == (
+            "https://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/sync/"
+        )
+        assert request.data is not None
+        assert loads(request.data.decode("utf-8")) == {
+            "corp_id": "corp-1",
+            "full": False,
+            "user_ids": ["u-1", "u-2"],
+        }
+        return _Response(b'{"queued": true}')
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    result = AuthentikDirectoryClient(
+        base_url="https://authentik.test",
+        api_token=TEST_API_TOKEN,
+        source_slug="dingtalk",
+        timeout_seconds=TIMEOUT_SECONDS,
+    ).trigger_sync("corp-1", user_ids=("u-1", "u-2"))
+
+    assert result.queued is True
+
+
+def test_directory_client_trigger_sync_returns_queued_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(request: Request, *, timeout: float) -> _Response:
+        _ = (request, timeout)
+        return _Response(b'{"queued": false}')
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    result = AuthentikDirectoryClient(
+        base_url="https://authentik.test",
+        api_token=TEST_API_TOKEN,
+        source_slug="dingtalk",
+        timeout_seconds=TIMEOUT_SECONDS,
+    ).trigger_sync("corp-1", user_ids=("u-1",))
+
+    assert result.queued is False
+
+
+@pytest.mark.parametrize("body", [b"{}", b'{"queued": "yes"}', b'{"queued": 1}'])
+def test_directory_client_trigger_sync_rejects_malformed_queued(
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _Response(body)
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikDirectoryUnavailableError, match=DIRECTORY_INVALID_FORMAT_MESSAGE):
+        _ = AuthentikDirectoryClient(
+            base_url="https://authentik.test",
+            api_token=TEST_API_TOKEN,
+            source_slug="dingtalk",
+            timeout_seconds=TIMEOUT_SECONDS,
+        ).trigger_sync("corp-1")

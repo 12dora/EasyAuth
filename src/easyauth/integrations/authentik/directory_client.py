@@ -35,7 +35,7 @@ from easyauth.integrations.authentik.directory_payloads import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
 DIRECTORY_UNAVAILABLE_MESSAGE = "Authentik 目录 API 暂不可用。"
 DIRECTORY_INVALID_JSON_MESSAGE = "Authentik 目录 API 返回了无效 JSON。"
@@ -45,7 +45,6 @@ DIRECTORY_NOT_FOUND_MESSAGE = "Authentik 目录 API 资源不存在。"
 DIRECTORY_PAGINATION_NOT_ADVANCING_MESSAGE = "Authentik 目录 API 分页游标未前进。"
 DIRECTORY_PAGINATION_LIMIT_MESSAGE = "Authentik 目录 API 分页超出最大页数上限。"
 DIRECTORY_INSECURE_BASE_URL_MESSAGE = "Authentik base_url 必须为 https, 拒绝明文传输管理 token。"
-DIRECTORY_SYNC_NOT_QUEUED_MESSAGE = "Authentik 目录同步触发失败, 响应未确认排队。"
 # 分页硬上限: 上游若返回恒定/循环游标, 物化成 tuple 的调用方会挂死到 worker 被杀。
 DIRECTORY_MAX_PAGES: Final = 1000
 DIRECTORY_MAX_RESPONSE_BYTES: Final = 1024 * 1024
@@ -76,6 +75,11 @@ class AuthentikDirectoryConflictError(AuthentikDirectoryError):
 
 
 @dataclass(frozen=True, slots=True)
+class DirectorySyncTriggerResult:
+    queued: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AuthentikDirectoryClient:
     base_url: str
     api_token: str
@@ -96,12 +100,29 @@ class AuthentikDirectoryClient:
     def get_status(self) -> DingTalkDirectoryStatus:
         return parse_status(self._request_json("status/"), source_slug=self.source_slug)
 
-    def trigger_sync(self, corp_id: str) -> None:
-        # Stream 事件到达后主动触发 Authentik 拉取钉钉目录, 把入离职生效延迟从
-        # 定时轮询压缩到秒级; 排队确认缺失说明上游契约破坏, 必须显式失败重试。
-        payload = self._request_json("sync/", method="POST", body={"corp_id": corp_id})
-        if payload.get("queued") is not True:
-            raise AuthentikDirectoryUnavailableError(DIRECTORY_SYNC_NOT_QUEUED_MESSAGE)
+    def trigger_sync(
+        self,
+        corp_id: str,
+        *,
+        user_ids: Sequence[str] = (),
+    ) -> DirectorySyncTriggerResult:
+        # Stream 事件驱动增量同步: full=false, 并带上事件里提到的钉钉 userId,
+        # 强制对这些人做 user/get 富化(manager_userid 只出现在 user/get)。
+        # queued 必须是布尔; queued=false 表示该 (source, corp) 已有同步在排队/运行,
+        # 本次请求未入队、user_ids 也未被记录, 由调用方决定再调度。
+        payload = self._request_json(
+            "sync/",
+            method="POST",
+            body={
+                "corp_id": corp_id,
+                "full": False,
+                "user_ids": cast("list[JsonValue]", list(user_ids)),
+            },
+        )
+        queued = payload.get("queued")
+        if not isinstance(queued, bool):
+            raise AuthentikDirectoryUnavailableError(DIRECTORY_INVALID_FORMAT_MESSAGE)
+        return DirectorySyncTriggerResult(queued=queued)
 
     def iter_departments(self) -> Iterator[DingTalkDirectoryDepartment]:
         for page in self._iter_paginated("departments/"):
