@@ -14,7 +14,10 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
     AuthentikDirectoryError,
 )
-from easyauth.integrations.authentik.directory_refresh import refresh_dingtalk_directory
+from easyauth.integrations.authentik.directory_refresh import (
+    REFRESH_WAIT_TIMEOUT_SECONDS,
+    refresh_dingtalk_directory,
+)
 from easyauth.integrations.models import (
     STREAM_EVENT_STATUS_FAILED,
     STREAM_EVENT_STATUS_PROCESSED,
@@ -85,13 +88,9 @@ RECORD_ONLY_EVENT_TYPES: Final[frozenset[str]] = frozenset(
     },
 )
 
-# 事件风暴合并与钉钉计费控制:
-# 1. 窗口内多个目录事件只排一次刷新(pending 标记);
-# 2. 合并窗口 30 秒——一次增量同步仍会走部门树遍历, 5 秒窗口会把调岗风暴打成多次付费拉取;
-# 3. 同一 corp 两次 trigger_sync 最小间隔 120 秒; 冷却期内到达的事件只累积 user_ids,
-#    并保证在冷却结束时恰好再排一次 trailing 刷新, 不丢事件、不叠多个 pending。
-# 刷新任务开始执行时先清除 pending 标记, 之后到达的事件会再次排队。
-# pending 标记必须有限期: 若刷新任务在执行前丢失(broker 故障), 标记过期后事件恢复排队。
+# 事件风暴合并与钉钉计费: 30s 合并窗口、queued=true 后 120s 冷却、全程 running 锁
+# (TTL ≥ Authentik 等待+余量)。锁内事件只累积 id 并标记 trailing, 当前刷新结束且过
+# 冷却后再触发恰好一次。user_ids 只 peek, queued=true 后删除本次送出的 id。
 REFRESH_PENDING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-pending:{corp_id}"
 REFRESH_USER_IDS_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-user-ids:{corp_id}"
 REFRESH_USER_IDS_LOCK_CACHE_KEY_TEMPLATE: Final = (
@@ -101,9 +100,14 @@ REFRESH_LAST_TRIGGERED_CACHE_KEY_TEMPLATE: Final = (
     "easyauth:dingtalk:stream:refresh-last-triggered:{corp_id}"
 )
 REFRESH_REQUEUE_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-requeue:{corp_id}"
+REFRESH_RUNNING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-running:{corp_id}"
+REFRESH_TRAILING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-trailing:{corp_id}"
 REFRESH_COALESCE_SECONDS: Final = 30
 REFRESH_PENDING_TTL_SECONDS: Final = 600
 REFRESH_MIN_INTERVAL_SECONDS: Final = 120
+REFRESH_RUNNING_LOCK_TTL_SECONDS: Final = (
+    int(REFRESH_WAIT_TIMEOUT_SECONDS) + REFRESH_MIN_INTERVAL_SECONDS
+)
 # Authentik 增量同步 user_ids 上限(与 REST 契约一致); 超出部分由每日全量同步兜底。
 REFRESH_USER_IDS_MAX: Final = 200
 # queued=false 时最多连续再调度次数, 避免在 Authentik 长事务上忙等烧配额。
@@ -113,6 +117,15 @@ REFRESH_USER_IDS_LOCK_ATTEMPTS: Final = 20
 REFRESH_USER_IDS_LOCK_SLEEP_SECONDS: Final = 0.05
 REFRESH_USER_IDS_LOCK_FAILED_MESSAGE: Final = "钉钉目录刷新 user_ids 缓存锁获取失败。"
 REFRESH_CACHE_TYPE_MESSAGE: Final = "钉钉目录刷新缓存值类型无效。"
+_REFRESH_COUNT_KEYS: Final[tuple[str, ...]] = (
+    "department_count",
+    "user_count",
+    "org_context_count",
+    "status_applied_count",
+    "departed_count",
+    "revoked_count",
+    "tombstoned_user_count",
+)
 
 DIRECTORY_EVENT_MISSING_CORP_MESSAGE: Final = "钉钉目录事件缺少 corp_id。"
 BPMS_EVENT_MISSING_INSTANCE_MESSAGE: Final = "钉钉审批事件缺少 processInstanceId。"
@@ -141,24 +154,8 @@ class StreamEventOutcome:
     result: dict[str, JsonValue] = field(default_factory=dict)
 
 
-def refresh_pending_cache_key(corp_id: str) -> str:
-    return REFRESH_PENDING_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
-
-
-def refresh_user_ids_cache_key(corp_id: str) -> str:
-    return REFRESH_USER_IDS_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
-
-
-def refresh_user_ids_lock_cache_key(corp_id: str) -> str:
-    return REFRESH_USER_IDS_LOCK_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
-
-
-def refresh_last_triggered_cache_key(corp_id: str) -> str:
-    return REFRESH_LAST_TRIGGERED_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
-
-
-def refresh_requeue_cache_key(corp_id: str) -> str:
-    return REFRESH_REQUEUE_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
+def _corp_key(template: str, corp_id: str) -> str:
+    return template.format(corp_id=corp_id)
 
 
 def request_directory_refresh(
@@ -167,9 +164,11 @@ def request_directory_refresh(
     source_event_id: str,
     user_ids: Sequence[str] = (),
 ) -> bool:
-    """请求一次防抖合并的目录刷新; 返回是否真正排队了新任务。"""
     _accumulate_refresh_user_ids(corp_id, user_ids)
-    if not cache.add(refresh_pending_cache_key(corp_id), "1", timeout=REFRESH_PENDING_TTL_SECONDS):
+    if _running_remaining_seconds(corp_id) > 0:
+        _mark_trailing_needed(corp_id)
+        return False
+    if _pending_marker_exists(corp_id):
         return False
     _ = enqueue_task(
         event_key=f"dingtalk-directory-refresh:{corp_id}:{source_event_id}",
@@ -177,6 +176,7 @@ def request_directory_refresh(
         args=[corp_id],
         countdown=_refresh_countdown(corp_id),
     )
+    transaction.on_commit(lambda: _set_pending_marker(corp_id))
     return True
 
 
@@ -190,40 +190,54 @@ def request_directory_refresh(
     acks_late=True,
 )
 def refresh_dingtalk_directory_task(corp_id: str) -> dict[str, int]:
-    # 先清除 pending 标记再刷新: 此后到达的事件会重新排队, 不会被本轮已经开始的
-    # Authentik 拉取错过。
-    _ = cache.delete(refresh_pending_cache_key(corp_id))
-    user_ids = _take_pending_user_ids(corp_id)
-    _mark_sync_triggered(corp_id)
-    result = _run_directory_refresh(corp_id, user_ids)
-    if result is None:
-        return _reschedule_after_not_queued(corp_id, user_ids)
-    _ = cache.delete(refresh_requeue_cache_key(corp_id))
-    return {
-        "department_count": result.department_count,
-        "user_count": result.user_count,
-        "org_context_count": result.org_context_count,
-        "status_applied_count": result.status_applied_count,
-        "departed_count": result.departed_count,
-        "revoked_count": result.revoked_count,
-        "tombstoned_user_count": result.tombstoned_user_count,
-    }
+    if not _acquire_running_lock(corp_id):
+        _mark_trailing_needed(corp_id)
+        return _empty_refresh_counts()
+    try:
+        _ = cache.delete(_corp_key(REFRESH_PENDING_CACHE_KEY_TEMPLATE, corp_id))
+        outcome = _run_directory_refresh(corp_id, _peek_pending_user_ids(corp_id))
+    finally:
+        _release_running_lock(corp_id)
+    return _finish_directory_refresh(corp_id, outcome)
+
+
+def _finish_directory_refresh(
+    corp_id: str,
+    outcome: AuthentikDirectorySyncResult | None,
+) -> dict[str, int]:
+    if outcome is None:
+        _ = _consume_trailing_needed(corp_id)
+        return _reschedule_after_not_queued(corp_id)
+    _ = cache.delete(_corp_key(REFRESH_REQUEUE_CACHE_KEY_TEMPLATE, corp_id))
+    _arm_trailing_after_success(corp_id)
+    return {key: cast("int", getattr(outcome, key)) for key in _REFRESH_COUNT_KEYS}
 
 
 def _run_directory_refresh(
     corp_id: str,
     user_ids: tuple[str, ...],
 ) -> AuthentikDirectorySyncResult | None:
+    accepted = False
+
+    def _on_accepted(accepted_ids: tuple[str, ...]) -> None:
+        nonlocal accepted
+        accepted = True
+        _remove_sent_user_ids(corp_id, accepted_ids)
+        _mark_sync_triggered(corp_id)
+
     client = AuthentikDirectoryClient.from_settings()
-    try:
-        return refresh_dingtalk_directory(client, corp_id, user_ids=user_ids)
-    except AuthentikDirectoryError:
-        _accumulate_refresh_user_ids(corp_id, user_ids)
-        raise
+    result = refresh_dingtalk_directory(
+        client,
+        corp_id,
+        user_ids=user_ids,
+        on_accepted_user_ids=_on_accepted,
+    )
+    if result is not None and not accepted:
+        _on_accepted(user_ids)
+    return result
 
 
-def _reschedule_after_not_queued(corp_id: str, user_ids: tuple[str, ...]) -> dict[str, int]:
-    _accumulate_refresh_user_ids(corp_id, user_ids)
+def _reschedule_after_not_queued(corp_id: str) -> dict[str, int]:
     requeue_count = _increment_requeue_count(corp_id)
     if requeue_count > REFRESH_MAX_CONSECUTIVE_REQUEUES:
         logger.error(
@@ -240,45 +254,112 @@ def _reschedule_after_not_queued(corp_id: str, user_ids: tuple[str, ...]) -> dic
     return _empty_refresh_counts()
 
 
+def _arm_trailing_after_success(corp_id: str) -> None:
+    trailing = _consume_trailing_needed(corp_id)
+    if not trailing and not _peek_pending_user_ids(corp_id):
+        return
+    _ = request_directory_refresh(
+        corp_id,
+        source_event_id=f"trailing-{time.time_ns()}",
+        user_ids=(),
+    )
+
+
 def _empty_refresh_counts() -> dict[str, int]:
-    return {
-        "department_count": 0,
-        "user_count": 0,
-        "org_context_count": 0,
-        "status_applied_count": 0,
-        "departed_count": 0,
-        "revoked_count": 0,
-        "tombstoned_user_count": 0,
-    }
+    counts: dict[str, int] = dict.fromkeys(_REFRESH_COUNT_KEYS, 0)
+    return counts
 
 
 def _refresh_countdown(corp_id: str) -> float:
-    remaining = _cooldown_remaining_seconds(corp_id)
+    remaining = max(
+        _timestamp_remaining_seconds(
+            cast(
+                "object",
+                cache.get(_corp_key(REFRESH_LAST_TRIGGERED_CACHE_KEY_TEMPLATE, corp_id)),
+            ),
+            extra_seconds=float(REFRESH_MIN_INTERVAL_SECONDS),
+        ),
+        _running_remaining_seconds(corp_id),
+    )
     if remaining > 0:
         return remaining
     return float(REFRESH_COALESCE_SECONDS)
 
 
-def _cooldown_remaining_seconds(corp_id: str) -> float:
-    raw = cast("object", cache.get(refresh_last_triggered_cache_key(corp_id)))
+def _running_remaining_seconds(corp_id: str) -> float:
+    return _timestamp_remaining_seconds(
+        cast("object", cache.get(_corp_key(REFRESH_RUNNING_CACHE_KEY_TEMPLATE, corp_id))),
+    )
+
+
+def _timestamp_remaining_seconds(raw: object, *, extra_seconds: float = 0.0) -> float:
     if raw is None:
         return 0.0
     if isinstance(raw, bool) or not isinstance(raw, int | float):
         raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
-    remaining = float(raw) + float(REFRESH_MIN_INTERVAL_SECONDS) - time.time()
+    remaining = float(raw) + extra_seconds - time.time()
     return remaining if remaining > 0 else 0.0
 
 
 def _mark_sync_triggered(corp_id: str) -> None:
     cache.set(
-        refresh_last_triggered_cache_key(corp_id),
+        _corp_key(REFRESH_LAST_TRIGGERED_CACHE_KEY_TEMPLATE, corp_id),
         time.time(),
         timeout=REFRESH_MIN_INTERVAL_SECONDS,
     )
 
 
+def _acquire_running_lock(corp_id: str) -> bool:
+    expires_at = time.time() + float(REFRESH_RUNNING_LOCK_TTL_SECONDS)
+    return cache.add(
+        _corp_key(REFRESH_RUNNING_CACHE_KEY_TEMPLATE, corp_id),
+        expires_at,
+        timeout=REFRESH_RUNNING_LOCK_TTL_SECONDS,
+    )
+
+
+def _release_running_lock(corp_id: str) -> None:
+    _ = cache.delete(_corp_key(REFRESH_RUNNING_CACHE_KEY_TEMPLATE, corp_id))
+
+
+def _set_pending_marker(corp_id: str) -> None:
+    _ = cache.add(
+        _corp_key(REFRESH_PENDING_CACHE_KEY_TEMPLATE, corp_id),
+        "1",
+        timeout=REFRESH_PENDING_TTL_SECONDS,
+    )
+
+
+def _pending_marker_exists(corp_id: str) -> bool:
+    raw = cast("object", cache.get(_corp_key(REFRESH_PENDING_CACHE_KEY_TEMPLATE, corp_id)))
+    if raw is None:
+        return False
+    if raw != "1":
+        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
+    return True
+
+
+def _mark_trailing_needed(corp_id: str) -> None:
+    cache.set(
+        _corp_key(REFRESH_TRAILING_CACHE_KEY_TEMPLATE, corp_id),
+        "1",
+        timeout=REFRESH_PENDING_TTL_SECONDS,
+    )
+
+
+def _consume_trailing_needed(corp_id: str) -> bool:
+    key = _corp_key(REFRESH_TRAILING_CACHE_KEY_TEMPLATE, corp_id)
+    raw = cast("object", cache.get(key))
+    _ = cache.delete(key)
+    if raw is None:
+        return False
+    if raw != "1":
+        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
+    return True
+
+
 def _increment_requeue_count(corp_id: str) -> int:
-    key = refresh_requeue_cache_key(corp_id)
+    key = _corp_key(REFRESH_REQUEUE_CACHE_KEY_TEMPLATE, corp_id)
     if cache.add(key, 1, timeout=REFRESH_PENDING_TTL_SECONDS):
         return 1
     try:
@@ -302,15 +383,26 @@ def _accumulate_refresh_user_ids(corp_id: str, user_ids: Sequence[str]) -> None:
     _ = _with_user_ids_lock(corp_id, _merge)
 
 
-def _take_pending_user_ids(corp_id: str) -> tuple[str, ...]:
-    taken: list[str] = []
+def _peek_pending_user_ids(corp_id: str) -> tuple[str, ...]:
+    peeked: list[str] = []
 
-    def _clear(current: list[str]) -> list[str]:
-        taken.extend(current)
-        return []
+    def _copy(current: list[str]) -> list[str]:
+        peeked.extend(current)
+        return current
 
-    _ = _with_user_ids_lock(corp_id, _clear)
-    return tuple(taken)
+    _ = _with_user_ids_lock(corp_id, _copy)
+    return tuple(peeked)
+
+
+def _remove_sent_user_ids(corp_id: str, user_ids: Sequence[str]) -> None:
+    sent = {item for item in user_ids if item}
+    if not sent:
+        return
+
+    def _drop(current: list[str]) -> list[str]:
+        return [item for item in current if item not in sent]
+
+    _ = _with_user_ids_lock(corp_id, _drop)
 
 
 def _bounded_user_ids(corp_id: str, user_ids: list[str]) -> list[str]:
@@ -332,8 +424,8 @@ def _with_user_ids_lock(
     corp_id: str,
     mutator: Callable[[list[str]], list[str]],
 ) -> list[str]:
-    lock_key = refresh_user_ids_lock_cache_key(corp_id)
-    ids_key = refresh_user_ids_cache_key(corp_id)
+    lock_key = _corp_key(REFRESH_USER_IDS_LOCK_CACHE_KEY_TEMPLATE, corp_id)
+    ids_key = _corp_key(REFRESH_USER_IDS_CACHE_KEY_TEMPLATE, corp_id)
     for _attempt in range(REFRESH_USER_IDS_LOCK_ATTEMPTS):
         if cache.add(lock_key, "1", timeout=REFRESH_USER_IDS_LOCK_TTL_SECONDS):
             try:

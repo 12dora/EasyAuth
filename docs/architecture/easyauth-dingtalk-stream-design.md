@@ -65,11 +65,11 @@ ACK 契约(`EasyAuthDingTalkEventHandler`):
 `easyauth.integrations.authentik.directory_refresh.refresh_dingtalk_directory`:
 
 1. 读取 Authentik 该 corp 当前 `finished_at` 作为基线(用上游自己的时间戳判断完成, 避免两台主机时钟偏差);
-2. `AuthentikDirectoryClient.trigger_sync(corp_id)` 以增量方式(`full: false` + 事件涉及的 `user_ids`)触发 Authentik 从钉钉拉目录; 响应 `queued: false` 表示已有同步在跑, 本次 userId 放回 pending, 冷却后重试(最多 3 次);
-3. 轮询 `status/` 直到该 corp 出现新的终态: `success` 继续、`error` 显式失败、超时(默认 180 秒)按目录不可用失败——三者都会走 Celery 重试(指数退避), 且始终有 beat 轮询兜底;
+2. `AuthentikDirectoryClient.trigger_sync(corp_id)` 以增量方式(`full: false` + 事件涉及的 `user_ids`)触发 Authentik 从钉钉拉目录; 响应 `queued: false` 表示已有同步在跑, 本次 userId 留在 pending, 冷却后重试(最多 3 次, 达上限后 id 仍留 pending, 随后续事件或 trailing 一起走, 只打一条错误日志);
+3. 轮询 `status/` 直到该 corp 出现新的终态: `success` 继续、`error` 显式失败、超时(默认 180 秒)按目录不可用失败。超时后 Celery 重试必须先再读 `status/`: 若本次触发的同步已成功则只做本地 apply, 若仍在跑则继续等(受任务重试预算约束), 没有覆盖本次触发的同步时才重新 `trigger_sync`。触发基线(`finished_at` + 已 queued 的 user_ids)缓存在 per-corp 标记里;
 4. 复用 `sync_authentik_dingtalk_directory` 跑完整镜像同步与离职处置。
 
-**防抖合并**: 组织调整常带来事件风暴(一次转移部门可能触发几十条事件)。`request_directory_refresh` 用缓存标记合并——窗口内(30 秒)多条事件只排一次刷新任务, 同一 corp 两次触发至少间隔 120 秒(冷却期内的事件累积为恰好一次 trailing 刷新, 原因: 每次触发都会让 Authentik 产生约 80 次钉钉计费调用); 刷新任务开始执行时先清除标记, 之后到达的事件会重新排队, 保证任何事件都被其后的一次完整同步覆盖, 不存在"事件夹在两次同步之间被错过"的窗口。标记带 10 分钟 TTL, 防止任务丢失后卡死。
+**防抖合并**: 组织调整常带来事件风暴(一次转移部门可能触发几十条事件)。`request_directory_refresh` 用缓存标记合并——窗口内(30 秒)多条事件只排一次刷新任务; pending 标记与 outbox 入队在同一事务提交后落地(`transaction.on_commit`), 回滚不会留下挡住后续入队的 600 秒标记。同一 corp 两次 `queued=true` 的 `trigger_sync` 至少间隔 120 秒(冷却时间戳只在 `queued=true` 之后写入; 原因: 每次触发都会让 Authentik 产生约 80 次钉钉计费调用)。刷新任务全程持有 per-corp running 锁(TTL ≥ Authentik 180 秒等待 + 余量); 锁内到达的事件只累积 `user_ids` 并标记 trailing, 当前刷新结束(或锁 TTL 到期)且过冷却后恰好再触发一次, 禁止与进行中的等待并发 `trigger_sync`。`user_ids` 只 peek、不预先取走, 仅在 Authentik 对包含它们的请求返回 `queued: true` 后删除**本次送出的 id**(等待期间新累积的 id 保留); worker 崩溃后 `acks_late` 重投会重发同一批 id。执行中的任务必须容忍累积与 peek 的 TOCTOU: 不得多一次付费触发, 也不得丢 id。标记带 10 分钟 TTL, 防止任务丢失后卡死。
 
 ## 进程与部署
 
@@ -92,5 +92,5 @@ ACK 契约(`EasyAuthDingTalkEventHandler`):
 
 ## 测试
 
-- `tests/integration/integrations/test_dingtalk_stream.py`: 落库幂等与派发、ACK/NACK 契约、目录事件防抖合并、缺 corp_id 契约失败、审批事件四种流转、未处理类型保留、重放无副作用、凭证缺失快速失败。
-- `tests/integration/authentik/test_directory_refresh.py`: 触发-等待-同步全链路、上游同步失败显式报错、running 卡死超时报错。
+- `tests/integration/integrations/test_dingtalk_stream.py`: 落库幂等与派发、ACK/NACK 契约、目录事件防抖合并、缺 corp_id 契约失败、审批事件四种流转、未处理类型保留、重放无副作用、凭证缺失快速失败; 另覆盖 peek 后崩溃重投、等待期间累积的 id 不被误删、running 锁内事件只 trailing 一次、queued=false 达上限后 id 仍 pending、回滚事务不留下挡住入队的 pending 标记。
+- `tests/integration/authentik/test_directory_refresh.py`: 触发-等待-同步全链路、上游同步失败显式报错、running 卡死超时报错; 等待超时后重试时若上游已成功或仍在跑, 都不得第二次 `trigger_sync`。

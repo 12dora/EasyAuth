@@ -102,6 +102,47 @@ def _instant_policy() -> RefreshWaitPolicy:
     )
 
 
+def _timeout_policy() -> RefreshWaitPolicy:
+    return RefreshWaitPolicy(
+        timeout_seconds=5.0,
+        poll_interval_seconds=0.0,
+        sleep=lambda _seconds: None,
+        monotonic=iter([0.0, 1.0, 6.0]).__next__,
+    )
+
+
+def _mirrored_users() -> list[dict[str, object]]:
+    return [
+        {
+            "corp_id": "corp-1",
+            "user_id": "user-1",
+            "union_id": "union-1",
+            "name": "在职员工",
+            "status": "active",
+            "department_ids": ["1"],
+        },
+    ]
+
+
+def _mirrored_departments() -> list[dict[str, object]]:
+    return [
+        {"corp_id": "corp-1", "dept_id": "1", "parent_id": "", "name": "研发部", "order": 1},
+    ]
+
+
+def _mirrored_org_contexts() -> dict[tuple[str, str], dict[str, object]]:
+    return {
+        ("corp-1", "user-1"): {
+            "corp_id": "corp-1",
+            "user_id": "user-1",
+            "departments": [{"dept_id": "1", "name": "研发部"}],
+            "manager": {},
+            "manager_chain": [],
+            "stale": False,
+        },
+    }
+
+
 def test_refresh_waits_for_new_sync_then_mirrors_directory() -> None:
     # Given: 基线是上一轮完成状态; 触发后先 running, 再 success。
     client = _RefreshClientStub(
@@ -166,15 +207,8 @@ def test_refresh_raises_on_timeout_while_running() -> None:
             _status_entry("running", _BASELINE_FINISHED_AT),
         ],
     )
-    policy = RefreshWaitPolicy(
-        timeout_seconds=5.0,
-        poll_interval_seconds=0.0,
-        sleep=lambda _seconds: None,
-        monotonic=iter([0.0, 1.0, 6.0]).__next__,
-    )
-
     with pytest.raises(AuthentikDirectoryUnavailableError, match=REFRESH_TIMEOUT_MESSAGE):
-        _ = refresh_dingtalk_directory(client, "corp-1", wait_policy=policy)
+        _ = refresh_dingtalk_directory(client, "corp-1", wait_policy=_timeout_policy())
 
 
 def test_refresh_forwards_user_ids_to_trigger_sync() -> None:
@@ -243,3 +277,52 @@ def test_refresh_skips_wait_when_not_queued() -> None:
     assert result is None
     assert client.triggered_corp_ids == ["corp-1"]
     assert client.triggered_user_ids == [("u-1",)]
+
+
+def test_refresh_timeout_retry_applies_finished_sync_without_retrigger() -> None:
+    client = _RefreshClientStub(
+        status_script=[
+            _status_entry("success", _BASELINE_FINISHED_AT),
+            _status_entry("running", _BASELINE_FINISHED_AT),
+        ],
+        users=_mirrored_users(),
+        departments=_mirrored_departments(),
+        org_contexts=_mirrored_org_contexts(),
+    )
+
+    with pytest.raises(AuthentikDirectoryUnavailableError, match=REFRESH_TIMEOUT_MESSAGE):
+        _ = refresh_dingtalk_directory(
+            client,
+            "corp-1",
+            user_ids=("u-1",),
+            wait_policy=_timeout_policy(),
+        )
+    assert client.triggered_user_ids == [("u-1",)]
+
+    client.status_script = [_status_entry("success", _FRESH_FINISHED_AT, generation=2)]
+    result = refresh_dingtalk_directory(
+        client,
+        "corp-1",
+        user_ids=("u-1",),
+        wait_policy=_instant_policy(),
+    )
+    assert client.triggered_user_ids == [("u-1",)]
+    assert result is not None
+    assert result.user_count == 1
+
+
+def test_refresh_timeout_retry_keeps_waiting_without_retrigger() -> None:
+    client = _RefreshClientStub(
+        status_script=[
+            _status_entry("success", _BASELINE_FINISHED_AT),
+            _status_entry("running", _BASELINE_FINISHED_AT),
+        ],
+    )
+
+    with pytest.raises(AuthentikDirectoryUnavailableError, match=REFRESH_TIMEOUT_MESSAGE):
+        _ = refresh_dingtalk_directory(client, "corp-1", wait_policy=_timeout_policy())
+    assert client.triggered_corp_ids == ["corp-1"]
+
+    with pytest.raises(AuthentikDirectoryUnavailableError, match=REFRESH_TIMEOUT_MESSAGE):
+        _ = refresh_dingtalk_directory(client, "corp-1", wait_policy=_timeout_policy())
+    assert client.triggered_corp_ids == ["corp-1"]
