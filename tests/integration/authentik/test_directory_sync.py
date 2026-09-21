@@ -1562,27 +1562,115 @@ def _seed_stale_same_generation_state(
 
 @override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
 def test_directory_sync_unchanged_generation_skips_directory_fetch() -> None:
-    # 旧行为会在 generation 未变时仍拉完整目录; 截断/org 失败会挡住新鲜度刷新。
+    # generation 未变且活镜像人口与契约计数一致时只读 status; 若误拉完整目录,
+    # org 失败会挡住新鲜度刷新。
     state = _seed_stale_same_generation_state(("user-trunc-fresh",))
     stale_at = state.last_synced_at
-    truncated = _stub_with_users(
+    unchanged = _stub_with_users(
         [{"corp_id": "corp-1", "user_id": "user-trunc-fresh", "status": "active"}],
     )
-    truncated.generation = 3
-    truncated.reported_user_count = 3
-    truncated.org_fetch_errors = {("corp-1", "user-trunc-fresh")}
+    unchanged.generation = 3
+    unchanged.org_fetch_errors = {("corp-1", "user-trunc-fresh")}
 
     with TestCase.captureOnCommitCallbacks(execute=True):
-        result = sync_authentik_dingtalk_directory(truncated)
+        result = sync_authentik_dingtalk_directory(unchanged)
 
     state.refresh_from_db()
-    _assert_directory_calls(truncated, status=1)
+    _assert_directory_calls(unchanged, status=1)
     assert result.confirmed_corp_count == 1
     assert result.sync_state_count == 0
     assert result.user_count == 0
     assert state.last_synced_at > stale_at
     assert not is_sync_state_stale(state)
     assert OutboxEvent.objects.filter(task_name=DEPARTMENT_GRANT_RECONCILE_TASK_NAME).exists()
+
+
+def test_directory_sync_repairs_deleted_user_when_generation_unchanged() -> None:
+    _ = _seed_stale_same_generation_state(("user-repair-missing",))
+    _ = DingTalkUserMirror.objects.filter(
+        corp_id="corp-1",
+        user_id="user-repair-missing",
+    ).delete()
+    assert not DingTalkUserMirror.objects.filter(user_id="user-repair-missing").exists()
+
+    repair = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-repair-missing", "status": "active"}],
+    )
+    repair.generation = 3
+    result = sync_authentik_dingtalk_directory(repair)
+
+    restored = DingTalkUserMirror.objects.get(corp_id="corp-1", user_id="user-repair-missing")
+    _assert_directory_calls(repair, status=_FINAL_STATUS_CALL, departments=1, users=1, org=1)
+    assert restored.is_tombstone is False
+    assert restored.status == "active"
+    assert result.user_count == 1
+    assert result.sync_state_count == 1
+    assert result.confirmed_corp_count == 0
+
+
+def test_directory_sync_repairs_extra_department_when_generation_unchanged() -> None:
+    _ = _seed_stale_same_generation_state(("user-repair-extra-dept",))
+    _ = DingTalkDepartmentMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-1",
+        dept_id="dept-extra",
+        name="多余部门",
+    )
+
+    repair = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-repair-extra-dept", "status": "active"}],
+    )
+    repair.generation = 3
+    result = sync_authentik_dingtalk_directory(repair)
+
+    _assert_directory_calls(repair, status=_FINAL_STATUS_CALL, departments=1, users=1, org=1)
+    assert not DingTalkDepartmentMirror.objects.filter(dept_id="dept-extra").exists()
+    assert result.pruned_department_count == 1
+    assert result.sync_state_count == 1
+    assert result.confirmed_corp_count == 0
+
+
+def test_directory_sync_repairs_missing_department_when_generation_unchanged() -> None:
+    department = {
+        "corp_id": "corp-1",
+        "dept_id": "dept-repair",
+        "parent_id": "",
+        "name": "应保留部门",
+        "order": 1,
+    }
+    user = {"corp_id": "corp-1", "user_id": "user-repair-missing-dept", "status": "active"}
+    org_context = {
+        "corp_id": "corp-1",
+        "user_id": "user-repair-missing-dept",
+        "departments": [],
+        "manager": {},
+        "manager_chain": [],
+        "stale": False,
+    }
+    initial = _DirectoryClientStub(
+        departments=[department],
+        users=[user],
+        org_contexts={("corp-1", "user-repair-missing-dept"): org_context},
+    )
+    initial.generation = 3
+    _ = sync_authentik_dingtalk_directory(initial)
+    _ = DingTalkDepartmentMirror.objects.filter(dept_id="dept-repair").delete()
+    assert not DingTalkDepartmentMirror.objects.filter(dept_id="dept-repair").exists()
+
+    repair = _DirectoryClientStub(
+        departments=[department],
+        users=[user],
+        org_contexts={("corp-1", "user-repair-missing-dept"): org_context},
+    )
+    repair.generation = 3
+    result = sync_authentik_dingtalk_directory(repair)
+
+    restored = DingTalkDepartmentMirror.objects.get(dept_id="dept-repair")
+    _assert_directory_calls(repair, status=_FINAL_STATUS_CALL, departments=1, users=1, org=1)
+    assert restored.name == "应保留部门"
+    assert result.department_count == 1
+    assert result.sync_state_count == 1
+    assert result.confirmed_corp_count == 0
 
 
 @override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)

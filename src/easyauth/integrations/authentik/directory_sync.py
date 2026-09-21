@@ -4,8 +4,13 @@ import logging
 from typing import TYPE_CHECKING, Final, cast
 
 from django.db import transaction
+from django.db.models import Count
 
-from easyauth.accounts.models import DingTalkDirectorySyncState
+from easyauth.accounts.models import (
+    DingTalkDepartmentMirror,
+    DingTalkDirectorySyncState,
+    DingTalkUserMirror,
+)
 from easyauth.grants.department_reconcile import schedule_department_grant_reconcile
 from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
 from easyauth.integrations.authentik.directory_contract import directory_user_key
@@ -40,6 +45,11 @@ from easyauth.integrations.authentik.directory_sync_types import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from django.db.models import Model, QuerySet
+
+    from easyauth.integrations.authentik.directory_contract import CorpSnapshotContract
     from easyauth.integrations.authentik.directory_payloads import DirectoryJson
 
 logger = logging.getLogger(__name__)
@@ -58,8 +68,9 @@ def sync_authentik_dingtalk_directory(
     client: AuthentikDirectorySyncClient,
 ) -> AuthentikDirectorySyncResult:
     # 先读一次 status。status_contract 已要求每 corp 为 success 终态。
-    # 全 corp generation 未变时不拉部门/用户/组织上下文, 只刷新新鲜度。
-    # 任一 corp 需要写入时再拉完整快照, 并做拉取前后 status 一致性校验。
+    # 全 corp generation 未变且本地活镜像人口与契约计数一致时, 不拉部门/用户/
+    # 组织上下文, 只刷新新鲜度。任一 corp 需要写入(世代前进, 或镜像与契约计数
+    # 不一致的修复)时再拉完整快照, 并做拉取前后 status 一致性校验。
     status, source_slug, contracts = _read_directory_status(client)
     status_snapshot = _status_only_snapshot(
         status=status,
@@ -100,8 +111,9 @@ def _apply_directory_snapshot(
 ) -> AuthentikDirectorySyncResult:
     # 同一 source/corp 的状态行既是数据库串行点, 也是持久 generation fence。
     # 整轮写入使用同一事务: 任何落库/撤权/生命周期异常都会整体回滚。
-    # 上游 generation 未变时仍刷新 last_synced_at: 新鲜度表示"已在本时刻核对镜像",
-    # 而不是"上游上次发生变化的时间"。
+    # 上游 generation 未变但镜像人口与契约计数不一致时仍走写入修复, 把缺失行
+    # 补回、把多余部门剪掉。确认未变的 corp 只刷新 last_synced_at: 新鲜度表示
+    # "已在本时刻核对镜像", 而不是"上游上次发生变化的时间"。
     with transaction.atomic():
         locked_states = _lock_sync_states(snapshot)
         writable_corp_ids, confirmed_corp_ids = _classify_corp_ids(
@@ -212,6 +224,10 @@ def _classify_corp_ids(
 ) -> tuple[frozenset[str], frozenset[str]]:
     writable: set[str] = set()
     confirmed: set[str] = set()
+    live_counts = _live_mirror_counts(
+        snapshot,
+        _equal_generation_corp_ids(snapshot, applied_generations),
+    )
     for corp_id, contract in snapshot.contracts.items():
         applied_generation = applied_generations[corp_id]
         if contract.generation < applied_generation:
@@ -220,11 +236,77 @@ def _classify_corp_ids(
                 f"incoming={contract.generation} applied={applied_generation}"
             )
             raise AuthentikDirectoryUnavailableError(message)
-        if contract.generation > applied_generation:
+        if _corp_needs_directory_write(
+            contract,
+            applied_generation=applied_generation,
+            live_count=live_counts.get(corp_id),
+        ):
             writable.add(corp_id)
             continue
         confirmed.add(corp_id)
     return frozenset(writable), frozenset(confirmed)
+
+
+def _corp_needs_directory_write(
+    contract: CorpSnapshotContract,
+    *,
+    applied_generation: int,
+    live_count: tuple[int, int] | None,
+) -> bool:
+    if contract.generation > applied_generation:
+        return True
+    # generation 未变但活镜像人口与契约不一致: 走与世代前进相同的写入路径修复。
+    return live_count != (contract.user_count, contract.department_count)
+
+
+def _equal_generation_corp_ids(
+    snapshot: _DirectorySnapshot,
+    applied_generations: dict[str, int],
+) -> frozenset[str]:
+    return frozenset(
+        corp_id
+        for corp_id, contract in snapshot.contracts.items()
+        if applied_generations[corp_id] == contract.generation
+    )
+
+
+def _live_mirror_counts(
+    snapshot: _DirectorySnapshot,
+    corp_ids: frozenset[str],
+) -> dict[str, tuple[int, int]]:
+    if not corp_ids:
+        return {}
+    # 活镜像人口必须与 status 契约 counters 一致, 否则 generation 未变也要写入修复。
+    # 用户只计非 tombstone: 全量 apply 把快照内用户 upsert 为 is_tombstone=False
+    # (含快照内 departed), 快照外用户保留 tombstone, 不计入契约 user_count。
+    # 部门无 tombstone, 缺失即物理删除, 因此计该 (source_slug, corp_id) 的全部部门行。
+    corp_id_tuple = tuple(corp_ids)
+    user_counts = _corp_id_counts(
+        DingTalkUserMirror.objects.filter(
+            source_slug=snapshot.source_slug,
+            corp_id__in=corp_id_tuple,
+            is_tombstone=False,
+        ),
+    )
+    department_counts = _corp_id_counts(
+        DingTalkDepartmentMirror.objects.filter(
+            source_slug=snapshot.source_slug,
+            corp_id__in=corp_id_tuple,
+        ),
+    )
+    return {
+        corp_id: (user_counts.get(corp_id, 0), department_counts.get(corp_id, 0))
+        for corp_id in corp_ids
+    }
+
+
+def _corp_id_counts(queryset: object) -> dict[str, int]:
+    grouped = cast("QuerySet[Model]", queryset)
+    rows = cast(
+        "Iterable[tuple[str, int]]",
+        grouped.values("corp_id").annotate(n=Count("id")).values_list("corp_id", "n"),
+    )
+    return dict(rows)
 
 
 def _snapshot_for_corps(
