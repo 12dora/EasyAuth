@@ -20,6 +20,10 @@ class DingTalkApiUnavailableError(DingTalkApiError):
     pass
 
 
+class DingTalkCallBudgetExceededError(DingTalkApiUnavailableError):
+    """钉钉开放平台日调用预算已耗尽; 本次 HTTP 请求未发出。"""
+
+
 class DingTalkApiRequestError(DingTalkApiError):
     def __init__(
         self,

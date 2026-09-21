@@ -19,6 +19,7 @@ DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 MISSING_SETTING_ERROR_TEMPLATE: Final = (
     "{name} 未配置。生产环境必须显式设置该环境变量; 本地开发请设置 DJANGO_DEBUG=1。"
 )
+POSITIVE_INT_SETTING_ERROR_TEMPLATE: Final = "{name} 必须是大于 0 的整数, 当前值: {value!r}。"
 
 
 def required_env(name: str, *, dev_default: str) -> str:
@@ -29,6 +30,20 @@ def required_env(name: str, *, dev_default: str) -> str:
     if DEBUG:
         return dev_default
     raise ImproperlyConfigured(MISSING_SETTING_ERROR_TEMPLATE.format(name=name))
+
+
+def parse_positive_int_setting(name: str, raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ImproperlyConfigured(
+            POSITIVE_INT_SETTING_ERROR_TEMPLATE.format(name=name, value=raw),
+        ) from error
+    if value <= 0:
+        raise ImproperlyConfigured(
+            POSITIVE_INT_SETTING_ERROR_TEMPLATE.format(name=name, value=raw),
+        )
+    return value
 
 
 SECRET_KEY = required_env(
@@ -352,6 +367,15 @@ EASYAUTH_WEBAUTHN_ORIGINS = tuple(
     if origin.strip()
 )
 EASYAUTH_DINGTALK_CALLBACK_SECRET = os.environ.get("EASYAUTH_DINGTALK_CALLBACK_SECRET", "")
+# 钉钉开放平台 REST 按次计费; 日硬帽覆盖全部类别, 回执对账另有子帽(见 call_budget)。
+EASYAUTH_DINGTALK_DAILY_CALL_BUDGET = parse_positive_int_setting(
+    "EASYAUTH_DINGTALK_DAILY_CALL_BUDGET",
+    os.environ.get("EASYAUTH_DINGTALK_DAILY_CALL_BUDGET", "5000"),
+)
+EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET = parse_positive_int_setting(
+    "EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET",
+    os.environ.get("EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET", "1000"),
+)
 EASYAUTH_AUTHENTIK_BASE_URL = required_env(
     "EASYAUTH_AUTHENTIK_BASE_URL",
     dev_default="http://localhost:19000",

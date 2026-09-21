@@ -20,10 +20,12 @@ from easyauth.integrations.dingtalk.access_token import (
     read_cached_access_token,
     validated_access_token_payload,
 )
+from easyauth.integrations.dingtalk.call_budget import record_and_check
 from easyauth.integrations.dingtalk.errors import (
     DingTalkApiError,
     DingTalkApiRequestError,
     DingTalkApiUnavailableError,
+    DingTalkCallBudgetExceededError,
     DingTalkNotConfiguredError,
 )
 from easyauth.integrations.dingtalk.robot import (
@@ -54,6 +56,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from types import TracebackType
 
+    from easyauth.integrations.dingtalk.call_budget import DingTalkCallCategory
     from easyauth.integrations.dingtalk.errors import DingTalkJson
 
 # 默认走钉钉新版 v1.0 API(api.dingtalk.com); 审批、服务号机器人单聊等均有新版。
@@ -81,6 +84,7 @@ __all__ = (
     "DingTalkApiError",
     "DingTalkApiRequestError",
     "DingTalkApiUnavailableError",
+    "DingTalkCallBudgetExceededError",
     "DingTalkForbiddenReceipt",
     "DingTalkFormComponent",
     "DingTalkNotConfiguredError",
@@ -117,6 +121,13 @@ class _JsonRequestOptions:
     query: dict[str, str] | None = None
     authenticated: bool = True
     deadline: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecuteJsonSpec:
+    headers: dict[str, str]
+    body: DingTalkJson | None
+    deadline: float
 
 
 _DEFAULT_JSON_REQUEST_OPTIONS: Final = _JsonRequestOptions()
@@ -188,6 +199,7 @@ class DingTalkApiClient:
         return self._request_json(
             "POST",
             "/v1.0/oauth2/accessToken",
+            category="token",
             options=_JsonRequestOptions(
                 body={"appKey": self._app_key, "appSecret": self._app_secret},
                 authenticated=False,
@@ -206,6 +218,7 @@ class DingTalkApiClient:
         payload = self._request_json(
             "POST",
             "/v1.0/workflow/processInstances",
+            category="approval",
             options=_JsonRequestOptions(
                 body={
                     "processCode": process_code,
@@ -228,6 +241,7 @@ class DingTalkApiClient:
         payload = self._request_json(
             "GET",
             "/v1.0/workflow/processInstances",
+            category="approval",
             options=_JsonRequestOptions(query={"processInstanceId": process_instance_id}),
         )
         result = payload.get("result")
@@ -255,6 +269,7 @@ class DingTalkApiClient:
             raise DingTalkApiRequestError(message)
         payload = self._request_oapi_json(
             OAPI_ASYNC_SEND_PATH,
+            category="notify_send",
             body={
                 "agent_id": agent_id,
                 "userid_list": ",".join(userid_list),
@@ -271,6 +286,7 @@ class DingTalkApiClient:
         """查询工作通知发送进度(旧版 oapi getsendprogress)。"""
         payload = self._request_oapi_json(
             OAPI_GET_SEND_PROGRESS_PATH,
+            category="notify_reconcile",
             body={"agent_id": agent_id, "task_id": task_id},
         )
         progress = payload.get("progress")
@@ -283,6 +299,7 @@ class DingTalkApiClient:
         """查询工作通知发送结果(旧版 oapi getsendresult)。"""
         payload = self._request_oapi_json(
             OAPI_GET_SEND_RESULT_PATH,
+            category="notify_reconcile",
             body={"agent_id": agent_id, "task_id": task_id},
         )
         send_result = payload.get("send_result")
@@ -339,6 +356,7 @@ class DingTalkApiClient:
         payload = self._request_json(
             "POST",
             ROBOT_OTO_BATCH_SEND_PATH,
+            category="robot_send",
             options=_JsonRequestOptions(
                 body={
                     "robotCode": robot_code,
@@ -355,6 +373,7 @@ class DingTalkApiClient:
         method: str,
         path: str,
         *,
+        category: DingTalkCallCategory,
         options: _JsonRequestOptions = _DEFAULT_JSON_REQUEST_OPTIONS,
     ) -> DingTalkJson:
         deadline = (
@@ -369,15 +388,15 @@ class DingTalkApiClient:
         return self._execute_json_request(
             method,
             url,
-            headers=headers,
-            body=options.body,
-            deadline=deadline,
+            category=category,
+            spec=_ExecuteJsonSpec(headers=headers, body=options.body, deadline=deadline),
         )
 
     def _request_oapi_json(
         self,
         path: str,
         *,
+        category: DingTalkCallCategory,
         body: DingTalkJson,
         _deadline: float | None = None,
     ) -> DingTalkJson:
@@ -389,9 +408,8 @@ class DingTalkApiClient:
         payload = self._execute_json_request(
             "POST",
             url,
-            headers=headers,
-            body=body,
-            deadline=deadline,
+            category=category,
+            spec=_ExecuteJsonSpec(headers=headers, body=body, deadline=deadline),
         )
         _raise_for_oapi_errcode(payload)
         return payload
@@ -407,9 +425,12 @@ class DingTalkApiClient:
         payload = self._execute_json_request(
             "GET",
             f"{DINGTALK_OAPI_BASE_URL}{OAPI_GET_TOKEN_PATH}?{query}",
-            headers={"Accept": "application/json"},
-            body=None,
-            deadline=deadline,
+            category="probe",
+            spec=_ExecuteJsonSpec(
+                headers={"Accept": "application/json"},
+                body=None,
+                deadline=deadline,
+            ),
         )
         _raise_for_oapi_errcode(payload)
         token = payload.get("access_token")
@@ -422,20 +443,20 @@ class DingTalkApiClient:
         method: str,
         url: str,
         *,
-        headers: dict[str, str],
-        body: DingTalkJson | None,
-        deadline: float,
+        category: DingTalkCallCategory,
+        spec: _ExecuteJsonSpec,
     ) -> DingTalkJson:
-        data = dumps(body).encode("utf-8") if body is not None else None
-        request = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - 常量 https 基址。
+        record_and_check(category)
+        data = dumps(spec.body).encode("utf-8") if spec.body is not None else None
+        request = Request(url, data=data, headers=spec.headers, method=method)  # noqa: S310 - 常量 https 基址。
         try:
-            remaining = _remaining_seconds(deadline)
+            remaining = _remaining_seconds(spec.deadline)
             with cast(
                 "_ReadableResponse",
                 urlopen(request, timeout=remaining),  # noqa: S310
             ) as response:
                 raw = response.read(MAX_JSON_RESPONSE_BYTES + 1)
-            _ = _remaining_seconds(deadline)
+            _ = _remaining_seconds(spec.deadline)
         except HTTPError as error:
             detail = _error_detail(error)
             message = f"钉钉 API 请求失败(HTTP {error.code}): {detail}"

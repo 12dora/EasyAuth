@@ -10,7 +10,11 @@ from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkDirectorySyncState
 from easyauth.applications import dependency_health_checks
-from easyauth.applications.health_models import DependencyHealthSnapshot
+from easyauth.applications.health_models import (
+    DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+    DEPENDENCY_HEALTH_STATUS_WARNING,
+    DependencyHealthSnapshot,
+)
 from easyauth.applications.integration_settings import IntegrationSettings
 from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
@@ -18,6 +22,7 @@ from easyauth.integrations.authentik.directory_client import (
 )
 from easyauth.integrations.authentik.directory_payloads import DingTalkDirectoryStatus
 from easyauth.integrations.authentik.liveness import AuthentikLivenessResult
+from easyauth.integrations.dingtalk.call_budget import record_and_check
 from tests.integration.admin_console.auth_helpers import (
     authenticate_console_admin,
     authenticate_console_user,
@@ -29,6 +34,17 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.django_db
 
 CHECK_API_URL: Final = "/console/api/v1/operations/dependency-health/checks"
+
+
+def _healthy_dingtalk_sync_state() -> None:
+    _ = DingTalkDirectorySyncState.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-healthy",
+        status="success",
+        counters={"users": 5},
+        finished_at=timezone.now().isoformat(),
+        error="",
+    )
 
 
 def test_check_dingtalk_reports_unhealthy_when_any_corp_errored() -> None:
@@ -75,8 +91,60 @@ def test_check_dingtalk_uses_shared_directory_stale_threshold() -> None:
 
     result = dependency_health_checks._check_dingtalk()  # noqa: SLF001
 
-    assert result.status == "warning"
+    assert result.status == DEPENDENCY_HEALTH_STATUS_WARNING
     assert "已过期" in result.summary
+    assert "今日调用" in result.summary
+
+
+@override_settings(
+    EASYAUTH_DINGTALK_DAILY_CALL_BUDGET=10,
+    EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET=3,
+)
+def test_check_dingtalk_warns_when_hard_budget_reaches_eighty_percent() -> None:
+    _healthy_dingtalk_sync_state()
+    for _ in range(8):
+        record_and_check("token")
+
+    result = dependency_health_checks._check_dingtalk()  # noqa: SLF001
+
+    assert result.status == DEPENDENCY_HEALTH_STATUS_WARNING
+    assert "80%" in result.summary
+    assert "token=8" in result.summary
+    assert "今日调用 8/10" in result.summary
+
+
+@override_settings(
+    EASYAUTH_DINGTALK_DAILY_CALL_BUDGET=10,
+    EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET=3,
+)
+def test_check_dingtalk_warns_when_reconcile_budget_exhausted() -> None:
+    _healthy_dingtalk_sync_state()
+    for _ in range(3):
+        record_and_check("notify_reconcile")
+
+    result = dependency_health_checks._check_dingtalk()  # noqa: SLF001
+
+    assert result.status == DEPENDENCY_HEALTH_STATUS_WARNING
+    assert "回执对账日预算已耗尽" in result.summary
+    assert "notify_reconcile=3" in result.summary
+
+
+@override_settings(
+    EASYAUTH_DINGTALK_DAILY_CALL_BUDGET=10,
+    EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET=3,
+)
+def test_check_dingtalk_unhealthy_when_hard_budget_exhausted() -> None:
+    _healthy_dingtalk_sync_state()
+    for _ in range(10):
+        record_and_check("notify_send")
+
+    result = dependency_health_checks._check_dingtalk()  # noqa: SLF001
+
+    assert result.status == DEPENDENCY_HEALTH_STATUS_UNHEALTHY
+    assert "硬预算已耗尽" in result.summary
+    assert "硬预算已耗尽" in result.error_summary
+    assert "今日调用 10/10" in result.summary
+    assert "notify_send=10" in result.summary
 
 
 def test_dependency_health_check_writes_snapshots(monkeypatch: pytest.MonkeyPatch) -> None:

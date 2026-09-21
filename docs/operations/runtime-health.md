@@ -39,3 +39,19 @@ healthcheck 必须探测真实存活，不用 `sleep` 占位。
 
 `run_dingtalk_stream` 的心跳线程每轮写入运行心跳。缓存短暂不可用时，线程记录异常并在下一轮
 继续尝试；缓存失败不会被解释为健康，详细 readiness 会继续按心跳年龄暴露真实不健康状态。
+
+## 钉钉 REST 日调用预算
+
+依赖健康里的 `dingtalk` 条目会叠加当日开放平台 REST 用量（总量、各类别计数、硬帽/对账子帽）。
+口径与熔断行为见 [钉钉开放平台日调用预算](dingtalk-api-budget.md)。
+
+## Stream 重连退避
+
+`run_dingtalk_stream` 不使用 SDK `start_forever` 的固定 3–10 秒重连。
+`POST /v1.0/gateway/connections/open` 按次计费，固定短间隔会把日调用打到上万次。
+
+监督循环每次只跑一个 SDK 会话（一次打开连接 + 一段 WebSocket）。会话结束后按
+5 秒、10 秒、20 秒……指数退避再打开下一次连接，封顶 300 秒，并叠加 0–20% 正向抖动。
+只有一次会话持续连通达到 60 秒，才把退避重置为 5 秒。持续故障时每天最多约 288
+次打开连接。SIGTERM 与 KeyboardInterrupt 会停止重连并退出进程；心跳线程仍按原节奏
+写入，不受退避等待影响。

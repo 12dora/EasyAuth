@@ -36,6 +36,12 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryPermissionError,
 )
 from easyauth.integrations.authentik.liveness import check_authentik_liveness
+from easyauth.integrations.dingtalk.call_budget import (
+    budget_health_reason,
+    budget_health_status,
+    format_usage_summary,
+    usage_today,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -57,6 +63,11 @@ CELERY_PING_TIMEOUT_SECONDS: Final = 1.0
 DIRECTORY_TOKEN_MISSING_MESSAGE: Final = "未配置 Authentik API token, 无法访问目录 API。"  # noqa: S105 - 提示文案, 非凭据.
 DINGTALK_SYNC_MISSING_MESSAGE: Final = "尚未执行钉钉目录同步, 无法评估钉钉数据链路。"
 CELERY_NO_WORKER_MESSAGE: Final = "无在线 Celery worker 响应 ping。"
+_HEALTH_STATUS_RANK: Final[dict[str, int]] = {
+    DEPENDENCY_HEALTH_STATUS_HEALTHY: 0,
+    DEPENDENCY_HEALTH_STATUS_WARNING: 1,
+    DEPENDENCY_HEALTH_STATUS_UNHEALTHY: 2,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +226,10 @@ def _directory_status_contract_error(
 
 
 def _check_dingtalk() -> DependencyCheckResult:
+    return _with_dingtalk_call_budget(_dingtalk_directory_result())
+
+
+def _dingtalk_directory_result() -> DependencyCheckResult:
     # 多 corp 部署下必须评估所有同步状态行 (worst-of 汇总): 一个较新的健康 corp
     # 不能掩盖另一个 corp 的失败或陈旧, 否则 .first() 会漏报真实故障。
     states = tuple(DingTalkDirectorySyncState.objects.order_by("source_slug", "corp_id"))
@@ -242,6 +257,33 @@ def _check_dingtalk() -> DependencyCheckResult:
         summary=f"钉钉目录同步正常, 共 {len(states)} 个 corp, 最早同步于 {oldest.isoformat()}。",
         error_summary="",
     )
+
+
+def _with_dingtalk_call_budget(result: DependencyCheckResult) -> DependencyCheckResult:
+    usage = usage_today()
+    budget_status = budget_health_status(usage)
+    status = _worse_health_status(result.status, budget_status)
+    reason = budget_health_reason(usage)
+    usage_text = format_usage_summary(usage)
+    summary = " ".join(part for part in (result.summary, reason, usage_text) if part)
+    error_summary = result.error_summary
+    if budget_status == DEPENDENCY_HEALTH_STATUS_UNHEALTHY and error_summary == "":
+        error_summary = reason or usage_text
+    return DependencyCheckResult(
+        dependency=result.dependency,
+        status=status,
+        summary=summary,
+        error_summary=error_summary,
+    )
+
+
+def _worse_health_status(left: str, right: str) -> str:
+    if left not in _HEALTH_STATUS_RANK or right not in _HEALTH_STATUS_RANK:
+        message = f"未知的依赖健康状态: {left}/{right}"
+        raise ValueError(message)
+    if _HEALTH_STATUS_RANK[right] > _HEALTH_STATUS_RANK[left]:
+        return right
+    return left
 
 
 def _dingtalk_error_result(
