@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -21,8 +21,6 @@ const GUARDED_FILES = [
   "components/shell/UserSummaryMenu.tsx",
   "components/shell/useUserSummaryMenu.ts",
   "pages/console/OperationsPage.tsx",
-  "pages/console/systemHealth/SystemHealthPage.tsx",
-  "pages/console/systemHealth/DependencyStatusTab.tsx",
   "pages/console/ConsoleAppWorkspace.tsx",
   "pages/console/ConsoleSettingsPage.tsx",
   "pages/console/ConsoleTeamList.tsx",
@@ -78,7 +76,33 @@ const GUARDED_FILES = [
   "pages/console/lifecycle/OnboardingPage.tsx",
 ] as const;
 
+/**
+ * 整目录纳入护栏(递归, 跳过 *.test.ts(x))。
+ *
+ * 逐个文件列举挡不住新增文件: 「状态健康 / 用量监控」一口气加了三十多个组件,
+ * 名单上只有页面壳层, 新写的组件天然在护栏之外。按目录登记后, 这些目录下
+ * 以后新增的任何组件都自动进护栏, 不需要有人记得回来补名单。
+ */
+const GUARDED_DIRECTORIES = ["pages/console/systemHealth"] as const;
+
 const CJK_IDEOGRAPH = /[一-鿿]/;
+
+function collectGuardedFiles(relativeDir: string): string[] {
+  return readdirSync(resolve(SRC_DIR, relativeDir), { withFileTypes: true }).flatMap((entry) => {
+    const relativePath = `${relativeDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      return collectGuardedFiles(relativePath);
+    }
+    if (!/\.tsx?$/.test(entry.name) || /\.test\.tsx?$/.test(entry.name)) {
+      return [];
+    }
+    return [relativePath];
+  });
+}
+
+const ALL_GUARDED_FILES = [
+  ...new Set([...GUARDED_FILES, ...GUARDED_DIRECTORIES.flatMap(collectGuardedFiles)]),
+].sort();
 
 function stripComments(source: string): string {
   // 先去块注释 /* ... */, 再去整行 // 注释(仅整行以避免破坏 URL 里的 https://)。
@@ -86,7 +110,16 @@ function stripComments(source: string): string {
 }
 
 describe("FF-9 无硬编码中文护栏", () => {
-  test.each(GUARDED_FILES)("%s 剥离注释后不含 CJK 字符", (relativePath) => {
+  test("按目录登记的护栏确实收集到了文件", () => {
+    // 目录写错 / 被搬走时必须失败, 而不是悄悄退化成零个用例。
+    for (const directory of GUARDED_DIRECTORIES) {
+      expect(collectGuardedFiles(directory).length).toBeGreaterThan(0);
+    }
+    expect(ALL_GUARDED_FILES).toContain("pages/console/systemHealth/usage/UsageMeterBar.tsx");
+    expect(ALL_GUARDED_FILES).toContain("pages/console/systemHealth/usage/settings/UsageSettingsDialog.tsx");
+  });
+
+  test.each(ALL_GUARDED_FILES)("%s 剥离注释后不含 CJK 字符", (relativePath) => {
     const source = readFileSync(resolve(SRC_DIR, relativePath), "utf8");
     const code = stripComments(source);
     expect(CJK_IDEOGRAPH.test(code)).toBe(false);

@@ -16,11 +16,13 @@ describe("UsageMeterCard", () => {
     expect(screen.getByText("API 计费调用")).toBeInTheDocument();
     expect(screen.getByTestId("usage-count-up")).toHaveTextContent("4,120");
 
-    const bars = screen.getAllByRole("progressbar");
+    // role="meter" 而不是 progressbar: 这是一个当前值, 不是一件正在推进的任务。
+    const bars = screen.getAllByRole("meter");
     expect(bars).toHaveLength(2);
     expect(bars[0]).toHaveAttribute("aria-label", "API 计费调用 今日用量 82%");
     expect(bars[0]).toHaveAttribute("aria-valuemax", "5000");
     expect(bars[0]).toHaveAttribute("aria-valuenow", "4120");
+    expect(bars[0]).toHaveAttribute("aria-valuetext", "82%");
     expect(bars[0]).toHaveStyle({ width: "82.4%" });
 
     // 两条条各三个阈值刻度, 每个刻度都能悬浮读出它代表的百分比。
@@ -52,6 +54,12 @@ describe("UsageMeterCard", () => {
 
     expect(screen.getByText("已超出额度 20%")).toBeInTheDocument();
     expect(screen.getByText("已拦截计费调用")).toBeInTheDocument();
+
+    // aria-valuenow 必须落在 min..max 之间, 超出多少由 aria-valuetext 如实报读。
+    const todayBar = screen.getAllByRole("meter")[0];
+    expect(todayBar).toHaveAttribute("aria-valuemax", "5000");
+    expect(todayBar).toHaveAttribute("aria-valuenow", "5000");
+    expect(todayBar).toHaveAttribute("aria-valuetext", "6,000 / 5,000，已超出额度 20%");
   });
 
   test("未设置任何配额时走空态, 并给出打开用量设置的入口", () => {
@@ -75,7 +83,7 @@ describe("UsageMeterCard", () => {
     );
 
     expect(screen.getByText("未设置配额")).toBeInTheDocument();
-    expect(screen.queryAllByRole("progressbar")).toHaveLength(0);
+    expect(screen.queryAllByRole("meter")).toHaveLength(0);
     expect(screen.getByRole("button", { name: "settings:inline" })).toBeInTheDocument();
   });
 });

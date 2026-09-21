@@ -17,7 +17,10 @@ export const USAGE_QUERY_PREFIX = ["console", "usage"] as const;
 
 export const USAGE_SUMMARY_QUERY_KEY = [...USAGE_QUERY_PREFIX, "summary"] as const;
 
-/** 概览每 30 秒自动刷新一次: 与后端 60 秒的评估节拍同量级, 页面不会看到陈旧的限流状态。 */
+/**
+ * 概览与告警列表每 30 秒自动刷新一次: 与后端 60 秒的评估节拍同量级,
+ * 页面不会看到陈旧的限流状态。
+ */
 export const USAGE_SUMMARY_REFETCH_MS = 30_000;
 
 export const USAGE_ALERTS_DEFAULT_LIMIT = 50;
@@ -56,10 +59,16 @@ export function useUsageTimeseries(range: UsageRange) {
   });
 }
 
+/**
+ * 最近告警。与概览同一个 30 秒节拍: 计量卡上的「今日已发 N 条 / 已抑制 N 条」和
+ * 下面这份列表来自同一次评估, 两处不同步刷新会让页面自相矛盾。
+ */
 export function useUsageAlerts(limit: number = USAGE_ALERTS_DEFAULT_LIMIT) {
   return useQuery({
     queryKey: [...USAGE_QUERY_PREFIX, "alerts", limit],
     queryFn: ({ signal }) => apiRequest<UsageAlertsPayload>(usageAlertsUrl(limit), { signal }),
+    refetchInterval: USAGE_SUMMARY_REFETCH_MS,
+    refetchIntervalInBackground: false,
     retry: false,
   });
 }

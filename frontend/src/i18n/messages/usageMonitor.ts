@@ -35,6 +35,7 @@ export const zhCN = {
   "usage.meter.lastHour": "近 1 小时 {count}",
   "usage.meter.blockedToday": "今日已拦截 {count}",
   "usage.meter.overflow": "已超出额度 {percent}",
+  "usage.meter.overflowValueText": "{used} / {limit}，已超出额度 {percent}",
 
   "usage.policy.label": "策略",
   "usage.policy.alert_only": "仅告警",
@@ -70,6 +71,7 @@ export const zhCN = {
   "usage.range.last_month": "上月",
   "usage.range.custom": "自定义区间",
   "usage.range.summary": "{from} 至 {to}",
+  "usage.range.tooLong": "自定义区间最长 {max} 天，请把起止日期收窄后再查询。",
 
   "usage.trend.title": "调用趋势",
   "usage.trend.granularityHour": "按小时",
@@ -79,6 +81,7 @@ export const zhCN = {
   "usage.trend.streamTitle": "Stream 事件",
   "usage.trend.blockedTitle": "被策略拒绝",
   "usage.trend.loading": "图表加载中",
+  "usage.trend.chunkFailed": "趋势图代码包加载失败",
   "usage.trend.emptyTitle": "所选区间没有调用记录",
   "usage.trend.emptyDescription": "换一个时间范围，或等下一次统计落库后再看。",
   "usage.trend.legendHint": "点击图例可隐藏或显示序列",
@@ -107,6 +110,7 @@ export const zhCN = {
   "usage.category.billedNo": "不计费",
   "usage.category.emptyTitle": "所选区间没有分类数据",
   "usage.category.emptyDescription": "区间内没有任何调用落库。",
+  "usage.category.loadFailed": "分类明细加载失败",
 } as const;
 
 export const en: Record<keyof typeof zhCN, string> = {
@@ -150,6 +154,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "usage.meter.lastHour": "{count} in the last hour",
   "usage.meter.blockedToday": "{count} blocked today",
   "usage.meter.overflow": "{percent} over the limit",
+  "usage.meter.overflowValueText": "{used} of {limit}, {percent} over the limit",
 
   "usage.policy.label": "Policy",
   "usage.policy.alert_only": "Alert only",
@@ -185,6 +190,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "usage.range.last_month": "Last month",
   "usage.range.custom": "Custom range",
   "usage.range.summary": "{from} to {to}",
+  "usage.range.tooLong": "A custom range can span at most {max} days. Narrow the start and end dates and try again.",
 
   "usage.trend.title": "Usage trend",
   "usage.trend.granularityHour": "Hourly",
@@ -194,6 +200,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "usage.trend.streamTitle": "Stream events",
   "usage.trend.blockedTitle": "Blocked by policy",
   "usage.trend.loading": "Loading chart",
+  "usage.trend.chunkFailed": "Failed to load the chart bundle",
   "usage.trend.emptyTitle": "No calls in the selected range",
   "usage.trend.emptyDescription": "Pick another range, or wait for the next flush.",
   "usage.trend.legendHint": "Click a legend entry to hide or show that series",
@@ -222,4 +229,5 @@ export const en: Record<keyof typeof zhCN, string> = {
   "usage.category.billedNo": "Unbilled",
   "usage.category.emptyTitle": "No category data in the selected range",
   "usage.category.emptyDescription": "No calls were recorded in this range.",
+  "usage.category.loadFailed": "Failed to load the category breakdown",
 };

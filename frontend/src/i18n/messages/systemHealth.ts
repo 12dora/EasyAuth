@@ -5,6 +5,7 @@ export const zhCN = {
   "systemHealth.tab.usage": "用量监控",
   "systemHealth.usage.loading": "正在加载用量监控",
   "systemHealth.usage.loadingDescription": "首次打开该页签时单独加载用量监控代码包。",
+  "systemHealth.usage.chunkFailed": "用量监控代码包加载失败",
 
   "systemHealth.dependencies.heading": "依赖状态",
   "systemHealth.dependencies.description": "Authentik、钉钉等外部依赖最近一次探测的结果；筛选与排序都在本页完成。",
@@ -26,6 +27,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "systemHealth.tab.usage": "Usage Monitor",
   "systemHealth.usage.loading": "Loading the usage monitor",
   "systemHealth.usage.loadingDescription": "The usage monitor bundle is fetched the first time this tab is opened.",
+  "systemHealth.usage.chunkFailed": "Failed to load the usage monitor bundle",
 
   "systemHealth.dependencies.heading": "Dependencies",
   "systemHealth.dependencies.description":

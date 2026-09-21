@@ -2,7 +2,10 @@ import { describe, expect, test } from "vitest";
 
 import {
   DEFAULT_USAGE_RANGE_KEY,
+  USAGE_RANGE_MAX_DAYS,
+  calendarDayCount,
   formatLocalDate,
+  isCalendarDay,
   resolveUsageRange,
   usageRangeDayCount,
   usageRangeFromSearchParams,
@@ -112,5 +115,18 @@ describe("用量监控时间范围", () => {
   test("区间天数含端点", () => {
     expect(usageRangeDayCount({ key: "today", from: "2026-09-23", to: "2026-09-23" })).toBe(1);
     expect(usageRangeDayCount({ key: "custom", from: "2026-08-01", to: "2026-08-31" })).toBe(31);
+    expect(calendarDayCount("2026-08-01", "2026-08-31")).toBe(31);
+  });
+
+  test("日历日判定只认 YYYY-MM-DD, 带时间的 ISO 不算", () => {
+    expect(isCalendarDay("2026-09-23")).toBe(true);
+    expect(isCalendarDay("")).toBe(false);
+    expect(isCalendarDay("2026-09-23T00:00:00+08:00")).toBe(false);
+  });
+
+  test("自定义区间的天数上限与后端契约一致", () => {
+    expect(USAGE_RANGE_MAX_DAYS).toBe(400);
+    // 刚好 400 天仍然合法, 401 天才该被前端挡住。
+    expect(calendarDayCount("2026-01-01", "2027-02-04")).toBe(400);
   });
 });

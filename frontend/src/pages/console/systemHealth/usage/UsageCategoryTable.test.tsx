@@ -34,6 +34,7 @@ describe("UsageCategoryTable", () => {
             blocked: 3,
           }),
         ]}
+        error={null}
         isLoading={false}
       />,
     );
@@ -54,6 +55,7 @@ describe("UsageCategoryTable", () => {
     renderWithAntd(
       <UsageCategoryTable
         categories={[category({ category: "internal_netbird", label_zh: "", label_en: "", count: 4 })]}
+        error={null}
         isLoading={false}
       />,
     );
@@ -62,8 +64,32 @@ describe("UsageCategoryTable", () => {
   });
 
   test("区间内没有分类数据时走表格空态", () => {
-    renderWithAntd(<UsageCategoryTable categories={[]} isLoading={false} />);
+    renderWithAntd(<UsageCategoryTable categories={[]} error={null} isLoading={false} />);
     expect(screen.getByText("所选区间没有分类数据")).toBeInTheDocument();
+  });
+
+  test("时间序列取数失败时给出失败态, 不冒充「没有数据」的空态", () => {
+    renderWithAntd(
+      <UsageCategoryTable categories={[]} error={new Error("区间超过 400 天")} isLoading={false} />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("分类明细加载失败");
+    expect(screen.getByText("区间超过 400 天")).toBeInTheDocument();
+    expect(screen.queryByText("所选区间没有分类数据")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  test("刷新失败但手里还有上一份数据时, 失败横幅与表格同时在", () => {
+    renderWithAntd(
+      <UsageCategoryTable
+        categories={[category({ category: "notify_send", label_zh: "工作通知发送", count: 10 })]}
+        error={new Error("服务器内部错误")}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("分类明细加载失败");
+    expect(screen.getByText("工作通知发送")).toBeInTheDocument();
   });
 });
 

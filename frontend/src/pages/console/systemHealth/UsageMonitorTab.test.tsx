@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi, type Mock } from "vitest";
 
 import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../../components/antd/testing";
 import UsageMonitorTab from "./UsageMonitorTab";
@@ -88,6 +88,39 @@ describe("UsageMonitorTab", () => {
     expect(screen.getByText("API 计费调用")).toBeInTheDocument();
   });
 
+  test("刷新按钮按前缀整体失效: 概览与时间序列都重新取一次", async () => {
+    const fetchMock = stubUsageApi();
+    const user = userEvent.setup();
+    renderTab();
+
+    await waitFor(() => expect(screen.getByText("API 计费调用")).toBeInTheDocument());
+    await waitFor(() => expect(callsTo(fetchMock, SUMMARY_URL)).toBe(1));
+    const timeseriesBefore = callsTo(fetchMock, "/usage/timeseries");
+
+    await user.click(screen.getByRole("button", { name: /刷新/ }));
+
+    await waitFor(() => expect(callsTo(fetchMock, SUMMARY_URL)).toBe(2));
+    await waitFor(() => expect(callsTo(fetchMock, "/usage/timeseries")).toBe(timeseriesBefore + 1));
+  });
+
+  test("时间序列失败时分类表给出失败态, 而不是「没有分类数据」", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url === SUMMARY_URL) {
+          return jsonResponse(summaryPayload());
+        }
+        return jsonResponse({ error: { code: "INVALID_RANGE", message: "区间超过 400 天" } }, 400);
+      }),
+    );
+    renderTab();
+
+    expect(await screen.findByText("分类明细加载失败")).toBeInTheDocument();
+    expect(screen.getByText("区间超过 400 天")).toBeInTheDocument();
+    expect(screen.queryByText("所选区间没有分类数据")).not.toBeInTheDocument();
+  });
+
   test("概览接口失败且没有可用数据时整块降级为可重试的失败态", async () => {
     vi.stubGlobal(
       "fetch",
@@ -132,6 +165,11 @@ function stubUsageApi(summaryOverrides: Partial<UsageSummaryPayload> = {}) {
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+/** 某个接口被打了几次; 断言"又取了一次"时比 toHaveBeenCalledWith 精确。 */
+function callsTo(fetchMock: Mock<typeof fetch>, fragment: string): number {
+  return fetchMock.mock.calls.filter(([input]) => String(input).includes(fragment)).length;
 }
 
 function jsonResponse(payload: unknown, status = 200) {

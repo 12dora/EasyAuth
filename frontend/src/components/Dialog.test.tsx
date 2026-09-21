@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, test } from "vitest";
 
 import { Dialog } from "./Dialog";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
 
 function DialogHarness() {
   const [open, setOpen] = useState(false);
@@ -68,5 +69,77 @@ describe("Dialog 焦点陷阱(FF-6)", () => {
     await user.click(closeButton);
     await user.click(overlayButton);
     expect(screen.getByRole("dialog", { name: "不可关闭" })).toBeVisible();
+  });
+});
+
+function NestedDialogHarness() {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [closed, setClosed] = useState<string[]>([]);
+  const record = (who: string) => setClosed((previous) => [...previous, who]);
+
+  return (
+    <>
+      <Dialog title="设置" onClose={() => record("outer")} footer={<button type="button">保存设置</button>}>
+        <button type="button" onClick={() => setConfirmOpen(true)}>
+          全部禁止
+        </button>
+      </Dialog>
+      {confirmOpen ? (
+        <ConfirmDialog
+          title="确认改为全部禁止"
+          message="超限后连 P0 调用也会被拒绝。"
+          confirmLabel="确认"
+          onConfirm={() => setConfirmOpen(false)}
+          onClose={() => {
+            setConfirmOpen(false);
+            record("confirm");
+          }}
+        />
+      ) : null}
+      <span data-testid="closed">{closed.join(",")}</span>
+    </>
+  );
+}
+
+describe("Dialog 弹窗套弹窗", () => {
+  test("只有最上层接管 Tab, 焦点不会穿过遮罩落回外层表单", async () => {
+    const user = userEvent.setup();
+    render(<NestedDialogHarness />);
+
+    await user.click(screen.getByRole("button", { name: "全部禁止" }));
+
+    const confirm = screen.getByRole("dialog", { name: "确认改为全部禁止" });
+    const confirmClose = within(confirm).getByRole("button", { name: "关闭弹窗" });
+    const confirmSubmit = within(confirm).getByRole("button", { name: "确认" });
+    const outerSave = screen.getByRole("button", { name: "保存设置" });
+
+    // 从确认框的第一个可聚焦元素 Shift+Tab: 落回确认框自己的最后一个, 而不是外层的「保存设置」。
+    confirmClose.focus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(confirmSubmit);
+    expect(document.activeElement).not.toBe(outerSave);
+
+    // 正向 Tab 同样只在确认框内循环。
+    confirmSubmit.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(confirmClose);
+  });
+
+  test("一次 Escape 只关掉最上层的确认框, 外层弹窗留在原地", async () => {
+    const user = userEvent.setup();
+    render(<NestedDialogHarness />);
+
+    await user.click(screen.getByRole("button", { name: "全部禁止" }));
+    expect(screen.getByRole("dialog", { name: "确认改为全部禁止" })).toBeVisible();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog", { name: "确认改为全部禁止" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "设置" })).toBeVisible();
+    expect(screen.getByTestId("closed")).toHaveTextContent("confirm");
+
+    // 确认框关掉之后, 外层重新成为栈顶, Escape 照常生效。
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByTestId("closed")).toHaveTextContent("confirm,outer");
   });
 });

@@ -1,4 +1,8 @@
+import type { HTMLAttributes } from "react";
+
 import { useI18n } from "../../../../../i18n/I18nProvider";
+import type { Locale } from "../../../../../i18n/messages";
+import type { Translator } from "../../../../../lib/status";
 import { SEVERITY_TEXT_CLASS, usageMeterGradient, usageMeterTrack, usageOverflowFill } from "../usageChartTheme";
 import {
   formatUsageCount,
@@ -31,21 +35,14 @@ export function QuotaPreviewBar({
   const percent = used !== null && hasUsageLimit(limit) ? (used / limit) * 100 : null;
   const severity = usageSeverity(percent);
   const geometry = usageMeterGeometry(percent);
+  const valueText = previewValueText(t, locale, used, limit, percent);
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-caption leading-4 text-ink-soft">{label}</span>
         <span className={`font-mono text-caption tabular-nums leading-4 ${SEVERITY_TEXT_CLASS[severity]}`}>
-          {used === null
-            ? t("usageSettings.preview.noData")
-            : percent === null
-              ? t("usageSettings.preview.unlimited", { used: formatUsageCount(used, locale) })
-              : t("usageSettings.preview.used", {
-                  used: formatUsageCount(used, locale),
-                  limit: formatUsageCount(limit ?? 0, locale),
-                  percent: formatUsagePercent(percent),
-                })}
+          {valueText}
         </span>
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full" style={{ background: usageMeterTrack(severity) }}>
@@ -55,6 +52,7 @@ export function QuotaPreviewBar({
             width: `${geometry.fillPercent}%`,
             backgroundImage: geometry.hasOverflow ? usageOverflowFill() : usageMeterGradient(severity),
           }}
+          {...meterAria(label, used, limit, valueText)}
         />
         {hasUsageLimit(limit)
           ? usageThresholdTicks(thresholds).map((tick) => (
@@ -72,4 +70,48 @@ export function QuotaPreviewBar({
       ) : null}
     </div>
   );
+}
+
+/** 条旁边那行数字; 同一串文字同时喂给 aria-valuetext, 读屏与肉眼读到的是同一句话。 */
+function previewValueText(
+  t: Translator,
+  locale: Locale,
+  used: number | null,
+  limit: number | null,
+  percent: number | null,
+): string {
+  if (used === null) {
+    return t("usageSettings.preview.noData");
+  }
+  if (percent === null) {
+    return t("usageSettings.preview.unlimited", { used: formatUsageCount(used, locale) });
+  }
+  return t("usageSettings.preview.used", {
+    used: formatUsageCount(used, locale),
+    limit: formatUsageCount(limit ?? 0, locale),
+    percent: formatUsagePercent(percent),
+  });
+}
+
+/**
+ * 只有"有用量且设了上限"时这条才真的是一个计量条, 否则它就是一截装饰, 不该报读。
+ * 与 UsageMeterBar 同一口径: valuenow 封顶在上限, 超出部分留给 valuetext。
+ */
+function meterAria(
+  label: string,
+  used: number | null,
+  limit: number | null,
+  valueText: string,
+): HTMLAttributes<HTMLDivElement> {
+  if (used === null || !hasUsageLimit(limit)) {
+    return {};
+  }
+  return {
+    role: "meter",
+    "aria-label": label,
+    "aria-valuemin": 0,
+    "aria-valuemax": limit,
+    "aria-valuenow": Math.min(used, limit),
+    "aria-valuetext": valueText,
+  };
 }

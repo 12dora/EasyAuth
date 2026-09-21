@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef } from "react";
+import { useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../../../components/PageHeader";
@@ -8,12 +8,15 @@ import { useI18n } from "../../../i18n/I18nProvider";
 import type { MessageKey } from "../../../i18n/messages";
 import { cn } from "../../../lib/cn";
 import { DependencyStatusTab } from "./DependencyStatusTab";
+import { LazyChunkBoundary } from "./LazyChunkBoundary";
 
 /**
  * 用量监控单独成块: 图表(recharts)只在打开该页签时才下载, 依赖状态页签不为它买单。
  * 契约规定 UsageMonitorTab 是默认导出且不收 props。
+ *
+ * 工厂放在模块级: LazyChunkBoundary 重试时要按同一个引用重新 import。
  */
-const UsageMonitorTab = lazy(() => import("./UsageMonitorTab"));
+const loadUsageMonitorTab = () => import("./UsageMonitorTab");
 
 const TABS = [
   { key: "dependencies", labelKey: "systemHealth.tab.dependencies" },
@@ -63,16 +66,17 @@ export function SystemHealthPage() {
         aria-labelledby={`system-health-tab-${activeTab}`}
       >
         {activeTab === "usage" ? (
-          <Suspense
+          <LazyChunkBoundary
             fallback={
               <PageState
                 title={t("systemHealth.usage.loading")}
                 description={t("systemHealth.usage.loadingDescription")}
               />
             }
-          >
-            <UsageMonitorTab />
-          </Suspense>
+            loader={loadUsageMonitorTab}
+            render={(Chunk) => <Chunk />}
+            title={t("systemHealth.usage.chunkFailed")}
+          />
         ) : (
           <DependencyStatusTab />
         )}

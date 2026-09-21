@@ -28,6 +28,14 @@ export const DEFAULT_USAGE_RANGE_KEY: UsageQuickRangeKey = "today";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** 后端对时间序列区间的硬上限(契约 §4), 超过直接 400; 前端先拦一道并给出说明。 */
+export const USAGE_RANGE_MAX_DAYS = 400;
+
+/** 是否是 `YYYY-MM-DD` 形态的日历日。 */
+export function isCalendarDay(value: string): boolean {
+  return ISO_DATE.test(value);
+}
+
 /** 本地日历日字符串; 不用 toISOString(), 那会把本地日期挪到 UTC 当天。 */
 export function formatLocalDate(date: Date): string {
   const month = `${date.getMonth() + 1}`.padStart(2, "0");
@@ -86,7 +94,7 @@ export function resolveUsageRange(
   now: Date = new Date(),
 ): UsageRange {
   if (key === "custom") {
-    if (!ISO_DATE.test(from) || !ISO_DATE.test(to)) {
+    if (!isCalendarDay(from) || !isCalendarDay(to)) {
       return resolveUsageRange(DEFAULT_USAGE_RANGE_KEY, "", "", now);
     }
     // 起止写反时直接对调, 避免把一个空区间发给后端。
@@ -115,9 +123,14 @@ export function usageRangeSearchUpdates(key: UsageRangeKey, from = "", to = ""):
   return { [USAGE_RANGE_PARAM]: key, [USAGE_RANGE_FROM_PARAM]: "", [USAGE_RANGE_TO_PARAM]: "" };
 }
 
+/** 两个日历日之间跨越的天数(含端点)。 */
+export function calendarDayCount(from: string, to: string): number {
+  const start = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  return Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
+}
+
 /** 区间跨越的日历日数(含端点)。 */
 export function usageRangeDayCount(range: UsageRange): number {
-  const from = new Date(`${range.from}T00:00:00`);
-  const to = new Date(`${range.to}T00:00:00`);
-  return Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1;
+  return calendarDayCount(range.from, range.to);
 }

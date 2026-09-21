@@ -54,11 +54,22 @@ export function UsageMeterBar({
     );
   }
 
+  const limitText = formatUsageCount(limit, locale);
+  // 超限时 valuenow 封顶在 limit(role="meter" 规定 valuenow 落在 min..max 之间),
+  // 超出多少改由 valuetext 如实报读, 不靠颜色也不靠一个越界的数字。
+  const valueText = geometry.hasOverflow
+    ? t("usage.meter.overflowValueText", {
+        used: usedText,
+        limit: limitText,
+        percent: formatUsagePercent(geometry.overflowPercent),
+      })
+    : percentText;
+
   return (
     <div className="space-y-1.5">
       <MeterHeader
         scopeLabel={scopeLabel}
-        valueText={t("usage.meter.usedOfLimit", { used: usedText, limit: formatUsageCount(limit, locale) })}
+        valueText={t("usage.meter.usedOfLimit", { used: usedText, limit: limitText })}
       />
       <div className="relative">
         <div className="h-2.5 w-full overflow-hidden rounded-full" style={{ background: usageMeterTrack(severity) }}>
@@ -70,10 +81,10 @@ export function UsageMeterBar({
             })}
             aria-valuemax={limit}
             aria-valuemin={0}
-            aria-valuenow={used}
-            aria-valuetext={percentText}
+            aria-valuenow={Math.min(used, limit)}
+            aria-valuetext={valueText}
             className="h-full rounded-r-full transition-[width] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none"
-            role="progressbar"
+            role="meter"
             style={{
               width: `${geometry.fillPercent}%`,
               // 超限时整条换成 45° 斜纹: 色相之外再给一层不依赖颜色的区分。

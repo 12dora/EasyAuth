@@ -96,17 +96,32 @@ function focusableElements(panel: HTMLElement): HTMLElement[] {
   return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
 }
 
+/**
+ * 当前打开着的弹窗栈(模块级, 按打开顺序)。
+ *
+ * 每个 Dialog 都往 document 上挂自己的 keydown 监听, 弹窗套弹窗时底下那层会一起接住:
+ * Shift+Tab 能把焦点从确认框弹回被遮罩挡住的外层表单, 一次 Esc 也会被两层同时接住。
+ * 因此只有栈顶那一个处理 Tab / Esc; 只有一个弹窗时栈里只有它自己, 行为完全不变。
+ */
+const openDialogStack: string[] = [];
+
+function isTopDialog(id: string): boolean {
+  return openDialogStack[openDialogStack.length - 1] === id;
+}
+
 function useDialogEffects(
   onClose: () => void,
   panelRef: React.RefObject<HTMLDivElement | null>,
   closeDisabled: boolean,
 ) {
+  const dialogId = useId();
   const onCloseRef = useRef(onClose);
   const closeDisabledRef = useRef(closeDisabled);
   onCloseRef.current = onClose;
   closeDisabledRef.current = closeDisabled;
 
   useEffect(() => {
+    openDialogStack.push(dialogId);
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
     // 打开时把焦点移入弹窗: 首个可聚焦元素, 否则聚焦面板本身(tabIndex=-1)。
@@ -116,6 +131,9 @@ function useDialogEffects(
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!isTopDialog(dialogId)) {
+        return;
+      }
       if (event.key === "Escape") {
         if (!closeDisabledRef.current) {
           onCloseRef.current();
@@ -149,12 +167,16 @@ function useDialogEffects(
     document.addEventListener("keydown", onKeyDown);
     lockDialogScroll();
     return () => {
+      const index = openDialogStack.lastIndexOf(dialogId);
+      if (index >= 0) {
+        openDialogStack.splice(index, 1);
+      }
       document.removeEventListener("keydown", onKeyDown);
       unlockDialogScroll();
       // 关闭后把焦点还给打开弹窗前聚焦的元素(通常是触发按钮)。
       previouslyFocused?.focus?.();
     };
-  }, [panelRef]);
+  }, [dialogId, panelRef]);
 }
 
 let scrollLockDepth = 0;

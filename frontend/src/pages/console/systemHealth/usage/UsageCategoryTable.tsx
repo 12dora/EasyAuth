@@ -1,5 +1,6 @@
 import { AppTable, type ColumnsType } from "../../../../components/antd/AppTable";
 import { Badge } from "../../../../components/Badge";
+import { StatusBanner } from "../../../../components/StatusBanner";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { Locale } from "../../../../i18n/messages";
@@ -11,6 +12,11 @@ import { usageCategoryLabel, type UsageCategoryTotal } from "./usageTypes";
 export interface UsageCategoryTableProps {
   categories: readonly UsageCategoryTotal[];
   isLoading: boolean;
+  /**
+   * 时间序列接口的错误。取数失败时必须显性说"没取到",
+   * 不能让空数组把表格带进"所选区间没有分类数据"的空态 —— 那是两件事。
+   */
+  error: Error | null;
 }
 
 /** 调用次数降序; 次数相同时按分类键排, 保证两次渲染的顺序一致。 */
@@ -24,7 +30,7 @@ function rowKey(row: UsageCategoryTotal): string {
   return `${row.source}:${row.category}`;
 }
 
-export function UsageCategoryTable({ categories, isLoading }: UsageCategoryTableProps) {
+export function UsageCategoryTable({ categories, isLoading, error }: UsageCategoryTableProps) {
   const { t, locale } = useI18n();
   const rows = sortUsageCategories(categories);
   const total = rows.reduce((sum, row) => sum + row.count, 0);
@@ -32,17 +38,23 @@ export function UsageCategoryTable({ categories, isLoading }: UsageCategoryTable
   return (
     <PanelSurface padding="lg" className="space-y-3">
       <h3 className="text-sm font-semibold leading-tight text-ink">{t("usage.category.title")}</h3>
-      <AppTable<UsageCategoryTotal>
-        ariaLabel={t("usage.category.tableLabel")}
-        columns={categoryColumns(t, locale, total)}
-        dataSource={rows}
-        emptyDescription={t("usage.category.emptyDescription")}
-        emptyTitle={t("usage.category.emptyTitle")}
-        loading={isLoading}
-        minWidth={880}
-        pagination={false}
-        rowKey={rowKey}
-      />
+      {error ? (
+        <StatusBanner live="alert" message={error.message} title={t("usage.category.loadFailed")} tone="signal" />
+      ) : null}
+      {/* 失败且一行都没有时不渲染表格: 空态会把"没取到"说成"这段时间没有调用"。 */}
+      {error !== null && rows.length === 0 ? null : (
+        <AppTable<UsageCategoryTotal>
+          ariaLabel={t("usage.category.tableLabel")}
+          columns={categoryColumns(t, locale, total)}
+          dataSource={rows}
+          emptyDescription={t("usage.category.emptyDescription")}
+          emptyTitle={t("usage.category.emptyTitle")}
+          loading={isLoading}
+          minWidth={880}
+          pagination={false}
+          rowKey={rowKey}
+        />
+      )}
     </PanelSurface>
   );
 }

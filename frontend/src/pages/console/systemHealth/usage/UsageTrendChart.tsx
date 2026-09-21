@@ -1,10 +1,9 @@
-import { Suspense, lazy } from "react";
-
 import { Badge } from "../../../../components/Badge";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { EmptyState } from "../../../../components/ui/EmptyState";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
+import { LazyChunkBoundary } from "../LazyChunkBoundary";
 import {
   USAGE_ALL_SERIES,
   USAGE_SERIES_LABEL_KEYS,
@@ -14,7 +13,8 @@ import {
 import { formatUsageCount } from "./usageMeterModel";
 import type { UsageTimeseriesPayload } from "./usageTypes";
 
-const LazyUsageTrendChartImpl = lazy(() => import("./UsageTrendChartImpl"));
+/** 模块级工厂: chunk 加载失败后 LazyChunkBoundary 要按同一个引用重新 import 一次。 */
+const loadUsageTrendChartImpl = () => import("./UsageTrendChartImpl");
 
 export interface UsageTrendChartProps {
   data: UsageTimeseriesPayload | undefined;
@@ -85,17 +85,26 @@ function TrendBody({
     return <StatusBanner live="alert" tone="signal" title={t("usage.timeseriesFailed")} message={error.message} />;
   }
   if (isLoading || !data) {
-    return <div aria-label={t("usage.trend.loading")} className="h-64 w-full animate-shimmer rounded-[3px]" role="status" />;
+    return <ChartSkeleton />;
   }
   if (!hasAnyUsage(data.points)) {
     return <EmptyState title={t("usage.trend.emptyTitle")} description={t("usage.trend.emptyDescription")} />;
   }
 
   return (
-    <Suspense
-      fallback={<div aria-label={t("usage.trend.loading")} className="h-64 w-full animate-shimmer rounded-[3px]" role="status" />}
-    >
-      <LazyUsageTrendChartImpl dimmed={isFetching} rows={toUsageChartRows(data.points, data.granularity)} />
-    </Suspense>
+    <LazyChunkBoundary
+      fallback={<ChartSkeleton />}
+      loader={loadUsageTrendChartImpl}
+      render={(Chunk) => <Chunk dimmed={isFetching} rows={toUsageChartRows(data.points, data.granularity)} />}
+      title={t("usage.trend.chunkFailed")}
+    />
+  );
+}
+
+function ChartSkeleton() {
+  const { t } = useI18n();
+
+  return (
+    <div aria-label={t("usage.trend.loading")} className="h-64 w-full animate-shimmer rounded-[3px]" role="status" />
   );
 }

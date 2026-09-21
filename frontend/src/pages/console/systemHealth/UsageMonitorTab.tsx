@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { RefreshCcw } from "lucide-react";
 import { useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -16,7 +17,7 @@ import { UsageRangeFilter } from "./usage/UsageRangeFilter";
 import { UsageTrendChart } from "./usage/UsageTrendChart";
 import { usageRangeFromSearchParams, usageRangeSearchUpdates, type UsageRangeKey } from "./usage/usageRange";
 import type { UsageSummaryPayload } from "./usage/usageTypes";
-import { useUsageSummary, useUsageTimeseries } from "./usage/useUsageData";
+import { USAGE_QUERY_PREFIX, useUsageSummary, useUsageTimeseries } from "./usage/useUsageData";
 
 /**
  * 「状态健康 · 用量监控」标签页。
@@ -26,6 +27,7 @@ import { useUsageSummary, useUsageTimeseries } from "./usage/useUsageData";
 export default function UsageMonitorTab() {
   const { t } = useI18n();
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const range = usageRangeFromSearchParams(searchParams);
   const summaryQuery = useUsageSummary();
   const timeseriesQuery = useUsageTimeseries(range);
@@ -51,10 +53,11 @@ export default function UsageMonitorTab() {
     [setSearchParams],
   );
 
+  // 按前缀整体失效: 概览、时间序列、告警列表本就是同一次评估的三个切面,
+  // 只 refetch 其中两个会让页面上的数字互相对不上。
   const refresh = useCallback(() => {
-    void summaryQuery.refetch();
-    void timeseriesQuery.refetch();
-  }, [summaryQuery, timeseriesQuery]);
+    void queryClient.invalidateQueries({ queryKey: USAGE_QUERY_PREFIX });
+  }, [queryClient]);
 
   if (summaryQuery.error && !summary) {
     return <UsageLoadFailed error={summaryQuery.error as Error} isFetching={summaryQuery.isFetching} onRetry={refresh} />;
@@ -96,6 +99,7 @@ export default function UsageMonitorTab() {
       />
       <UsageCategoryTable
         categories={timeseriesQuery.data?.categories ?? []}
+        error={(timeseriesQuery.error as Error | null) ?? null}
         isLoading={timeseriesQuery.isLoading}
       />
       <UsageAlertsPanel />
