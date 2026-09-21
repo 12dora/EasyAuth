@@ -91,6 +91,12 @@ export default defineConfig(({ command }) => ({
           if (id.includes("/src/i18n/")) {
             return "i18n";
           }
+          // LazyChunkBoundary 同时被 SystemHealthPage 与(其动态加载的)用量趋势图使用;
+          // 不单独成块的话 Rollup 会把它并进 SystemHealthPage chunk 并让后者导出共享符号,
+          // 路由 chunk 就不再以源码路径登记到 manifest, 构建预算脚本会找不到该路由。
+          if (id.includes("/src/pages/console/systemHealth/LazyChunkBoundary")) {
+            return "lazy-chunk-boundary";
+          }
         }
       }
     }
