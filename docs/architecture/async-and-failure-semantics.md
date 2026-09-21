@@ -25,7 +25,16 @@ Webhook 投递。
 | 权限查询即时供给遇 Authentik 管理 API 瞬时故障 | `503 DEPENDENCY_UNAVAILABLE`，并熔断 30 秒；不得返回可被下游缓存 300 秒的空快照 |
 | 权限查询即时供给遇用户不存在、无目录身份、载荷无效或管理 API 未配置 | 空快照，对该 `sub` 负缓存 60 秒 |
 | 钉钉通知回执 `*_user_id_list` / `forbidden_list` 缺 key 或 JSON null | 视为空名单，不是契约错误 |
-| 钉钉通知回执字段类型错误 | 记该收件人 `error`，仍推进对账游标（`reconcile_attempts` / `last_reconciled_at` / `next_reconcile_at`）并按退避改期；达 8 次上限后停止轮询，保持 `sent` |
+| 钉钉通知回执字段类型错误 | 先原子认领 SENT 行再调钉钉；类型错误只记仍为 `sent` 的 `error`，已 failed 行的回执原因不得清空。退避按下标钳到最后一档，越界不抛。达 8 次上限后停止轮询，保持 `sent` |
+
+钉钉工作通知回执对账（`easyauth.notify.reconcile_send_results`）对每个
+`(channel, task_id)` **先认领再 HTTP**。认领是对 SENT 行的一条条件
+`UPDATE`：`reconcile_attempts < 8 AND (next_reconcile_at IS NULL OR next_reconcile_at <= now)`，
+把 `reconcile_attempts + 1`、`last_reconciled_at`、`next_reconcile_at` 写成认领；退避步数取
+选择查询里的认领前 attempts 并钳到最后一档。UPDATE 命中 0 行则本 worker 零 HTTP。轮询之后
+只写结果（仍为 SENT 的 error / 上限说明 / 状态迁移）。单 task 未预期异常
+`logger.exception`（带 task_id）后继续本轮其余 task。Celery beat 重叠由本轮
+`cache.add` 锁拒绝，TTL 略高于最坏一轮，`finally` 释放。
 
 ## 离职禁号任务
 

@@ -216,8 +216,11 @@ def test_reconcile_maps_four_list_types(monkeypatch: pytest.MonkeyPatch) -> None
     assert by_uid["ok1"].status == NOTIFY_RECIPIENT_STATUS_DELIVERED
     assert by_uid["bad1"].status == NOTIFY_RECIPIENT_STATUS_FAILED
     assert by_uid["bad1"].error_code == NOTIFY_ERROR_DINGTALK_REJECTED
+    assert by_uid["bad1"].error == "钉钉回执: 无效用户或发送失败。"
     assert by_uid["dup1"].error_code == NOTIFY_ERROR_DINGTALK_DUPLICATE
+    assert by_uid["dup1"].error == "钉钉回执: 相同内容同人一天已发送。"
     assert by_uid["limit1"].error_code == NOTIFY_ERROR_DINGTALK_DAILY_LIMIT
+    assert by_uid["limit1"].error == "钉钉回执: 单应用对单人日上限。"
     assert by_uid["pending1"].status == NOTIFY_RECIPIENT_STATUS_SENT
     _assert_attempt_recorded(by_uid["ok1"], now=frozen, attempts=1)
     message.refresh_from_db()
@@ -344,7 +347,9 @@ def test_reconcile_fairly_rotates_beyond_first_fifty_tasks(
         selected = select_reconcile_tasks(window_start, now)
     assert len(queries) == 1
     assert len(selected) == 50
-    assert (channel.id, "task-050") not in selected
+    selected_task_ids = [task_id for _channel_id, task_id, _attempts in selected]
+    assert "task-050" not in selected_task_ids
+    assert all(attempts == 0 for _channel_id, _task_id, attempts in selected)
     client = _FairnessDingTalkClient()
 
     def client_for_channel(

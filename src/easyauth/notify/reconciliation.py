@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from django.conf import settings
 from django.db.models import F, Max, Min, Q
@@ -45,11 +46,15 @@ if TYPE_CHECKING:
 
     from django.db.models import QuerySet
 
+logger = logging.getLogger(__name__)
+
+_UNCONFIGURED_CHANNEL_MESSAGE: Final = "钉钉通知通道未配置。"
+
 
 @dataclass(frozen=True, slots=True)
 class _ReconcileWindow:
     now: datetime
-    channel_tasks: tuple[tuple[int, str], ...]
+    channel_tasks: tuple[tuple[int, str, int], ...]
 
 
 def reconcile_send_results() -> int:
@@ -76,11 +81,12 @@ def _reconcile_run_window() -> _ReconcileWindow | None:
 def _reconcile_selected_tasks(window: _ReconcileWindow) -> tuple[int, set[UUID]]:
     processed = 0
     affected: set[UUID] = set()
-    for channel_id, task_id in window.channel_tasks:
+    for channel_id, task_id, pre_claim_attempts in window.channel_tasks:
         message_ids = _reconcile_channel_task(
             channel_id=channel_id,
             task_id=task_id,
             now=window.now,
+            pre_claim_attempts=pre_claim_attempts,
         )
         if not message_ids:
             continue
@@ -89,56 +95,111 @@ def _reconcile_selected_tasks(window: _ReconcileWindow) -> tuple[int, set[UUID]]
     return processed, affected
 
 
-def _resolve_task_client(
-    *,
-    channel_id: int,
-    task_id: str,
-    now: datetime,
-) -> tuple[DingTalkApiClient, str | int] | None:
-    channel = AppNotificationChannel.objects.filter(id=channel_id).first()
-    if channel is None:
-        _record_task_attempt(channel_id=channel_id, task_id=task_id, checked_at=now)
-        return None
-    try:
-        return channel_config.dingtalk_client_and_agent(channel)
-    except (DingTalkNotConfiguredError, ValueError) as error:
-        _record_task_attempt(
-            channel_id=channel_id,
-            task_id=task_id,
-            checked_at=now,
-            error=str(error) or "钉钉通知通道未配置。",
-        )
-        return None
-
-
 def _reconcile_channel_task(
     *,
     channel_id: int,
     task_id: str,
     now: datetime,
+    pre_claim_attempts: int,
 ) -> set[UUID] | None:
-    resolved = _resolve_task_client(channel_id=channel_id, task_id=task_id, now=now)
-    if resolved is None:
-        return None
-    client, agent_id = resolved
     try:
-        message_ids = _reconcile_one_task(
-            client=client,
-            agent_id=agent_id,
+        result = _run_claimed_task(
             channel_id=channel_id,
             task_id=task_id,
             now=now,
+            pre_claim_attempts=pre_claim_attempts,
+        )
+    except Exception:
+        logger.exception(
+            "钉钉回执对账未预期异常 channel_id=%s task_id=%s",
+            channel_id,
+            task_id,
+        )
+        return None
+    return result
+
+
+def _run_claimed_task(
+    *,
+    channel_id: int,
+    task_id: str,
+    now: datetime,
+    pre_claim_attempts: int,
+) -> set[UUID] | None:
+    if not claim_reconcile_task(
+        channel_id=channel_id,
+        task_id=task_id,
+        now=now,
+        pre_claim_attempts=pre_claim_attempts,
+    ):
+        return None
+    attempts_after = pre_claim_attempts + 1
+    try:
+        message_ids = _poll_claimed_task(
+            channel_id=channel_id,
+            task_id=task_id,
+            now=now,
+            attempts_after=attempts_after,
         )
     except (DingTalkApiRequestError, DingTalkApiUnavailableError) as error:
-        _record_task_attempt(
+        _write_sent_outcome(
             channel_id=channel_id,
             task_id=task_id,
             checked_at=now,
             error=str(error),
+            attempts_after=attempts_after,
         )
         return None
-    _record_task_attempt(channel_id=channel_id, task_id=task_id, checked_at=now)
     return message_ids
+
+
+def _poll_claimed_task(
+    *,
+    channel_id: int,
+    task_id: str,
+    now: datetime,
+    attempts_after: int,
+) -> set[UUID] | None:
+    resolved = _resolve_task_client(channel_id=channel_id)
+    if not isinstance(resolved, tuple):
+        _write_sent_outcome(
+            channel_id=channel_id,
+            task_id=task_id,
+            checked_at=now,
+            error=resolved,
+            attempts_after=attempts_after,
+        )
+        return None
+    client, agent_id = resolved
+    message_ids = _reconcile_one_task(
+        client=client,
+        agent_id=agent_id,
+        channel_id=channel_id,
+        task_id=task_id,
+        now=now,
+    )
+    _write_sent_outcome(
+        channel_id=channel_id,
+        task_id=task_id,
+        checked_at=now,
+        error=None,
+        attempts_after=attempts_after,
+    )
+    return message_ids
+
+
+def _resolve_task_client(
+    *,
+    channel_id: int,
+) -> tuple[DingTalkApiClient, str | int] | str | None:
+    channel = AppNotificationChannel.objects.filter(id=channel_id).first()
+    if channel is None:
+        return None
+    try:
+        resolved = channel_config.dingtalk_client_and_agent(channel)
+    except (DingTalkNotConfiguredError, ValueError) as error:
+        return str(error) or _UNCONFIGURED_CHANNEL_MESSAGE
+    return resolved
 
 
 def _refresh_affected_messages(message_ids: set[UUID]) -> None:
@@ -150,7 +211,7 @@ def _refresh_affected_messages(message_ids: set[UUID]) -> None:
         _maybe_rewrite_aggregate_after_reconcile(msg)
 
 
-def select_reconcile_tasks(window_start: datetime, now: datetime) -> list[tuple[int, str]]:
+def select_reconcile_tasks(window_start: datetime, now: datetime) -> list[tuple[int, str, int]]:
     raw_tasks = list(
         NotifyRecipient.objects.filter(
             status=NOTIFY_RECIPIENT_STATUS_SENT,
@@ -173,58 +234,82 @@ def select_reconcile_tasks(window_start: datetime, now: datetime) -> list[tuple[
         )[:NOTIFY_RECONCILE_TASK_LIMIT],
     )
     typed = cast("list[dict[str, object]]", raw_tasks)
-    tasks: list[tuple[int, str]] = []
+    tasks: list[tuple[int, str, int]] = []
     for row in typed:
-        channel_id = row.get("message__channel_id")
-        task_id = row.get("dingtalk_task_id")
-        if isinstance(channel_id, int) and isinstance(task_id, str):
-            tasks.append((channel_id, task_id))
+        selected = _selected_task_from_row(row)
+        if selected is None:
+            continue
+        tasks.append(selected)
     return tasks
 
 
-def _task_recipient_qs(*, channel_id: int, task_id: str) -> QuerySet[NotifyRecipient]:
-    return NotifyRecipient.objects.filter(
+def _selected_task_from_row(row: dict[str, object]) -> tuple[int, str, int] | None:
+    channel_id = row.get("message__channel_id")
+    task_id = row.get("dingtalk_task_id")
+    pre_claim_attempts = row.get("max_attempts")
+    if (
+        isinstance(channel_id, int)
+        and isinstance(task_id, str)
+        and isinstance(pre_claim_attempts, int)
+    ):
+        return (channel_id, task_id, pre_claim_attempts)
+    return None
+
+
+def claim_reconcile_task(
+    *,
+    channel_id: int,
+    task_id: str,
+    now: datetime,
+    pre_claim_attempts: int,
+) -> bool:
+    """原子认领该 task 的 SENT 行。命中 0 行表示已被并发 worker 认领。"""
+    next_at = now + timedelta(seconds=_clamped_backoff_seconds(pre_claim_attempts))
+    matched = NotifyRecipient.objects.filter(
+        Q(next_reconcile_at__isnull=True) | Q(next_reconcile_at__lte=now),
         message__channel_id=channel_id,
         dingtalk_task_id=task_id,
+        status=NOTIFY_RECIPIENT_STATUS_SENT,
+        reconcile_attempts__lt=NOTIFY_RECONCILE_MAX_ATTEMPTS,
+    ).update(
+        reconcile_attempts=F("reconcile_attempts") + 1,
+        last_reconciled_at=now,
+        next_reconcile_at=next_at,
+        updated_at=now,
     )
+    return bool(matched)
 
 
-def _backoff_after_attempt(attempts_after: int) -> int:
-    index = attempts_after - 1
-    if index < 0 or index >= len(NOTIFY_RECONCILE_BACKOFF_SECONDS):
-        message = "回执对账退避步数越界。"
-        raise ValueError(message)
+def _clamped_backoff_seconds(pre_claim_attempts: int) -> int:
+    last_index = len(NOTIFY_RECONCILE_BACKOFF_SECONDS) - 1
+    index = min(max(pre_claim_attempts, 0), last_index)
     return NOTIFY_RECONCILE_BACKOFF_SECONDS[index]
 
 
-def _record_task_attempt(
+def _sent_recipient_qs(*, channel_id: int, task_id: str) -> QuerySet[NotifyRecipient]:
+    return NotifyRecipient.objects.filter(
+        message__channel_id=channel_id,
+        dingtalk_task_id=task_id,
+        status=NOTIFY_RECIPIENT_STATUS_SENT,
+    )
+
+
+def _write_sent_outcome(
     *,
     channel_id: int,
     task_id: str,
     checked_at: datetime,
-    error: str | None = None,
+    error: str | None,
+    attempts_after: int,
 ) -> None:
-    qs = _task_recipient_qs(channel_id=channel_id, task_id=task_id)
-    aggregated = cast("dict[str, object]", qs.aggregate(value=Max("reconcile_attempts")))
-    raw_current = aggregated["value"]
-    if not isinstance(raw_current, int):
-        return
-    attempts_after = raw_current + 1
-    next_at = checked_at + timedelta(seconds=_backoff_after_attempt(attempts_after))
-    error_text = "" if error is None else error[:NOTIFY_ERROR_MAX_CHARS]
-    _ = qs.update(
-        reconcile_attempts=F("reconcile_attempts") + 1,
-        last_reconciled_at=checked_at,
-        next_reconcile_at=next_at,
-        error=error_text,
-        updated_at=checked_at,
-    )
-    if attempts_after < NOTIFY_RECONCILE_MAX_ATTEMPTS:
-        return
-    _ = qs.filter(status=NOTIFY_RECIPIENT_STATUS_SENT).update(
-        error=NOTIFY_RECONCILE_CAP_REACHED_MESSAGE,
-        updated_at=checked_at,
-    )
+    qs = _sent_recipient_qs(channel_id=channel_id, task_id=task_id)
+    if attempts_after >= NOTIFY_RECONCILE_MAX_ATTEMPTS:
+        error_text = NOTIFY_RECONCILE_CAP_REACHED_MESSAGE
+    elif error is None:
+        error_text = ""
+    else:
+        error_text = error[:NOTIFY_ERROR_MAX_CHARS]
+    _ = qs.update(error=error_text, updated_at=checked_at)
 
 
 def _reconcile_one_task(
