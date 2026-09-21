@@ -49,6 +49,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _UNCONFIGURED_CHANNEL_MESSAGE: Final = "钉钉通知通道未配置。"
+# 必须低于 tasks.notify.NOTIFY_RECONCILE_RUN_LOCK_TTL_SECONDS。达到后本轮不再认领。
+NOTIFY_RECONCILE_TICK_BUDGET_SECONDS: Final = 480
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,20 +59,30 @@ class _ReconcileWindow:
     channel_tasks: tuple[tuple[int, str, int], ...]
 
 
-def reconcile_send_results() -> int:
+def reconcile_send_results(
+    *,
+    tick_budget_seconds: int = NOTIFY_RECONCILE_TICK_BUDGET_SECONDS,
+) -> int:
     """对 sent 收件人按 task_id 查钉钉回执, 升级 delivered/failed。返回处理的 task 数。"""
     window = _reconcile_run_window()
     if window is None:
         return 0
-    processed, affected = _reconcile_selected_tasks(window)
+    processed, affected = _reconcile_selected_tasks(
+        window,
+        tick_budget_seconds=tick_budget_seconds,
+    )
     _refresh_affected_messages(affected)
     return processed
+
+
+def _now() -> datetime:
+    return timezone.now()
 
 
 def _reconcile_run_window() -> _ReconcileWindow | None:
     if not getattr(settings, "EASYAUTH_NOTIFY_RECONCILE_ENABLED", True):
         return None
-    now = timezone.now()
+    now = _now()
     window_start = now - timedelta(hours=NOTIFY_RECONCILE_WINDOW_HOURS)
     channel_tasks = select_reconcile_tasks(window_start, now)
     if not channel_tasks:
@@ -78,14 +90,27 @@ def _reconcile_run_window() -> _ReconcileWindow | None:
     return _ReconcileWindow(now=now, channel_tasks=tuple(channel_tasks))
 
 
-def _reconcile_selected_tasks(window: _ReconcileWindow) -> tuple[int, set[UUID]]:
+def _reconcile_selected_tasks(
+    window: _ReconcileWindow,
+    *,
+    tick_budget_seconds: int,
+) -> tuple[int, set[UUID]]:
     processed = 0
     affected: set[UUID] = set()
     for channel_id, task_id, pre_claim_attempts in window.channel_tasks:
+        # window.now 只用于资格, 时间戳取本 task 认领当时。
+        claimed_at = _now()
+        if _tick_over_budget(
+            started_at=window.now,
+            now=claimed_at,
+            tick_budget_seconds=tick_budget_seconds,
+        ):
+            break
         message_ids = _reconcile_channel_task(
             channel_id=channel_id,
             task_id=task_id,
-            now=window.now,
+            eligible_at=window.now,
+            claimed_at=claimed_at,
             pre_claim_attempts=pre_claim_attempts,
         )
         if not message_ids:
@@ -95,18 +120,24 @@ def _reconcile_selected_tasks(window: _ReconcileWindow) -> tuple[int, set[UUID]]
     return processed, affected
 
 
+def _tick_over_budget(*, started_at: datetime, now: datetime, tick_budget_seconds: int) -> bool:
+    return now - started_at >= timedelta(seconds=tick_budget_seconds)
+
+
 def _reconcile_channel_task(
     *,
     channel_id: int,
     task_id: str,
-    now: datetime,
+    eligible_at: datetime,
+    claimed_at: datetime,
     pre_claim_attempts: int,
 ) -> set[UUID] | None:
     try:
         result = _run_claimed_task(
             channel_id=channel_id,
             task_id=task_id,
-            now=now,
+            eligible_at=eligible_at,
+            claimed_at=claimed_at,
             pre_claim_attempts=pre_claim_attempts,
         )
     except Exception:
@@ -123,13 +154,15 @@ def _run_claimed_task(
     *,
     channel_id: int,
     task_id: str,
-    now: datetime,
+    eligible_at: datetime,
+    claimed_at: datetime,
     pre_claim_attempts: int,
 ) -> set[UUID] | None:
     if not claim_reconcile_task(
         channel_id=channel_id,
         task_id=task_id,
-        now=now,
+        eligible_at=eligible_at,
+        claimed_at=claimed_at,
         pre_claim_attempts=pre_claim_attempts,
     ):
         return None
@@ -138,14 +171,14 @@ def _run_claimed_task(
         message_ids = _poll_claimed_task(
             channel_id=channel_id,
             task_id=task_id,
-            now=now,
+            now=claimed_at,
             attempts_after=attempts_after,
         )
     except (DingTalkApiRequestError, DingTalkApiUnavailableError) as error:
         _write_sent_outcome(
             channel_id=channel_id,
             task_id=task_id,
-            checked_at=now,
+            checked_at=claimed_at,
             error=str(error),
             attempts_after=attempts_after,
         )
@@ -260,22 +293,26 @@ def claim_reconcile_task(
     *,
     channel_id: int,
     task_id: str,
-    now: datetime,
+    eligible_at: datetime,
+    claimed_at: datetime,
     pre_claim_attempts: int,
 ) -> bool:
-    """原子认领该 task 的 SENT 行。命中 0 行表示已被并发 worker 认领。"""
-    next_at = now + timedelta(seconds=_clamped_backoff_seconds(pre_claim_attempts))
+    """原子认领该 task 的 SENT 行。
+
+    eligible_at 只判断资格, 时间戳写 claimed_at; 命中 0 行表示已被并发 worker 认领。
+    """
+    next_at = claimed_at + timedelta(seconds=_clamped_backoff_seconds(pre_claim_attempts))
     matched = NotifyRecipient.objects.filter(
-        Q(next_reconcile_at__isnull=True) | Q(next_reconcile_at__lte=now),
+        Q(next_reconcile_at__isnull=True) | Q(next_reconcile_at__lte=eligible_at),
         message__channel_id=channel_id,
         dingtalk_task_id=task_id,
         status=NOTIFY_RECIPIENT_STATUS_SENT,
         reconcile_attempts__lt=NOTIFY_RECONCILE_MAX_ATTEMPTS,
     ).update(
         reconcile_attempts=F("reconcile_attempts") + 1,
-        last_reconciled_at=now,
+        last_reconciled_at=claimed_at,
         next_reconcile_at=next_at,
-        updated_at=now,
+        updated_at=claimed_at,
     )
     return bool(matched)
 
