@@ -28,12 +28,13 @@ from easyauth.integrations.authentik.directory_sync_types import (
 
 if TYPE_CHECKING:
     from easyauth.accounts.status import UserStatus
+    from easyauth.integrations.authentik.directory_contract import CorpSnapshotContract
     from easyauth.integrations.authentik.directory_payloads import DirectoryJson
 
 __all__ = [
+    "_complete_directory_snapshot",
     "_directory_source_slug",
     "_directory_user_status",
-    "_fetch_directory_snapshot",
     "_int",
     "_keys_for_corps",
     "_list",
@@ -41,6 +42,8 @@ __all__ = [
     "_object_corp_id",
     "_org_contexts_for_corps",
     "_payloads_for_corps",
+    "_read_directory_status",
+    "_status_only_snapshot",
     "_string",
 ]
 
@@ -56,9 +59,36 @@ DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE: Final = "钉钉目录组织上下文�
 DIRECTORY_GENERATION_CHANGED_MESSAGE: Final = "钉钉目录 generation 在快照拉取期间发生变化。"
 
 
-def _fetch_directory_snapshot(client: AuthentikDirectorySyncClient) -> _DirectorySnapshot:
+def _read_directory_status(
+    client: AuthentikDirectorySyncClient,
+) -> tuple[DirectoryJson, str, dict[str, CorpSnapshotContract]]:
     status = _mapping(client.get_status())
     source_slug, contracts = status_contract(status)
+    return status, source_slug, contracts
+
+
+def _status_only_snapshot(
+    *,
+    status: DirectoryJson,
+    source_slug: str,
+    contracts: dict[str, CorpSnapshotContract],
+) -> _DirectorySnapshot:
+    return _DirectorySnapshot(
+        source_slug=source_slug,
+        status=status,
+        contracts=contracts,
+        departments=(),
+        users=(),
+        org_contexts={},
+    )
+
+
+def _complete_directory_snapshot(
+    client: AuthentikDirectorySyncClient,
+    *,
+    source_slug: str,
+    contracts: dict[str, CorpSnapshotContract],
+) -> _DirectorySnapshot:
     departments = tuple(_mapping(item) for item in _iter_objects(client.iter_departments()))
     users = tuple(_mapping(item) for item in _iter_objects(client.iter_users()))
     assert_directory_payloads(
@@ -68,6 +98,36 @@ def _fetch_directory_snapshot(client: AuthentikDirectorySyncClient) -> _Director
         users=users,
         status_validator=_directory_user_status,
     )
+    org_contexts, org_fetch_failures = _collect_org_contexts(
+        client,
+        source_slug=source_slug,
+        users=users,
+    )
+    if org_fetch_failures:
+        # 组织上下文是主管链和管理范围解析的必需事实; 任何用户缺失都不得推进整代 generation。
+        raise AuthentikDirectoryUnavailableError(DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE)
+    final_status = _confirm_status_unchanged(
+        client,
+        source_slug=source_slug,
+        contracts=contracts,
+    )
+    return _DirectorySnapshot(
+        source_slug=source_slug,
+        status=final_status,
+        contracts=contracts,
+        departments=departments,
+        users=users,
+        org_contexts=org_contexts,
+        org_fetch_failures=tuple(org_fetch_failures),
+    )
+
+
+def _collect_org_contexts(
+    client: AuthentikDirectorySyncClient,
+    *,
+    source_slug: str,
+    users: tuple[DirectoryJson, ...],
+) -> tuple[dict[tuple[str, str], DirectoryJson], list[tuple[str, str]]]:
     org_contexts: dict[tuple[str, str], DirectoryJson] = {}
     org_fetch_failures: list[tuple[str, str]] = []
     for user_payload in users:
@@ -81,22 +141,20 @@ def _fetch_directory_snapshot(client: AuthentikDirectorySyncClient) -> _Director
         except AuthentikDirectoryError:
             # 单个用户的 org 拉取失败不得中止整轮同步; 隔离该用户、聚合失败并继续。
             org_fetch_failures.append((corp_id, user_id))
-    if org_fetch_failures:
-        # 组织上下文是主管链和管理范围解析的必需事实; 任何用户缺失都不得推进整代 generation。
-        raise AuthentikDirectoryUnavailableError(DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE)
+    return org_contexts, org_fetch_failures
+
+
+def _confirm_status_unchanged(
+    client: AuthentikDirectorySyncClient,
+    *,
+    source_slug: str,
+    contracts: dict[str, CorpSnapshotContract],
+) -> DirectoryJson:
     final_status = _mapping(client.get_status())
     final_source_slug, final_contracts = status_contract(final_status)
     if final_source_slug != source_slug or final_contracts != contracts:
         raise AuthentikDirectoryUnavailableError(DIRECTORY_GENERATION_CHANGED_MESSAGE)
-    return _DirectorySnapshot(
-        source_slug=source_slug,
-        status=final_status,
-        contracts=contracts,
-        departments=departments,
-        users=users,
-        org_contexts=org_contexts,
-        org_fetch_failures=tuple(org_fetch_failures),
-    )
+    return final_status
 
 
 def _object_corp_id(item: object) -> str:

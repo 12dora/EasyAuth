@@ -71,8 +71,13 @@ class _DirectoryClientStub:
     status_script: list[dict[str, object]] = field(default_factory=list)
     # 指定这些 (corp_id, user_id) 的 org 拉取抛错, 用于验证单用户失败被隔离。
     org_fetch_errors: set[tuple[str, str]] = field(default_factory=set)
+    status_calls: int = 0
+    department_calls: int = 0
+    user_calls: int = 0
+    org_calls: int = 0
 
     def get_status(self) -> dict[str, object]:
+        self.status_calls += 1
         if self.status_script:
             return (
                 self.status_script.pop(0) if len(self.status_script) > 1 else self.status_script[0]
@@ -99,15 +104,18 @@ class _DirectoryClientStub:
         }
 
     def iter_departments(self) -> list[dict[str, object]]:
+        self.department_calls += 1
         return [_with_source_slug(item, self.source_slug) for item in self.departments]
 
     def iter_users(self) -> list[object]:
+        self.user_calls += 1
         return [
             _with_source_slug(item, self.source_slug) if isinstance(item, dict) else item
             for item in self.users
         ]
 
     def get_user_org(self, corp_id: str, user_id: str) -> dict[str, object]:
+        self.org_calls += 1
         if (corp_id, user_id) in self.org_fetch_errors:
             raise AuthentikDirectoryNotFoundError(DIRECTORY_NOT_FOUND_MESSAGE)
         return _with_source_slug(self.org_contexts[(corp_id, user_id)], self.source_slug)
@@ -115,6 +123,20 @@ class _DirectoryClientStub:
 
 def _with_source_slug(item: dict[str, object], source_slug: str) -> dict[str, object]:
     return {"source_slug": source_slug, **item}
+
+
+def _assert_directory_calls(
+    client: _DirectoryClientStub,
+    *,
+    status: int,
+    departments: int = 0,
+    users: int = 0,
+    org: int = 0,
+) -> None:
+    assert client.status_calls == status
+    assert client.department_calls == departments
+    assert client.user_calls == users
+    assert client.org_calls == org
 
 
 @dataclass(slots=True)
@@ -186,6 +208,7 @@ def test_directory_sync_caches_departments_users_and_org_context() -> None:
 
     result = sync_authentik_dingtalk_directory(client_stub)
 
+    _assert_directory_calls(client_stub, status=_FINAL_STATUS_CALL, departments=1, users=1, org=1)
     assert result.department_count == 1
     assert result.user_count == 1
     assert result.org_context_count == 1
@@ -1298,6 +1321,7 @@ def test_directory_sync_rejects_generation_change_during_fetch() -> None:
     with pytest.raises(AuthentikDirectoryUnavailableError):
         _ = sync_authentik_dingtalk_directory(client)
 
+    _assert_directory_calls(client, status=_FINAL_STATUS_CALL, departments=1, users=1)
     assert not DingTalkDirectorySyncState.objects.exists()
 
 
@@ -1362,6 +1386,7 @@ def test_directory_sync_treats_equal_generation_as_idempotent_noop() -> None:
     result = sync_authentik_dingtalk_directory(conflicting)
 
     user.refresh_from_db()
+    _assert_directory_calls(conflicting, status=1)
     assert result.status_applied_count == 0
     assert result.sync_state_count == 0
     assert result.confirmed_corp_count == 1
@@ -1422,6 +1447,7 @@ def test_directory_sync_refreshes_freshness_when_generation_unchanged(
     with caplog.at_level("INFO", logger="easyauth.integrations.authentik.directory_sync"):
         result = sync_authentik_dingtalk_directory(confirmation)
 
+    _assert_directory_calls(confirmation, status=1)
     assert result.confirmed_corp_count == 1
     assert result.sync_state_count == 0
     assert result.user_count == 0
@@ -1482,9 +1508,30 @@ def test_directory_sync_rejects_lower_generation_without_refreshing_freshness() 
 
     state.refresh_from_db()
     user_mirror.refresh_from_db()
+    _assert_directory_calls(older, status=1)
     assert state.generation == 5
     assert is_sync_state_stale(state)
     assert user_mirror.status == "active"
+
+
+@override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
+@pytest.mark.parametrize("status", ["running", "error", "failed"])
+def test_directory_sync_non_success_status_does_not_refresh_freshness(status: str) -> None:
+    # 今日口径: status_contract 要求每 corp status==success; running/failed 不是未变化新鲜度。
+    state = _seed_stale_same_generation_state(("user-running-status",))
+    original_last_synced_at = state.last_synced_at
+    client = _DirectoryClientStub(
+        status_script=[_authority_status(generation=3, status=status)],
+    )
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(client)
+
+    state.refresh_from_db()
+    _assert_directory_calls(client, status=1)
+    assert state.generation == 3
+    assert state.last_synced_at == original_last_synced_at
+    assert is_sync_state_stale(state)
 
 
 def _seed_stale_same_generation_state(
@@ -1514,25 +1561,53 @@ def _seed_stale_same_generation_state(
 
 
 @override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
-def test_directory_sync_truncated_pagination_does_not_refresh_freshness() -> None:
+def test_directory_sync_unchanged_generation_skips_directory_fetch() -> None:
+    # 旧行为会在 generation 未变时仍拉完整目录; 截断/org 失败会挡住新鲜度刷新。
+    state = _seed_stale_same_generation_state(("user-trunc-fresh",))
+    stale_at = state.last_synced_at
+    truncated = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-trunc-fresh", "status": "active"}],
+    )
+    truncated.generation = 3
+    truncated.reported_user_count = 3
+    truncated.org_fetch_errors = {("corp-1", "user-trunc-fresh")}
+
+    with TestCase.captureOnCommitCallbacks(execute=True):
+        result = sync_authentik_dingtalk_directory(truncated)
+
+    state.refresh_from_db()
+    _assert_directory_calls(truncated, status=1)
+    assert result.confirmed_corp_count == 1
+    assert result.sync_state_count == 0
+    assert result.user_count == 0
+    assert state.last_synced_at > stale_at
+    assert not is_sync_state_stale(state)
+    assert OutboxEvent.objects.filter(task_name=DEPARTMENT_GRANT_RECONCILE_TASK_NAME).exists()
+
+
+@override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
+def test_directory_sync_truncated_write_path_does_not_refresh_freshness() -> None:
     state = _seed_stale_same_generation_state(("user-trunc-fresh",))
     original_last_synced_at = state.last_synced_at
 
     truncated = _stub_with_users(
         [{"corp_id": "corp-1", "user_id": "user-trunc-fresh", "status": "active"}],
     )
-    truncated.generation = 3
+    truncated.generation = 4
     truncated.reported_user_count = 3
     with pytest.raises(AuthentikDirectoryUnavailableError):
         _ = sync_authentik_dingtalk_directory(truncated)
 
     state.refresh_from_db()
+    assert truncated.department_calls == 1
+    assert truncated.user_calls == 1
+    assert state.generation == 3
     assert state.last_synced_at == original_last_synced_at
     assert is_sync_state_stale(state)
 
 
 @override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
-def test_directory_sync_partial_org_failure_does_not_refresh_freshness() -> None:
+def test_directory_sync_partial_org_failure_on_write_does_not_refresh_freshness() -> None:
     state = _seed_stale_same_generation_state(("user-org-ok-fresh", "user-org-broken-fresh"))
     original_last_synced_at = state.last_synced_at
 
@@ -1542,12 +1617,14 @@ def test_directory_sync_partial_org_failure_does_not_refresh_freshness() -> None
             {"corp_id": "corp-1", "user_id": "user-org-broken-fresh", "status": "active"},
         ],
     )
-    partial.generation = 3
+    partial.generation = 4
     partial.org_fetch_errors = {("corp-1", "user-org-broken-fresh")}
     with pytest.raises(AuthentikDirectoryUnavailableError):
         _ = sync_authentik_dingtalk_directory(partial)
 
     state.refresh_from_db()
+    assert partial.org_calls == _EXPECTED_TWO_USERS
+    assert state.generation == 3
     assert state.last_synced_at == original_last_synced_at
     assert is_sync_state_stale(state)
 
@@ -1560,15 +1637,22 @@ def test_directory_sync_final_status_validation_failure_does_not_refresh_freshne
     mismatched = _stub_with_users(
         [{"corp_id": "corp-1", "user_id": "user-final-status-fresh", "status": "active"}],
     )
-    mismatched.generation = 3
     mismatched.status_script = [
-        _authority_status(generation=3, users=1),
         _authority_status(generation=4, users=1),
+        _authority_status(generation=5, users=1),
     ]
     with pytest.raises(AuthentikDirectoryUnavailableError):
         _ = sync_authentik_dingtalk_directory(mismatched)
 
     state.refresh_from_db()
+    _assert_directory_calls(
+        mismatched,
+        status=_FINAL_STATUS_CALL,
+        departments=1,
+        users=1,
+        org=1,
+    )
+    assert state.generation == 3
     assert state.last_synced_at == original_last_synced_at
     assert is_sync_state_stale(state)
 
@@ -1592,6 +1676,7 @@ def test_directory_sync_applies_higher_generation_after_unchanged_confirmation()
     )
     confirmation.generation = 3
     confirmed = sync_authentik_dingtalk_directory(confirmation)
+    _assert_directory_calls(confirmation, status=1)
     assert confirmed.confirmed_corp_count == 1
     assert confirmed.sync_state_count == 0
 
@@ -1604,6 +1689,7 @@ def test_directory_sync_applies_higher_generation_after_unchanged_confirmation()
     user = UserMirror.objects.get(authentik_user_id="ak-generation-higher")
     state = DingTalkDirectorySyncState.objects.get(corp_id="corp-1")
     user_mirror = DingTalkUserMirror.objects.get(corp_id="corp-1", user_id="user-higher")
+    _assert_directory_calls(newer, status=_FINAL_STATUS_CALL, departments=1, users=1, org=1)
     assert result.sync_state_count == 1
     assert result.confirmed_corp_count == 0
     assert result.departed_count == 1

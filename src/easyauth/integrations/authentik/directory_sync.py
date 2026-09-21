@@ -21,13 +21,15 @@ from easyauth.integrations.authentik.directory_sync_reconciliation import (
     _reconcile_user_mirror_status,
 )
 from easyauth.integrations.authentik.directory_sync_snapshot import (
-    _fetch_directory_snapshot,
+    _complete_directory_snapshot,
     _keys_for_corps,
     _list,
     _mapping,
     _object_corp_id,
     _org_contexts_for_corps,
     _payloads_for_corps,
+    _read_directory_status,
+    _status_only_snapshot,
     _string,
 )
 from easyauth.integrations.authentik.directory_sync_types import (
@@ -55,17 +57,57 @@ __all__ = [
 def sync_authentik_dingtalk_directory(
     client: AuthentikDirectorySyncClient,
 ) -> AuthentikDirectorySyncResult:
-    # 先把远端目录完整拉进内存并验证权威快照契约; 网络请求和契约错误发生时
-    # 尚未打开任何写事务, 不会留下半份镜像。
-    snapshot = _fetch_directory_snapshot(client)
+    # 先读一次 status。status_contract 已要求每 corp 为 success 终态。
+    # 全 corp generation 未变时不拉部门/用户/组织上下文, 只刷新新鲜度。
+    # 任一 corp 需要写入时再拉完整快照, 并做拉取前后 status 一致性校验。
+    status, source_slug, contracts = _read_directory_status(client)
+    status_snapshot = _status_only_snapshot(
+        status=status,
+        source_slug=source_slug,
+        contracts=contracts,
+    )
+    unchanged = _apply_unchanged_directory(status_snapshot)
+    if unchanged is not None:
+        return unchanged
+    snapshot = _complete_directory_snapshot(
+        client,
+        source_slug=source_slug,
+        contracts=contracts,
+    )
+    return _apply_directory_snapshot(snapshot)
 
+
+def _apply_unchanged_directory(
+    snapshot: _DirectorySnapshot,
+) -> AuthentikDirectorySyncResult | None:
+    with transaction.atomic():
+        states = _existing_locked_sync_states(snapshot)
+        applied = {
+            corp_id: states[corp_id].generation if corp_id in states else -1
+            for corp_id in snapshot.contracts
+        }
+        writable_corp_ids, confirmed_corp_ids = _classify_corp_ids(snapshot, applied)
+        if writable_corp_ids:
+            return None
+        result = _unchanged_sync_result(confirmed_corp_ids)
+        _refresh_confirmed_sync_states(snapshot, states, confirmed_corp_ids)
+        schedule_department_grant_reconcile(trigger="directory-sync")
+        return result
+
+
+def _apply_directory_snapshot(
+    snapshot: _DirectorySnapshot,
+) -> AuthentikDirectorySyncResult:
     # 同一 source/corp 的状态行既是数据库串行点, 也是持久 generation fence。
     # 整轮写入使用同一事务: 任何落库/撤权/生命周期异常都会整体回滚。
     # 上游 generation 未变时仍刷新 last_synced_at: 新鲜度表示"已在本时刻核对镜像",
     # 而不是"上游上次发生变化的时间"。
     with transaction.atomic():
         locked_states = _lock_sync_states(snapshot)
-        writable_corp_ids, confirmed_corp_ids = _classify_corp_ids(snapshot, locked_states)
+        writable_corp_ids, confirmed_corp_ids = _classify_corp_ids(
+            snapshot,
+            {corp_id: state.generation for corp_id, state in locked_states.items()},
+        )
         if writable_corp_ids:
             result = _write_writable_directory_snapshot(
                 snapshot,
@@ -74,16 +116,20 @@ def sync_authentik_dingtalk_directory(
                 confirmed_corp_ids=confirmed_corp_ids,
             )
         else:
-            result = AuthentikDirectorySyncResult(
-                department_count=0,
-                user_count=0,
-                org_context_count=0,
-                sync_state_count=0,
-                confirmed_corp_count=len(confirmed_corp_ids),
-            )
+            result = _unchanged_sync_result(confirmed_corp_ids)
         _refresh_confirmed_sync_states(snapshot, locked_states, confirmed_corp_ids)
         schedule_department_grant_reconcile(trigger="directory-sync")
         return result
+
+
+def _unchanged_sync_result(confirmed_corp_ids: frozenset[str]) -> AuthentikDirectorySyncResult:
+    return AuthentikDirectorySyncResult(
+        department_count=0,
+        user_count=0,
+        org_context_count=0,
+        sync_state_count=0,
+        confirmed_corp_count=len(confirmed_corp_ids),
+    )
 
 
 def _write_writable_directory_snapshot(
@@ -146,14 +192,28 @@ def _lock_sync_states(
     return states
 
 
+def _existing_locked_sync_states(
+    snapshot: _DirectorySnapshot,
+) -> dict[str, DingTalkDirectorySyncState]:
+    rows = (
+        DingTalkDirectorySyncState.objects.select_for_update()
+        .filter(
+            source_slug=snapshot.source_slug,
+            corp_id__in=tuple(snapshot.contracts),
+        )
+        .order_by("corp_id")
+    )
+    return {state.corp_id: state for state in rows}
+
+
 def _classify_corp_ids(
     snapshot: _DirectorySnapshot,
-    states: dict[str, DingTalkDirectorySyncState],
+    applied_generations: dict[str, int],
 ) -> tuple[frozenset[str], frozenset[str]]:
     writable: set[str] = set()
     confirmed: set[str] = set()
     for corp_id, contract in snapshot.contracts.items():
-        applied_generation = states[corp_id].generation
+        applied_generation = applied_generations[corp_id]
         if contract.generation < applied_generation:
             message = (
                 f"{DIRECTORY_STALE_GENERATION_MESSAGE}: corp={corp_id} "
