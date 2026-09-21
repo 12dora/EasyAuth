@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from django.utils import timezone
@@ -36,12 +37,8 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryPermissionError,
 )
 from easyauth.integrations.authentik.liveness import check_authentik_liveness
-from easyauth.integrations.dingtalk.call_budget import (
-    budget_health_reason,
-    budget_health_status,
-    format_usage_summary,
-    usage_today,
-)
+from easyauth.usage.models import USAGE_RUNTIME_STATE_SINGLETON_ID, UsageRuntimeState
+from easyauth.usage.queries import used_in_range, used_today
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -67,6 +64,21 @@ _HEALTH_STATUS_RANK: Final[dict[str, int]] = {
     DEPENDENCY_HEALTH_STATUS_HEALTHY: 0,
     DEPENDENCY_HEALTH_STATUS_WARNING: 1,
     DEPENDENCY_HEALTH_STATUS_UNHEALTHY: 2,
+}
+_ENFORCEMENT_HEALTH: Final[dict[str, str]] = {
+    "normal": DEPENDENCY_HEALTH_STATUS_HEALTHY,
+    "degraded_p2": DEPENDENCY_HEALTH_STATUS_WARNING,
+    "degraded_p1": DEPENDENCY_HEALTH_STATUS_WARNING,
+    "throttled": DEPENDENCY_HEALTH_STATUS_WARNING,
+    "stream_paused": DEPENDENCY_HEALTH_STATUS_WARNING,
+    "blocked": DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+}
+_ENFORCEMENT_REASON: Final[dict[str, str]] = {
+    "degraded_p2": "用量策略已降级(拦截 P2)。",
+    "degraded_p1": "用量策略已降级(拦截 P1/P2)。",
+    "throttled": "用量策略已限流。",
+    "stream_paused": "Stream 已暂停。",
+    "blocked": "用量策略已拦截计费调用。",
 }
 
 
@@ -226,7 +238,7 @@ def _directory_status_contract_error(
 
 
 def _check_dingtalk() -> DependencyCheckResult:
-    return _with_dingtalk_call_budget(_dingtalk_directory_result())
+    return _with_dingtalk_usage(_dingtalk_directory_result())
 
 
 def _dingtalk_directory_result() -> DependencyCheckResult:
@@ -259,22 +271,69 @@ def _dingtalk_directory_result() -> DependencyCheckResult:
     )
 
 
-def _with_dingtalk_call_budget(result: DependencyCheckResult) -> DependencyCheckResult:
-    usage = usage_today()
-    budget_status = budget_health_status(usage)
-    status = _worse_health_status(result.status, budget_status)
-    reason = budget_health_reason(usage)
-    usage_text = format_usage_summary(usage)
-    summary = " ".join(part for part in (result.summary, reason, usage_text) if part)
+def _with_dingtalk_usage(result: DependencyCheckResult) -> DependencyCheckResult:
+    usage_status, usage_reason = _dingtalk_usage_health()
+    status = _worse_health_status(result.status, usage_status)
+    usage_text = _dingtalk_usage_summary()
+    summary = " ".join(part for part in (result.summary, usage_reason, usage_text) if part)
     error_summary = result.error_summary
-    if budget_status == DEPENDENCY_HEALTH_STATUS_UNHEALTHY and error_summary == "":
-        error_summary = reason or usage_text
+    if usage_status == DEPENDENCY_HEALTH_STATUS_UNHEALTHY and error_summary == "":
+        error_summary = usage_reason or usage_text
     return DependencyCheckResult(
         dependency=result.dependency,
         status=status,
         summary=summary,
         error_summary=error_summary,
     )
+
+
+def _dingtalk_usage_summary() -> str:
+    now = timezone.now()
+    local = timezone.localtime(now)
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    billed = used_today("api")
+    total = used_in_range("api", start, start + timedelta(days=1), billed_only=False)
+    return f"今日用量 {billed}/{total}。"
+
+
+def _dingtalk_usage_health() -> tuple[str, str]:
+    row = UsageRuntimeState.objects.filter(pk=USAGE_RUNTIME_STATE_SINGLETON_ID).first()
+    if row is None or row.evaluated_at is None:
+        return DEPENDENCY_HEALTH_STATUS_HEALTHY, ""
+    state = _api_enforcement_state(row.enforcement)
+    if state is None:
+        return DEPENDENCY_HEALTH_STATUS_HEALTHY, ""
+    status = _ENFORCEMENT_HEALTH.get(state)
+    if status is None:
+        message = f"未知的用量执行状态: {state}"
+        raise ValueError(message)
+    return status, _ENFORCEMENT_REASON.get(state, "")
+
+
+def _api_enforcement_state(enforcement: object) -> str | None:
+    if enforcement == {}:
+        return None
+    if not isinstance(enforcement, dict):
+        message = "UsageRuntimeState.enforcement 必须是 JSON 对象。"
+        raise TypeError(message)
+    payload = cast("dict[str, object]", enforcement)
+    raw_metrics = payload.get("metrics")
+    if raw_metrics is None:
+        return None
+    if not isinstance(raw_metrics, dict):
+        message = "UsageRuntimeState.enforcement.metrics 必须是 JSON 对象。"
+        raise TypeError(message)
+    raw_api = cast("dict[str, object]", raw_metrics).get("api")
+    if raw_api is None:
+        return None
+    if not isinstance(raw_api, dict):
+        message = "UsageRuntimeState.enforcement.metrics.api 必须是 JSON 对象。"
+        raise TypeError(message)
+    state = cast("dict[str, object]", raw_api).get("state")
+    if not isinstance(state, str) or state == "":
+        message = "UsageRuntimeState.enforcement.metrics.api.state 缺失或非法。"
+        raise TypeError(message)
+    return state
 
 
 def _worse_health_status(left: str, right: str) -> str:

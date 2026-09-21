@@ -31,6 +31,13 @@ from easyauth.admin_console.operations_api import (
     operations_emergency_revokes,
 )
 from easyauth.admin_console.query_test_api import console_permission_query_test
+from easyauth.admin_console.usage_api import (
+    usage_alerts,
+    usage_settings,
+    usage_stream_resume,
+    usage_summary,
+    usage_timeseries,
+)
 from easyauth.admin_console.users_api import (
     console_user_console_admin,
     console_user_options,
@@ -112,14 +119,39 @@ CORE_URLPATTERNS = [
         name="operations-emergency-revokes",
     ),
     path(
-        "api/v1/operations/dependency-health",
+        "api/v1/operations/system-health/dependencies",
         operations_dependency_health,
-        name="operations-dependency-health",
+        name="operations-system-health-dependencies",
     ),
     path(
-        "api/v1/operations/dependency-health/checks",
+        "api/v1/operations/system-health/dependencies/checks",
         operations_dependency_health_check,
-        name="operations-dependency-health-check",
+        name="operations-system-health-dependencies-check",
+    ),
+    path(
+        "api/v1/operations/system-health/usage/summary",
+        usage_summary,
+        name="operations-system-health-usage-summary",
+    ),
+    path(
+        "api/v1/operations/system-health/usage/timeseries",
+        usage_timeseries,
+        name="operations-system-health-usage-timeseries",
+    ),
+    path(
+        "api/v1/operations/system-health/usage/settings",
+        usage_settings,
+        name="operations-system-health-usage-settings",
+    ),
+    path(
+        "api/v1/operations/system-health/usage/alerts",
+        usage_alerts,
+        name="operations-system-health-usage-alerts",
+    ),
+    path(
+        "api/v1/operations/system-health/usage/stream/resume",
+        usage_stream_resume,
+        name="operations-system-health-usage-stream-resume",
     ),
     path("api/v1/users", console_users, name="console-users"),
     path("api/v1/user-options", console_user_options, name="console-user-options"),

@@ -15,6 +15,7 @@ from easyauth.api.responses import json_response as _json_response
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.rate_limit import client_ip, rate_limit_exceeded
 from easyauth.integrations.dingtalk.signature import is_valid_callback_signature
+from easyauth.usage.recorder import record as record_usage
 from easyauth.workflows.services import (
     ApprovalCallbackConflictError,
     ApprovalInstanceNotFoundError,
@@ -48,6 +49,7 @@ def dingtalk_callback(request: HttpRequest) -> JsonResponse:
     body = request.body
     if not _request_signature_is_valid(request, body):
         return _signature_rejected_response(request)
+    record_usage("webhook_callback")
     payload, rejection = _validate_callback_payload(request, body)
     if payload is None:
         return cast("JsonResponse", rejection)

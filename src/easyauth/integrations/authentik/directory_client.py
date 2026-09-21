@@ -33,6 +33,7 @@ from easyauth.integrations.authentik.directory_payloads import (
     parse_status,
     parse_users,
 )
+from easyauth.usage.recorder import record as record_usage
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -226,6 +227,7 @@ class AuthentikDirectoryClient:
             headers=headers,
             method=method,
         )
+        record_usage("internal_authentik_directory")
         raw_body = b""
         started_at = time.monotonic()
         try:

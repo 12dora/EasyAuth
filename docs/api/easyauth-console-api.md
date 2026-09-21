@@ -266,8 +266,13 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | POST | `/operations/access-requests/{id}/retry-grant` | 重试授权落库 |
 | GET | `/operations/access-grants` | 授权运营列表 |
 | POST | `/operations/emergency-revokes` | 紧急撤权 |
-| GET | `/operations/dependency-health` | 依赖健康 |
-| POST | `/operations/dependency-health/checks` | 触发检查 |
+| GET | `/operations/system-health/dependencies` | 状态健康 · 依赖状态 |
+| POST | `/operations/system-health/dependencies/checks` | 触发依赖探测 |
+| GET | `/operations/system-health/usage/summary` | 用量概览 |
+| GET | `/operations/system-health/usage/timeseries` | 用量时间序列 |
+| GET/PUT | `/operations/system-health/usage/settings` | 用量配额与策略 |
+| GET | `/operations/system-health/usage/alerts` | 用量告警事件 |
+| POST | `/operations/system-health/usage/stream/resume` | 恢复已暂停的 Stream |
 | GET | `/operations/approval-instances` | 钉钉审批实例运营列表 |
 | POST | `/operations/approval-instances/{instance_id}/redeliver` | 审批结果 webhook 重投 |
 
@@ -318,6 +323,42 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 ```
 
 成功路径审计仍为 `emergency_revoke_applied`，冲突拒绝不写该审计。
+
+### 状态健康
+
+原「依赖健康」路径已更名为状态健康，**无兼容别名**。依赖探测的审计动作名仍为
+`dependency_health_read` / `dependency_health_check_executed`。
+
+**GET `/operations/system-health/dependencies`** 与
+**POST `/operations/system-health/dependencies/checks`** 的响应体与原依赖健康接口相同。
+
+用量接口一律 `require_superuser`。配额只约束 **计费** 调用；`internal` 计入未计费，不受配额。
+
+**GET `/operations/system-health/usage/summary`** 返回 `generated_at`、`timezone`、
+按 `api` / `webhook` / `stream` 固定顺序的 `metrics`、`api_breakdown_today`
+（`total = billed + unbilled + internal`）、`alerts`、`stream`、`authentik`。
+未配置的 `cap` / `quota` / `remaining` / `percent` / `projected` / `next_threshold` 为 `null`。
+`month.projected` 是本月已计费用量按自然月线性外推到月末（无月配额时为 `null`）。
+`next_threshold` 是日配额与月配额上、尚未达到的最近一档阈值（按剩余调用次数）。
+`authentik.stale` 为 `pulled_at` 早于 10 分钟或尚未拉取。
+
+**GET `/operations/system-health/usage/timeseries?from=YYYY-MM-DD&to=YYYY-MM-DD[&granularity=hour|day]`**
+按 `settings.TIME_ZONE` 的本地日期闭区间查询。默认粒度：区间不超过 2 天为 `hour`，否则 `day`。
+超过 400 天、`from > to` 或非法粒度返回 400。分类同时返回 `label_zh` 与 `label_en`
+（控制台 API 不做请求语言协商）。
+
+**GET `/operations/system-health/usage/settings`** 返回 `{ config, version, updated_at, updated_by }`。
+尚未保存过时 `version` 为 0，`updated_at` / `updated_by` 为空字符串。
+**PUT** 请求体为 `{ "config": <完整设置文档>, "version": N }`；版本不一致 409
+（`details.reason="version_conflict"`）；校验失败 422，`details.fields` 为 pydantic 字段路径。
+审计 `usage_settings_updated`，`metadata.changed_keys` 为变更键。
+
+**GET `/operations/system-health/usage/alerts?limit=50`** 返回 `{ "data": [...] }`，最新在前。
+`limit` 默认 50，范围 1–200，非法值 422。
+
+**POST `/operations/system-health/usage/stream/resume`** 成功返回
+`{ "stream": { paused, paused_at, can_resume } }`。未暂停时 409
+（`details.reason="stream_not_paused"`）。审计 `usage_stream_resumed`。
 
 ### 审批实例
 

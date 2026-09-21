@@ -8,6 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from easyauth.connectors.base import ConnectorError
+from easyauth.usage.recorder import record as record_usage
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -262,6 +263,7 @@ class NetBirdClient:
             remaining = execution.deadline - monotonic()
             if remaining <= 0:
                 raise NetBirdApiError(TOTAL_TIMEOUT_MESSAGE)
+            record_usage("internal_netbird")
             try:
                 with cast(
                     "_ReadableResponse",

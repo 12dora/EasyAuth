@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Self, final
 
 import pytest
 
+from easyauth.integrations.authentik import admin_client as admin_client_module
 from easyauth.integrations.authentik.admin_client import (
     OPERATION_TIMEOUT_MESSAGE,
     RESPONSE_TOO_LARGE_MESSAGE,
@@ -403,6 +404,25 @@ def test_request_rejects_streamed_oversized_response(monkeypatch: pytest.MonkeyP
             "GET",
             "/api/v3/test/",
         )
+
+
+def test_probe_core_users_counts_internal_authentik_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys: list[str] = []
+    monkeypatch.setattr(
+        admin_client_module,
+        "record_usage",
+        lambda key, *_args, **_kwargs: keys.append(str(key)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        admin_client_module,
+        "urlopen",
+        _urlopen_response(_json_response({"results": []})),
+    )
+    _client().probe_core_users()
+    assert keys == ["internal_authentik_admin"]
 
 
 def test_request_enforces_total_deadline(monkeypatch: pytest.MonkeyPatch) -> None:

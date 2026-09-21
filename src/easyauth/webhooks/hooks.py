@@ -37,6 +37,7 @@ HOOK_REQUEST_POLICY: Final = WebhookRequestPolicy(
     connect_timeout_seconds=HOOK_CONNECT_TIMEOUT_SECONDS,
     total_timeout_seconds=HOOK_TOTAL_TIMEOUT_SECONDS,
     max_response_bytes=HOOK_MAX_RESPONSE_BYTES,
+    usage_category="internal_business_hook",
 )
 
 

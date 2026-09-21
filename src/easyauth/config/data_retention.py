@@ -23,6 +23,7 @@ from easyauth.integrations.models import (
     STREAM_EVENT_STATUS_SKIPPED,
     DingTalkStreamEvent,
 )
+from easyauth.usage.models import UsageAlertEvent, UsageBucket
 from easyauth.webhooks.models import (
     DELIVERY_STATUS_DELIVERED,
     DELIVERY_STATUS_FAILED,
@@ -34,6 +35,8 @@ STREAM_RAW_BODY_RETENTION_DAYS: Final = 30
 WEBHOOK_RAW_BODY_RETENTION_DAYS: Final = 7
 DEPENDENCY_HEALTH_RETENTION_DAYS: Final = 30
 AUDIT_LOG_RETENTION_DAYS: Final = 365
+USAGE_BUCKET_RETENTION_DAYS: Final = 400
+USAGE_ALERT_EVENT_RETENTION_DAYS: Final = 400
 RETENTION_CLEANUP_BATCH_SIZE: Final = 500
 
 
@@ -46,6 +49,8 @@ class RetentionCleanupResult:
     dependency_health_deleted: int = 0
     audit_logs_deleted: int = 0
     directory_audit_buckets_flushed: int = 0
+    usage_buckets_deleted: int = 0
+    usage_alert_events_deleted: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -56,6 +61,8 @@ class RetentionCleanupResult:
             "dependency_health_deleted": self.dependency_health_deleted,
             "audit_logs_deleted": self.audit_logs_deleted,
             "directory_audit_buckets_flushed": self.directory_audit_buckets_flushed,
+            "usage_buckets_deleted": self.usage_buckets_deleted,
+            "usage_alert_events_deleted": self.usage_alert_events_deleted,
         }
 
 
@@ -75,6 +82,8 @@ def run_retention_cleanup(
             batch_size=batch_size,
         ).flushed_count,
         audit_logs_deleted=prune_audit_logs_by_retention(batch_size=batch_size),
+        usage_buckets_deleted=prune_usage_buckets(batch_size=batch_size),
+        usage_alert_events_deleted=prune_usage_alert_events(batch_size=batch_size),
     )
 
 
@@ -216,6 +225,32 @@ def prune_dependency_health_history(*, batch_size: int = RETENTION_CLEANUP_BATCH
     if not ids:
         return 0
     deleted_count, _ = DependencyHealthSnapshot.objects.filter(id__in=ids).delete()
+    return deleted_count
+
+
+def prune_usage_buckets(*, batch_size: int = RETENTION_CLEANUP_BATCH_SIZE) -> int:
+    cutoff = timezone.now() - timedelta(days=USAGE_BUCKET_RETENTION_DAYS)
+    ids = list(
+        UsageBucket.objects.filter(hour_start__lt=cutoff)
+        .order_by("hour_start", "id")
+        .values_list("id", flat=True)[:batch_size],
+    )
+    if not ids:
+        return 0
+    deleted_count, _ = UsageBucket.objects.filter(id__in=ids).delete()
+    return deleted_count
+
+
+def prune_usage_alert_events(*, batch_size: int = RETENTION_CLEANUP_BATCH_SIZE) -> int:
+    cutoff = timezone.now() - timedelta(days=USAGE_ALERT_EVENT_RETENTION_DAYS)
+    ids = list(
+        UsageAlertEvent.objects.filter(created_at__lt=cutoff)
+        .order_by("created_at", "id")
+        .values_list("id", flat=True)[:batch_size],
+    )
+    if not ids:
+        return 0
+    deleted_count, _ = UsageAlertEvent.objects.filter(id__in=ids).delete()
     return deleted_count
 
 

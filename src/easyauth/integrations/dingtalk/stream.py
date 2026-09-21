@@ -19,6 +19,7 @@ from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
 from easyauth.integrations.dingtalk.stream_runner import SingleSessionDingTalkStreamClient
 from easyauth.integrations.models import DingTalkStreamEvent
 from easyauth.outbox.services import enqueue_task
+from easyauth.usage.recorder import record as record_usage
 
 if TYPE_CHECKING:
     from dingtalk_stream import DingTalkStreamClient, EventMessage
@@ -173,6 +174,7 @@ class EasyAuthDingTalkEventHandler(EventHandler):
 
     @override
     async def process(self, event: EventMessage) -> tuple[int, str]:
+        await sync_to_async(record_usage)("stream_event")
         headers = event.headers
         event_id = headers.event_id if isinstance(headers.event_id, str) else ""
         event_type = headers.event_type if isinstance(headers.event_type, str) else ""

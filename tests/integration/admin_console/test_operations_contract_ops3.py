@@ -17,7 +17,7 @@ pytestmark = pytest.mark.django_db
 
 LOGIN_VALUE: Final = "console-ops3-contract"
 ACCESS_REQUESTS_API_URL: Final = "/console/api/v1/operations/access-requests"
-DEPENDENCY_HEALTH_API_URL: Final = "/console/api/v1/operations/dependency-health"
+DEPENDENCY_HEALTH_API_URL: Final = "/console/api/v1/operations/system-health/dependencies"
 
 
 class _AccessRequestOperationItem(BaseModel):

@@ -145,6 +145,30 @@ def test_rejects_slow_drip_after_total_deadline(monkeypatch: pytest.MonkeyPatch)
         _ = _client(total_timeout_seconds=1.0).list_users()
 
 
+def test_transient_get_counts_each_http_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    keys: list[str] = []
+    attempts = 0
+    response = _Response([b"[]"])
+
+    def open_response(request: _UrlRequest, *, timeout: float) -> _Response:
+        _ = (request, timeout)
+        nonlocal attempts
+        attempts += 1
+        if attempts < EXPECTED_ATTEMPTS:
+            raise TimeoutError(TRANSIENT_ERROR_MESSAGE)
+        return response
+
+    monkeypatch.setattr(
+        client_module,
+        "record_usage",
+        lambda key, *_args, **_kwargs: keys.append(str(key)),
+        raising=False,
+    )
+    monkeypatch.setattr(client_module, "urlopen", open_response)
+    assert _client().list_users() == []
+    assert keys == ["internal_netbird"] * EXPECTED_ATTEMPTS
+
+
 def test_transient_get_is_retried_with_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts = 0
     response = _Response([b"[]"])

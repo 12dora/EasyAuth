@@ -8,6 +8,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
+from easyauth.integrations.authentik import directory_client as directory_client_module
 from easyauth.integrations.authentik.directory_client import (
     DIRECTORY_INVALID_FORMAT_MESSAGE,
     AuthentikDirectoryClient,
@@ -541,6 +542,32 @@ def test_directory_client_trigger_sync_returns_queued_false(
     ).trigger_sync("corp-1", user_ids=("u-1",))
 
     assert result.queued is False
+
+
+def test_directory_client_counts_internal_authentik_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys: list[str] = []
+    monkeypatch.setattr(
+        directory_client_module,
+        "record_usage",
+        lambda key, *_args, **_kwargs: keys.append(str(key)),
+        raising=False,
+    )
+
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _Response(b'{"queued": true}')
+
+    monkeypatch.setattr(directory_client_module, "urlopen", fake_urlopen)
+    result = AuthentikDirectoryClient(
+        base_url="https://authentik.test",
+        api_token=TEST_API_TOKEN,
+        source_slug="dingtalk",
+        timeout_seconds=TIMEOUT_SECONDS,
+    ).trigger_sync("corp-1")
+    assert result.queued is True
+    assert keys == ["internal_authentik_directory"]
 
 
 @pytest.mark.parametrize("body", [b"{}", b'{"queued": "yes"}', b'{"queued": 1}'])

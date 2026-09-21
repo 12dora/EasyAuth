@@ -10,6 +10,7 @@ from http.client import HTTPConnection, HTTPException, HTTPResponse, HTTPSConnec
 from typing import Final, final, override
 
 from easyauth.config.net import ValidatedHttpsUrl, validate_public_https_url
+from easyauth.usage.recorder import record as record_usage
 
 RESPONSE_TOO_LARGE_MESSAGE: Final = "Webhook 响应超过允许的大小。"
 REQUEST_DEADLINE_EXCEEDED_MESSAGE: Final = "Webhook 请求超过总时限。"
@@ -43,6 +44,7 @@ class WebhookRequestPolicy:
     connect_timeout_seconds: float
     total_timeout_seconds: float
     max_response_bytes: int
+    usage_category: str = "internal_business_webhook"
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +144,7 @@ def _request_webhook(
     )
     response: HTTPResponse | None = None
     try:
+        record_usage(policy.usage_category)
         connection.request(
             request.method,
             prepared.target.request_target,

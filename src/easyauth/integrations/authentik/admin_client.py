@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from easyauth.applications.integration_settings import authentik_runtime_config
+from easyauth.usage.recorder import record as record_usage
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -273,6 +274,7 @@ class AuthentikAdminClient:
         return _parse_admin_json(raw)
 
     def _send_request(self, request: Request, *, remaining: float, deadline: float) -> bytes:
+        record_usage("internal_authentik_admin")
         try:
             with cast(
                 "_ReadableResponse",

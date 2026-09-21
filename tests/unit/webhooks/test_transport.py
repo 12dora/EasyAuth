@@ -100,6 +100,24 @@ def _policy(*, max_response_bytes: int = 16) -> WebhookRequestPolicy:
     )
 
 
+def test_post_webhook_counts_internal_business_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
+    keys: list[str] = []
+    monkeypatch.setattr(
+        transport,
+        "record_usage",
+        lambda key, *_args, **_kwargs: keys.append(str(key)),
+        raising=False,
+    )
+    _ = post_webhook(
+        url="https://hooks.example.com/callback",
+        allowed_hosts=("hooks.example.com",),
+        body=b"{}",
+        headers={"Content-Type": "application/json"},
+        policy=_policy(),
+    )
+    assert keys == ["internal_business_webhook"]
+
+
 def test_post_webhook_connects_to_validated_ip_without_reresolving() -> None:
     result = post_webhook(
         url="https://hooks.example.com/callback",

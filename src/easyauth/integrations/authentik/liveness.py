@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Final, Protocol, Self, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from easyauth.usage.recorder import record as record_usage
+
 if TYPE_CHECKING:
     from types import TracebackType
 
@@ -40,6 +42,7 @@ def check_authentik_liveness(*, base_url: str, timeout_seconds: float) -> Authen
         headers={"Accept": "*/*"},
         method="GET",
     )
+    record_usage("internal_authentik_other")
     try:
         response_context = cast(
             "_StatusResponse",

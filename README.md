@@ -138,7 +138,7 @@ flowchart LR
 | --- | --- |
 | [![目录](docs/assets/screenshots/03-app-catalog.png)](docs/assets/screenshots/03-app-catalog.png) | [![说明](docs/assets/screenshots/05-app-guide.png)](docs/assets/screenshots/05-app-guide.png) |
 
-| 依赖健康（上游集成状态） | 授权组 / 角色 |
+| 状态健康（依赖状态与用量监控） | 授权组 / 角色 |
 | --- | --- |
 | [![健康](docs/assets/screenshots/07-ops-health.png)](docs/assets/screenshots/07-ops-health.png) | [![授权组](docs/assets/screenshots/04-app-matrix.png)](docs/assets/screenshots/04-app-matrix.png) |
 

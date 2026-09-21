@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from json import JSONDecodeError, dumps, loads
 from time import monotonic
-from typing import TYPE_CHECKING, Final, Self, cast
+from typing import TYPE_CHECKING, Final, Literal, Self, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -20,7 +20,6 @@ from easyauth.integrations.dingtalk.access_token import (
     read_cached_access_token,
     validated_access_token_payload,
 )
-from easyauth.integrations.dingtalk.call_budget import record_and_check
 from easyauth.integrations.dingtalk.errors import (
     DingTalkApiError,
     DingTalkApiRequestError,
@@ -51,13 +50,22 @@ from easyauth.integrations.dingtalk.work_notification import (
     parse_send_progress,
     parse_send_result,
 )
+from easyauth.usage.recorder import record_and_check
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from types import TracebackType
 
-    from easyauth.integrations.dingtalk.call_budget import DingTalkCallCategory
     from easyauth.integrations.dingtalk.errors import DingTalkJson
+
+type DingTalkCallCategory = Literal[
+    "token",
+    "notify_send",
+    "notify_reconcile",
+    "robot_send",
+    "approval",
+    "probe",
+]
 
 # 默认走钉钉新版 v1.0 API(api.dingtalk.com); 审批、服务号机器人单聊等均有新版。
 # 例外: 工作通知仅有旧版 oapi topapi(asyncsend_v2 / getsendprogress / getsendresult),

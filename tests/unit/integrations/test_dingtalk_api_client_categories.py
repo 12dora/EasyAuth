@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import sys
+import types
 from contextlib import suppress
 from typing import TYPE_CHECKING, Self
 
 import pytest
 from django.core.cache import cache
-from django.test import override_settings
 
 from easyauth.integrations.dingtalk import api_client as client_module
 from easyauth.integrations.dingtalk.access_token import (
@@ -16,15 +17,16 @@ from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiClient,
     DingTalkApiRequestError,
     DingTalkCallBudgetExceededError,
+    DingTalkCallCategory,
     DingTalkFormComponent,
 )
-from easyauth.integrations.dingtalk.call_budget import record_and_check, usage_today
+from easyauth.usage.recorder import current_hour_counts
 
 if TYPE_CHECKING:
     from types import TracebackType
     from urllib.request import Request
 
-    from easyauth.integrations.dingtalk.call_budget import DingTalkCallCategory
+    from easyauth.usage.registry import UsageCategory
 
 TEST_APP_SECRET = "app-secret"
 CACHED_TOKEN = "cached-token"
@@ -77,6 +79,17 @@ def _patch_urlopen(monkeypatch: pytest.MonkeyPatch, *bodies: bytes) -> list[Requ
     return captured
 
 
+def _patch_decide(monkeypatch: pytest.MonkeyPatch, *, allowed: bool) -> None:
+    name = "easyauth.usage.enforcement"
+    if name not in sys.modules:
+        sys.modules[name] = types.ModuleType(name)
+
+    def _decide(_spec: UsageCategory) -> bool:
+        return allowed
+
+    monkeypatch.setattr(f"{name}.decide", _decide, raising=False)
+
+
 def _spy_categories(monkeypatch: pytest.MonkeyPatch) -> list[DingTalkCallCategory]:
     recorded: list[DingTalkCallCategory] = []
     original = client_module.record_and_check
@@ -89,21 +102,24 @@ def _spy_categories(monkeypatch: pytest.MonkeyPatch) -> list[DingTalkCallCategor
     return recorded
 
 
-def test_cached_token_does_not_meter() -> None:
+def test_cached_token_does_not_meter(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_decide(monkeypatch, allowed=True)
     _seed_token()
     assert _client().get_access_token() == CACHED_TOKEN
-    assert usage_today().total == 0
+    assert current_hour_counts() == {}
 
 
 def test_get_access_token_meters_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_decide(monkeypatch, allowed=True)
     recorded = _spy_categories(monkeypatch)
     _ = _patch_urlopen(monkeypatch, b'{"accessToken":"tok","expireIn":7200}')
     assert _client().get_access_token(force_refresh=True) == "tok"
     assert recorded == ["token"]
-    assert usage_today().by_category["token"] == 1
+    assert current_hour_counts()["token"] == (1, 0)
 
 
 def test_create_and_get_process_instance_meter_approval(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_decide(monkeypatch, allowed=True)
     _seed_token()
     recorded = _spy_categories(monkeypatch)
     _ = _patch_urlopen(
@@ -124,6 +140,7 @@ def test_create_and_get_process_instance_meter_approval(monkeypatch: pytest.Monk
 
 
 def test_send_work_notification_meters_notify_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_decide(monkeypatch, allowed=True)
     _seed_token()
     recorded = _spy_categories(monkeypatch)
     _ = _patch_urlopen(monkeypatch, b'{"errcode":0,"task_id":99}')
@@ -139,6 +156,7 @@ def test_send_work_notification_meters_notify_send(monkeypatch: pytest.MonkeyPat
 def test_get_send_progress_and_result_meter_notify_reconcile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _patch_decide(monkeypatch, allowed=True)
     _seed_token()
     recorded = _spy_categories(monkeypatch)
     _ = _patch_urlopen(
@@ -161,6 +179,7 @@ def test_get_send_progress_and_result_meter_notify_reconcile(
 
 
 def test_robot_batch_send_meters_robot_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_decide(monkeypatch, allowed=True)
     _seed_token()
     recorded = _spy_categories(monkeypatch)
     _ = _patch_urlopen(
@@ -178,18 +197,15 @@ def test_robot_batch_send_meters_robot_send(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_probe_oapi_access_token_meters_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_decide(monkeypatch, allowed=True)
     recorded = _spy_categories(monkeypatch)
     _ = _patch_urlopen(monkeypatch, b'{"errcode":0,"access_token":"oapi-tok"}')
     _client().probe_oapi_access_token()
     assert recorded == ["probe"]
 
 
-@override_settings(
-    EASYAUTH_DINGTALK_DAILY_CALL_BUDGET=1,
-    EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET=1,
-)
 def test_budget_exceeded_skips_http(monkeypatch: pytest.MonkeyPatch) -> None:
-    record_and_check("token")
+    _patch_decide(monkeypatch, allowed=False)
     called: list[int] = []
 
     def boom(request: Request, *, timeout: float) -> _Response:

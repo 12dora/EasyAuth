@@ -12,7 +12,7 @@ from easyauth.webhooks import hooks as hooks_module
 from easyauth.webhooks.hooks import HookCallError, signed_hook_get, signed_hook_post
 from easyauth.webhooks.models import AppWebhookConfig
 from easyauth.webhooks.signing import SIGNATURE_HEADER, TIMESTAMP_HEADER
-from easyauth.webhooks.transport import WebhookHttpResponse
+from easyauth.webhooks.transport import WebhookHttpResponse, WebhookRequestPolicy
 
 pytestmark = pytest.mark.django_db
 
@@ -187,6 +187,29 @@ def test_signed_hook_post_captures_retry_after(
             payload={},
         )
     assert exc_info.value.retry_after_seconds == 120
+
+
+def test_signed_hook_post_uses_internal_business_hook_category(
+    configured_app: App,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+
+    def fake_post_webhook(**kwargs: object) -> WebhookHttpResponse:
+        policy = kwargs["policy"]
+        assert isinstance(policy, WebhookRequestPolicy)
+        captured.append(policy.usage_category)
+        return WebhookHttpResponse(status_code=HTTPStatus.OK, body=b'{"ok":true}', location="")
+
+    monkeypatch.setattr(hooks_module, "post_webhook", fake_post_webhook)
+    _ = signed_hook_post(
+        app=configured_app,
+        url="https://hooks.example.com/handover",
+        event_type="lifecycle.handover.execute",
+        delivery_id="hook-usage",
+        payload={},
+    )
+    assert captured == ["internal_business_hook"]
 
 
 def test_signed_hook_get_revalidates_location_and_preserves_202(

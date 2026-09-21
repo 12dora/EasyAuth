@@ -214,6 +214,7 @@ def poll_async_action(
         return action
 
     try:
+        # HTTP 用量计入 signed_hook_get → transport(internal_business_hook), 此处不重复计数。
         response = signed_hook_get(
             app=action.app,
             url=action.async_status_url,

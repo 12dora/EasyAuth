@@ -21,6 +21,8 @@
 | 依赖健康历史 | `checked_at` 后 30 天 | 分批物理删除历史快照（最新状态由后续探测继续写入） | 未到期 |
 | 目录聚合审计桶 | 小时桶闭合后 | 追加为 `AuditLog` 并标记 `flushed_at` | 当前小时桶 |
 | 审计日志 | `created_at` 后 365 天 | 分批物理删除 | 未到期 |
+| 用量小时桶 `UsageBucket` | `hour_start` 后 400 天 | 分批物理删除 | 未到期 |
+| 用量告警事件 `UsageAlertEvent` | `created_at` 后 400 天 | 分批物理删除 | 未到期 |
 
 通知消息（`NotifyMessage`）由独立的 `easyauth.notify.prune_messages` 按 180 天保留期清理。
 

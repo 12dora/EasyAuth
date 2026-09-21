@@ -81,6 +81,7 @@ INSTALLED_APPS: list[str] = [
     "easyauth.workflows.apps.WorkflowsConfig",
     "easyauth.lifecycle.apps.LifecycleConfig",
     "easyauth.notify.apps.NotifyConfig",
+    "easyauth.usage.apps.UsageConfig",
     "easyauth.portal.apps.PortalConfig",
     "easyauth.admin_console.apps.AdminConsoleConfig",
 ]
@@ -367,15 +368,6 @@ EASYAUTH_WEBAUTHN_ORIGINS = tuple(
     if origin.strip()
 )
 EASYAUTH_DINGTALK_CALLBACK_SECRET = os.environ.get("EASYAUTH_DINGTALK_CALLBACK_SECRET", "")
-# 钉钉开放平台 REST 按次计费; 日硬帽覆盖全部类别, 回执对账另有子帽(见 call_budget)。
-EASYAUTH_DINGTALK_DAILY_CALL_BUDGET = parse_positive_int_setting(
-    "EASYAUTH_DINGTALK_DAILY_CALL_BUDGET",
-    os.environ.get("EASYAUTH_DINGTALK_DAILY_CALL_BUDGET", "5000"),
-)
-EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET = parse_positive_int_setting(
-    "EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET",
-    os.environ.get("EASYAUTH_DINGTALK_DAILY_RECONCILE_CALL_BUDGET", "1000"),
-)
 EASYAUTH_AUTHENTIK_BASE_URL = required_env(
     "EASYAUTH_AUTHENTIK_BASE_URL",
     dev_default="http://localhost:19000",
@@ -420,6 +412,9 @@ CELERY_IMPORTS = (
     "easyauth.tasks.connectors",
     "easyauth.tasks.outbox",
     "easyauth.tasks.notify",
+    "easyauth.tasks.usage_flush",
+    "easyauth.tasks.usage_evaluate",
+    "easyauth.tasks.usage_authentik",
 )
 CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "runtime-heartbeat": {
@@ -479,6 +474,21 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "data-retention-cleanup": {
         "task": "easyauth.health.data_retention_cleanup",
         "schedule": float(os.environ.get("EASYAUTH_DATA_RETENTION_CLEANUP_SECONDS", "86400")),
+    },
+    # 用量小时桶: 把当前及前两小时的缓存计数幂等刷入 UsageBucket。
+    "usage-flush-counters": {
+        "task": "easyauth.usage.flush_counters",
+        "schedule": float(os.environ.get("EASYAUTH_USAGE_FLUSH_SECONDS", "60")),
+    },
+    # 用量评估: 配额/降级/告警, 每分钟一次。
+    "usage-evaluate": {
+        "task": "easyauth.usage.evaluate",
+        "schedule": float(os.environ.get("EASYAUTH_USAGE_EVALUATE_SECONDS", "60")),
+    },
+    # 用量与 Authentik 对账: 拉取 fork 小时桶并回推执行策略。
+    "usage-sync-authentik": {
+        "task": "easyauth.usage.sync_authentik",
+        "schedule": float(os.environ.get("EASYAUTH_USAGE_AUTHENTIK_SYNC_SECONDS", "60")),
     },
     # 交接 v2: 超时上交(01 §7)。
     "lifecycle-escalation": {

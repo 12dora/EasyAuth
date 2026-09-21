@@ -54,7 +54,7 @@ ACCESS_REQUESTS_API_URL: Final = "/console/api/v1/operations/access-requests"
 ACCESS_GRANTS_API_URL: Final = "/console/api/v1/operations/access-grants"
 EMERGENCY_REVOKES_API_URL: Final = "/console/api/v1/operations/emergency-revokes"
 AUDIT_LOGS_API_URL: Final = "/console/api/v1/audit-logs"
-DEPENDENCY_HEALTH_API_URL: Final = "/console/api/v1/operations/dependency-health"
+DEPENDENCY_HEALTH_API_URL: Final = "/console/api/v1/operations/system-health/dependencies"
 
 
 @pytest.fixture(autouse=True)

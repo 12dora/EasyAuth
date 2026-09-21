@@ -13,6 +13,7 @@ from django.test import Client, override_settings
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
+from easyauth.integrations.dingtalk import callbacks as callbacks_module
 from easyauth.webhooks.models import AppWebhookConfig, WebhookDelivery
 from easyauth.workflows.models import (
     APPROVAL_STATUS_APPROVED,
@@ -157,6 +158,21 @@ def test_callback_rejects_unknown_status_payload() -> None:
     # Then: 未支持状态 422, 有载荷拒绝审计。
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert AuditLog.objects.filter(event_type="dingtalk_callback_payload_rejected").exists()
+
+
+@override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
+def test_authenticated_callback_counts_webhook_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    keys: list[str] = []
+    monkeypatch.setattr(
+        callbacks_module,
+        "record_usage",
+        lambda key, *_args, **_kwargs: keys.append(str(key)),
+        raising=False,
+    )
+    _ = _submitted_instance("cb-usage-app", "proc-usage")
+    response = _signed_post(_callback_body("proc-usage", "approved"))
+    assert response.status_code == HTTPStatus.OK
+    assert keys == ["webhook_callback"]
 
 
 def _submitted_instance(app_key: str, process_instance_id: str) -> ApprovalInstance:
