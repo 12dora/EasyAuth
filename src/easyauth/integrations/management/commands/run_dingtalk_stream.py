@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import logging
+import signal
 import threading
-from typing import Final, final, override
+from typing import TYPE_CHECKING, Final, final, override
 
 from django.core.management.base import BaseCommand, CommandError
 
 from easyauth.config.runtime_health import STREAM_PROCESS_HEARTBEAT, mark_heartbeat
 from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
 from easyauth.integrations.dingtalk.stream import build_stream_client
+from easyauth.integrations.dingtalk.stream_runner import (
+    bind_stream_session,
+    run_supervised_stream,
+    supervisor_hooks_from_event,
+)
+
+if TYPE_CHECKING:
+    from types import FrameType
 
 STREAM_HEARTBEAT_INTERVAL_SECONDS: Final = 15.0
 LOGGER = logging.getLogger(__name__)
@@ -37,9 +46,19 @@ class Command(BaseCommand):
             daemon=True,
         )
         heartbeat.start()
+        previous_int = signal.getsignal(signal.SIGINT)
+        previous_term = signal.getsignal(signal.SIGTERM)
         try:
-            client.start_forever()
+            _install_shutdown_signals(stop)
+            run_supervised_stream(
+                bind_stream_session(client),
+                supervisor_hooks_from_event(stop),
+            )
+        except KeyboardInterrupt:
+            LOGGER.info("钉钉 Stream 消费进程收到中断, 正在退出")
         finally:
+            _ = signal.signal(signal.SIGINT, previous_int)
+            _ = signal.signal(signal.SIGTERM, previous_term)
             stop.set()
             heartbeat.join(timeout=STREAM_HEARTBEAT_INTERVAL_SECONDS)
 
@@ -51,3 +70,13 @@ def heartbeat_loop(stop: threading.Event) -> None:
         except Exception:
             LOGGER.exception("钉钉 Stream 心跳写入失败, 将在下一轮继续尝试")
         _ = stop.wait(STREAM_HEARTBEAT_INTERVAL_SECONDS)
+
+
+def _install_shutdown_signals(stop: threading.Event) -> None:
+    def handle(signum: int, frame: FrameType | None) -> None:
+        del signum, frame
+        stop.set()
+        raise KeyboardInterrupt
+
+    _ = signal.signal(signal.SIGINT, handle)
+    _ = signal.signal(signal.SIGTERM, handle)

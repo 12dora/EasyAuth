@@ -8,7 +8,7 @@ from json import dumps
 from typing import TYPE_CHECKING, Final, cast, final, override
 
 from asgiref.sync import sync_to_async
-from dingtalk_stream import AckMessage, Credential, DingTalkStreamClient, EventHandler
+from dingtalk_stream import AckMessage, Credential, EventHandler
 from django.db import transaction
 
 from easyauth.api.datetime_json import datetime_value
@@ -16,11 +16,12 @@ from easyauth.applications.integration_settings import dingtalk_runtime_config
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.runtime_health import STREAM_ACK_HEARTBEAT, mark_heartbeat
 from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
+from easyauth.integrations.dingtalk.stream_runner import SingleSessionDingTalkStreamClient
 from easyauth.integrations.models import DingTalkStreamEvent
 from easyauth.outbox.services import enqueue_task
 
 if TYPE_CHECKING:
-    from dingtalk_stream import EventMessage
+    from dingtalk_stream import DingTalkStreamClient, EventMessage
 
     from easyauth.applications.ops_models import JsonValue
 
@@ -210,6 +211,6 @@ def build_stream_client() -> DingTalkStreamClient:
     config = dingtalk_runtime_config()
     if not config.is_configured():
         raise DingTalkNotConfiguredError
-    client = DingTalkStreamClient(Credential(config.app_key, config.app_secret))
+    client = SingleSessionDingTalkStreamClient(Credential(config.app_key, config.app_secret))
     client.register_all_event_handler(EasyAuthDingTalkEventHandler())
     return client
