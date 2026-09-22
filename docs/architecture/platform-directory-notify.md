@@ -106,7 +106,7 @@ owner token 的运行锁，TTL 覆盖整个等待与本地落库，任务 time_l
 AppKey，权限点 `qyapi_robot_sendmsg`，EasyAuth 只发不收）。走新版
 `POST /v1.0/robot/oToMessages/batchSend`（`x-acs-dingtalk-access-token` 来自
 `POST /v1.0/oauth2/accessToken`），`userIds` 单批 ≤20；无链接用 `sampleMarkdown`，有
-`deeplink_url` 用 `sampleActionCard2`。Markdown 正文为
+`deeplink_url` 用 `sampleActionCard`（单按钮「查看详情」）。Markdown 正文为
 `### <应用名> · <标题>` + 原文 content + `HH:mm · 来自 <发起方>`，与 OA body 同一套身份
 信息。机器人结果记在收件人行的 `robot_process_query_key` / `robot_status` /
 `robot_error`，**失败不得把工作通知标失败，反之亦然**。两个渠道各有全局开关

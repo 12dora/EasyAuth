@@ -12,8 +12,12 @@ if TYPE_CHECKING:
     from easyauth.integrations.dingtalk.errors import DingTalkJson
 
 ROBOT_OTO_BATCH_SEND_PATH: Final = "/v1.0/robot/oToMessages/batchSend"
+# msgKey 与 msgParam 一一对应, 不得混用对方模板的字段:
+# - sampleMarkdown → title, text(无跳转链接)
+# - sampleActionCard → title, text, singleTitle, singleURL(单按钮; singleTitle 固定「查看详情」)
+# 双按钮模板的 actionTitle1/actionURL1/actionTitle2/actionURL2 不属于本通道。
 ROBOT_MSG_KEY_MARKDOWN: Final = "sampleMarkdown"
-ROBOT_MSG_KEY_ACTION_CARD: Final = "sampleActionCard2"
+ROBOT_MSG_KEY_ACTION_CARD: Final = "sampleActionCard"
 ROBOT_ACTION_SINGLE_TITLE: Final = "查看详情"
 # 服务号机器人 batchSend 单次 userIds 上限。
 ROBOT_OTO_MAX_USERIDS: Final = 20
@@ -55,6 +59,12 @@ def robot_msg_key_and_param(
     single_url: str,
     single_title: str,
 ) -> tuple[str, str]:
+    """按是否有跳转链接选择机器人 msgKey, 并序列化对应 msgParam。
+
+    有 single_url: msgKey 为 sampleActionCard, msgParam 恰好为
+    title、text、singleTitle、singleURL(单按钮, 文案为 single_title)。
+    无 single_url: msgKey 为 sampleMarkdown, msgParam 恰好为 title、text。
+    """
     if single_url:
         msg_key = ROBOT_MSG_KEY_ACTION_CARD
         param: dict[str, str] = {

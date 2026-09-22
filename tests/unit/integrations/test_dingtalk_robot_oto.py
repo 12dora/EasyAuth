@@ -153,10 +153,16 @@ def test_robot_action_card_payload_when_link_exists(monkeypatch: pytest.MonkeyPa
     )
 
     body = json.loads(captured[0].data.decode("utf-8"))  # type: ignore[union-attr]
+    assert body["msgKey"] == "sampleActionCard"
     assert body["msgKey"] == ROBOT_MSG_KEY_ACTION_CARD
     param = json.loads(body["msgParam"])
-    assert param["singleTitle"] == "查看详情"
-    assert param["singleURL"] == "https://learn.example.com/lessons/1"
+    assert set(param) == {"title", "text", "singleTitle", "singleURL"}
+    assert param == {
+        "title": "学习工作台 · 课程提醒",
+        "text": "正文",
+        "singleTitle": "查看详情",
+        "singleURL": "https://learn.example.com/lessons/1",
+    }
 
 
 def test_robot_batch_chunks_user_ids_and_reuses_access_token(
