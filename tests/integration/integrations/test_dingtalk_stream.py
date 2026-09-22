@@ -474,7 +474,8 @@ def test_queued_false_keeps_ids_and_enqueues_one_delayed_followup(
         if call[2] == float(REFRESH_RETRY_BUDGET_SECONDS)
     ]
     assert followups == [1 + REFRESH_MAX_CONSECUTIVE_REQUEUES]
-    assert sent_tasks.task_kwargs[followups[0]] == {"trailing": True}
+    # 补刷新带 is_followup, 自己再耗尽时不会再排下一次。
+    assert sent_tasks.task_kwargs[followups[0]] == {"trailing": True, "is_followup": True}
     assert refresh_recorder.calls == [("corp-1", ("u-hold",))] * (
         REFRESH_MAX_CONSECUTIVE_REQUEUES + 2
     )
@@ -886,7 +887,8 @@ def test_celery_retry_exhaustion_enqueues_one_followup(
         if call[2] == float(REFRESH_RETRY_BUDGET_SECONDS)
     ]
     assert followups == [1]
-    assert sent_tasks.task_kwargs[followups[0]] == {"trailing": True}
+    # 补刷新带 is_followup, 自己再耗尽时不会再排下一次。
+    assert sent_tasks.task_kwargs[followups[0]] == {"trailing": True, "is_followup": True}
     assert _pending_user_ids("corp-1") == ["u-hold"]
 
 

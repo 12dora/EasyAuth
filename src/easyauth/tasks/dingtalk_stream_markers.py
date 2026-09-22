@@ -18,9 +18,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 合并窗口的 pending 标记只负责挡住重复入队, TTL 短于重试预算:
-# 任务丢失后不能把整个 corp 锁死一整段重试。user_ids / trailing / 部门标记 /
-# 触发基线用 REFRESH_MARKER_TTL_SECONDS, 覆盖整段 Celery 重试预算。
+# 合并窗口的 pending 标记只负责挡住重复入队, TTL 短于重试总预算:
+# 任务丢失后不能把整个 corp 锁死。user_ids / trailing / 部门标记 / 触发基线 /
+# 补刷新去重标志用 REFRESH_MARKER_TTL_SECONDS, 即两倍总预算。
 REFRESH_PENDING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-pending:{corp_id}"
 REFRESH_USER_IDS_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-user-ids:{corp_id}"
 REFRESH_USER_IDS_LOCK_CACHE_KEY_TEMPLATE: Final = (
@@ -57,11 +57,8 @@ REFRESH_MAX_CONSECUTIVE_REQUEUES: Final = 3
 REFRESH_USER_IDS_LOCK_TTL_SECONDS: Final = 5
 REFRESH_USER_IDS_LOCK_ATTEMPTS: Final = 20
 REFRESH_USER_IDS_LOCK_SLEEP_SECONDS: Final = 0.05
-# 去重标志要活过「倒计时 + 补刷新自己再耗尽一次预算」, 避免失败后又排下一次。
-_FOLLOWUP_FLAG_BUDGET_MULTIPLIER: Final = 2
-REFRESH_FOLLOWUP_FLAG_TTL_SECONDS: Final = (
-    REFRESH_MARKER_TTL_SECONDS * _FOLLOWUP_FLAG_BUDGET_MULTIPLIER
-)
+# 去重标志与 id/trailing 同寿命(已含第二轮风暴)。倒计时只占一半, 补刷新启动时标志还在。
+REFRESH_FOLLOWUP_FLAG_TTL_SECONDS: Final[int] = REFRESH_MARKER_TTL_SECONDS
 REFRESH_USER_IDS_LOCK_FAILED_MESSAGE: Final = "钉钉目录刷新 user_ids 缓存锁获取失败。"
 REFRESH_CACHE_TYPE_MESSAGE: Final = "钉钉目录刷新缓存值类型无效。"
 REFRESH_RUNNING_LOCK_LOST_MESSAGE: Final = "钉钉目录刷新 running 锁已不属于当前任务。"
@@ -270,6 +267,17 @@ def claim_exhaustion_followup(corp_id: str) -> bool:
 
 def clear_exhaustion_followup(corp_id: str) -> None:
     _ = cache.delete(_corp_key(REFRESH_FOLLOWUP_CACHE_KEY_TEMPLATE, corp_id))
+
+
+def refresh_exhaustion_followup_flag(corp_id: str) -> None:
+    # 尝试开始时把仍在的去重标志按原值续期, 没有标志则不新建。
+    key = _corp_key(REFRESH_FOLLOWUP_CACHE_KEY_TEMPLATE, corp_id)
+    raw = cast("object", cache.get(key))
+    if raw is None:
+        return
+    if raw != _PENDING_FLAG:
+        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
+    cache.set(key, _PENDING_FLAG, timeout=REFRESH_FOLLOWUP_FLAG_TTL_SECONDS)
 
 
 def _has_exhaustion_followup_work(corp_id: str) -> bool:

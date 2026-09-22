@@ -50,6 +50,7 @@ from easyauth.tasks.dingtalk_stream_markers import (
     pending_marker_exists,
     read_dept_event_token,
     refresh_countdown,
+    refresh_exhaustion_followup_flag,
     release_running_lock,
     remove_sent_user_ids,
     running_lock_held,
@@ -137,6 +138,9 @@ _EXHAUSTED_FOLLOWUP_SCHEDULED_MESSAGE: Final = (
 _EXHAUSTED_FOLLOWUP_SKIPPED_MESSAGE: Final = (
     "Authentik 目录刷新重试预算耗尽, 不再安排新的延迟补刷新; corp=%s"
 )
+_EXHAUSTED_FOLLOWUP_STOPPED_MESSAGE: Final = (
+    "Authentik 目录刷新延迟补刷新重试预算耗尽, 不再安排下一次; corp=%s"
+)
 
 SKIP_REASON_UNHANDLED_EVENT_TYPE: Final = "unhandled_event_type"
 SKIP_REASON_RECORDED_NO_CONSUMER: Final = "recorded_no_consumer"
@@ -183,6 +187,7 @@ def request_directory_refresh(
     source_event_id: str,
     user_ids: Sequence[str] = (),
     trailing: bool = False,
+    is_followup: bool = False,
 ) -> bool:
     accumulate_refresh_user_ids(corp_id, user_ids)
     if running_lock_held(corp_id):
@@ -194,17 +199,21 @@ def request_directory_refresh(
         event_key=f"dingtalk-directory-refresh:{corp_id}:{source_event_id}",
         task_name=DIRECTORY_REFRESH_TASK_NAME,
         args=[corp_id],
-        kwargs=_trailing_task_kwargs(trailing=trailing),
+        kwargs=_refresh_task_kwargs(trailing=trailing, is_followup=is_followup),
         countdown=refresh_countdown(corp_id),
     )
     transaction.on_commit(lambda: set_pending_marker(corp_id))
     return True
 
 
-def _trailing_task_kwargs(*, trailing: bool) -> dict[str, JsonValue] | None:
-    if not trailing:
+def _refresh_task_kwargs(*, trailing: bool, is_followup: bool) -> dict[str, JsonValue] | None:
+    payload: dict[str, JsonValue] = {}
+    if trailing:
+        payload["trailing"] = True
+    if is_followup:
+        payload["is_followup"] = True
+    if not payload:
         return None
-    payload: dict[str, JsonValue] = {"trailing": True}
     return payload
 
 
@@ -226,13 +235,26 @@ def refresh_dingtalk_directory_task(
     corp_id: str,
     *,
     trailing: bool = False,
+    # 已在 broker 里的旧消息没有该参数, 缺省按普通刷新处理。
+    is_followup: bool = False,
 ) -> dict[str, int]:
+    _touch_attempt_markers(corp_id)
     try:
-        return _refresh_directory_for_corp(corp_id, trailing=trailing)
+        return _refresh_directory_for_corp(
+            corp_id,
+            trailing=trailing,
+            is_followup=is_followup,
+        )
     except AuthentikDirectoryError:
         if _retries_exhausted(self):
-            _schedule_exhaustion_followup(corp_id)
+            _schedule_exhaustion_followup(corp_id, is_followup=is_followup)
         raise
+
+
+def _touch_attempt_markers(corp_id: str) -> None:
+    # 每次尝试开头续期。长等待不会把触发基线或去重标志耗尽; 没有则不新建。
+    refresh_trigger_marker_ttl(corp_id)
+    refresh_exhaustion_followup_flag(corp_id)
 
 
 def _retries_exhausted(task: _BoundDirectoryRefreshTask) -> bool:
@@ -242,7 +264,12 @@ def _retries_exhausted(task: _BoundDirectoryRefreshTask) -> bool:
     return task.request.retries >= task.max_retries
 
 
-def _refresh_directory_for_corp(corp_id: str, *, trailing: bool) -> dict[str, int]:
+def _refresh_directory_for_corp(
+    corp_id: str,
+    *,
+    trailing: bool,
+    is_followup: bool,
+) -> dict[str, int]:
     token = acquire_running_lock(corp_id)
     if token is None:
         mark_trailing_needed(corp_id)
@@ -255,7 +282,11 @@ def _refresh_directory_for_corp(corp_id: str, *, trailing: bool) -> dict[str, in
         clear_exhaustion_followup(corp_id)
         _arm_trailing_after_success(corp_id)
         return _empty_refresh_counts()
-    return _finish_directory_refresh(corp_id, exit_state.outcome)
+    return _finish_directory_refresh(
+        corp_id,
+        exit_state.outcome,
+        is_followup=is_followup,
+    )
 
 
 def _locked_refresh(corp_id: str, token: str, *, trailing: bool) -> _RefreshExit:
@@ -269,10 +300,12 @@ def _locked_refresh(corp_id: str, token: str, *, trailing: bool) -> _RefreshExit
 def _finish_directory_refresh(
     corp_id: str,
     outcome: AuthentikDirectorySyncResult | None,
+    *,
+    is_followup: bool,
 ) -> dict[str, int]:
     if outcome is None:
         _ = consume_trailing_needed(corp_id)
-        return _reschedule_after_not_queued(corp_id)
+        return _reschedule_after_not_queued(corp_id, is_followup=is_followup)
     delete_requeue_count(corp_id)
     clear_exhaustion_followup(corp_id)
     _arm_trailing_after_success(corp_id)
@@ -321,20 +354,26 @@ def _run_directory_refresh(
     return result
 
 
-def _reschedule_after_not_queued(corp_id: str) -> dict[str, int]:
+def _reschedule_after_not_queued(corp_id: str, *, is_followup: bool) -> dict[str, int]:
     requeue_count = increment_requeue_count(corp_id)
     if requeue_count > REFRESH_MAX_CONSECUTIVE_REQUEUES:
-        _schedule_exhaustion_followup(corp_id)
+        _schedule_exhaustion_followup(corp_id, is_followup=is_followup)
         return _empty_refresh_counts()
     _ = request_directory_refresh(
         corp_id,
         source_event_id=f"requeue-{requeue_count}-{time.time_ns()}",
         user_ids=(),
+        is_followup=is_followup,
     )
     return _empty_refresh_counts()
 
 
-def _schedule_exhaustion_followup(corp_id: str) -> None:
+def _schedule_exhaustion_followup(corp_id: str, *, is_followup: bool) -> None:
+    # 补刷新自己耗尽时只记一次错误并停止。id 留在 pending, 等下一次事件;
+    # 每日全量同步是最后兜底, 不再排下一轮延迟补刷新。
+    if is_followup:
+        logger.error(_EXHAUSTED_FOLLOWUP_STOPPED_MESSAGE, corp_id)
+        return
     if not claim_exhaustion_followup(corp_id):
         logger.error(_EXHAUSTED_FOLLOWUP_SKIPPED_MESSAGE, corp_id)
         return
@@ -343,7 +382,7 @@ def _schedule_exhaustion_followup(corp_id: str) -> None:
         event_key=f"dingtalk-directory-refresh-followup:{corp_id}:{time.time_ns()}",
         task_name=DIRECTORY_REFRESH_TASK_NAME,
         args=[corp_id],
-        kwargs=_trailing_task_kwargs(trailing=True),
+        kwargs=_refresh_task_kwargs(trailing=True, is_followup=True),
         countdown=float(REFRESH_RETRY_BUDGET_SECONDS),
     )
     logger.error(

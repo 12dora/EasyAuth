@@ -39,26 +39,41 @@ REFRESH_TRIGGER_MARKER_CACHE_KEY_TEMPLATE: Final = (
 # Authentik 增量同步 user_ids 上限(与 REST 契约一致); 超出部分由每日全量同步兜底。
 REFRESH_USER_IDS_MAX: Final = 200
 
-# Celery autoretry: retry_backoff=True 的因子是 1, countdown = min(backoff_max, 2**retries)。
+# 标记、user_id、trailing、部门标记、触发基线与补刷新去重标志共用下面的 TTL。
+# 单次尝试最坏耗时 = 等待超时 + 状态轮询间隔 + status HTTP 超时。
+# 截止前的最后一次检查之后仍会 sleep 整段轮询间隔; 紧接着的 get_status
+# 最多再占一个 HTTP 超时。该超时与 AuthentikDirectoryClient.timeout_seconds、
+# EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS 的默认值相同, 改默认值必须一起改。
+# Celery autoretry 的 retry_backoff=True 因子是 1, countdown = min(backoff_max, 2**retries)。
 # request.retries 从 0 起, 真正会睡过去的是 0 .. max_retries-1;
 # 第 max_retries 次失败时 retry() 发现下一次将超过上限, 不再等待。
-# retry_jitter 只把退避缩短到 [0, countdown], 预算按无抖动上界计算。
-# 尝试次数 = max_retries + 1, 每次等待上限 = REFRESH_WAIT_TIMEOUT_SECONDS。
-# 预算 = 尝试次数 x 等待 + 退避上界。标记 TTL 比预算多 1 秒, 避免与同长度的
-# 延迟补刷新倒计时在同一秒被缓存判过期。
+# full_jitter 只把退避缩短到 [0, countdown], 预算按无抖动上界。
+# 总预算 = 尝试次数 x 单次最坏 + 退避上界之和 + broker 投递延迟余量。
+# 尝试次数 = max_retries + 1。补刷新倒计时 = 总预算。
+# TTL = 2 x 总预算, 覆盖「倒计时 + 补刷新自己再打满一次」,
+# 稍晚启动的 worker 仍能看见尚未消费的 user_id。
 DIRECTORY_REFRESH_MAX_RETRIES: Final = 5
 DIRECTORY_REFRESH_RETRY_BACKOFF_MAX_SECONDS: Final = 600
-REFRESH_MARKER_TTL_SLACK_SECONDS: Final = 1
+REFRESH_STATUS_HTTP_TIMEOUT_SECONDS: Final = 5
+REFRESH_BROKER_DELAY_ALLOWANCE_SECONDS: Final = 300
+REFRESH_TTL_STORM_MULTIPLIER: Final = 2
+REFRESH_ATTEMPT_COUNT: Final = DIRECTORY_REFRESH_MAX_RETRIES + 1
+REFRESH_ATTEMPT_WORST_CASE_SECONDS: Final[int] = (
+    int(REFRESH_WAIT_TIMEOUT_SECONDS)
+    + int(REFRESH_POLL_INTERVAL_SECONDS)
+    + REFRESH_STATUS_HTTP_TIMEOUT_SECONDS
+)
 REFRESH_RETRY_BACKOFF_BUDGET_SECONDS: Final[int] = sum(
     min(DIRECTORY_REFRESH_RETRY_BACKOFF_MAX_SECONDS, 1 << index)
     for index in range(DIRECTORY_REFRESH_MAX_RETRIES)
 )
 REFRESH_RETRY_BUDGET_SECONDS: Final[int] = (
-    (DIRECTORY_REFRESH_MAX_RETRIES + 1) * int(REFRESH_WAIT_TIMEOUT_SECONDS)
+    REFRESH_ATTEMPT_COUNT * REFRESH_ATTEMPT_WORST_CASE_SECONDS
     + REFRESH_RETRY_BACKOFF_BUDGET_SECONDS
+    + REFRESH_BROKER_DELAY_ALLOWANCE_SECONDS
 )
 REFRESH_MARKER_TTL_SECONDS: Final[int] = (
-    REFRESH_RETRY_BUDGET_SECONDS + REFRESH_MARKER_TTL_SLACK_SECONDS
+    REFRESH_RETRY_BUDGET_SECONDS * REFRESH_TTL_STORM_MULTIPLIER
 )
 
 AUTHENTIK_SYNC_STATUS_SUCCESS: Final = "success"
