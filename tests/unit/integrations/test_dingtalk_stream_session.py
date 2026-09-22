@@ -18,6 +18,9 @@ from easyauth.integrations.dingtalk.stream_runner import (
 from easyauth.integrations.dingtalk.stream_session import (
     STREAM_OPEN_CONNECT_TIMEOUT_SECONDS,
     STREAM_OPEN_READ_TIMEOUT_SECONDS,
+    STREAM_PAUSED_CLOSE_MESSAGE,
+    STREAM_PREDICATE_FAILED_MESSAGE,
+    STREAM_SESSION_TASK_FAILED_MESSAGE,
     SingleSessionDingTalkStreamClient,
     StreamClientTypeError,
     StreamOpenConnectionError,
@@ -384,6 +387,106 @@ def test_stop_during_connected_session_exits_without_sleep(
     assert websocket.close_calls == 1
 
 
+def test_policy_and_record_run_off_the_event_loop_thread() -> None:
+    seen: list[tuple[str, int]] = []
+    loop_ident: list[int] = []
+
+    def should_run() -> bool:
+        seen.append(("should_run", threading.get_ident()))
+        return True
+
+    def record() -> None:
+        seen.append(("record", threading.get_ident()))
+        raise DingTalkCallBudgetExceededError
+
+    client = SingleSessionDingTalkStreamClient(Credential("app-key", "app-secret"))
+    client.stream_should_run = should_run
+    client.record_stream_open = record
+
+    async def drive() -> None:
+        loop_ident.append(threading.get_ident())
+        await client.start()
+
+    with pytest.raises(DingTalkCallBudgetExceededError):
+        asyncio.run(drive())
+    assert [name for name, _ident in seen] == ["should_run", "record"]
+    assert all(ident != loop_ident[0] for _name, ident in seen)
+
+
+def test_watcher_survives_predicate_errors_then_stop_closes_socket(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls = {"n": 0}
+    seen: list[int] = []
+    stop = threading.Event()
+    loop_ident = threading.get_ident()
+    websocket = _GateWebSocket()
+    client = SingleSessionDingTalkStreamClient(Credential("app-key", "app-secret"))
+    client.pause_poll_seconds = 0.0
+    client.session_should_stop = stop.is_set
+
+    def should_run() -> bool:
+        seen.append(threading.get_ident())
+        calls["n"] += 1
+        # start() 在打开连接前询问两次; 之后才是会话内监视。
+        if calls["n"] <= 2:
+            return True
+        if calls["n"] < 5:
+            message = "enforcement down"
+            raise RuntimeError(message)
+        stop.set()
+        return True
+
+    client.stream_should_run = should_run
+    _patch_open_socket(monkeypatch, client, websocket)
+    with caplog.at_level("WARNING"):
+        asyncio.run(client.start())
+    assert calls["n"] == 5
+    assert all(ident != loop_ident for ident in seen)
+    assert websocket.close_calls == 1
+    assert caplog.text.count(STREAM_PREDICATE_FAILED_MESSAGE) == 1
+    assert STREAM_PAUSED_CLOSE_MESSAGE not in caplog.text
+    assert STREAM_SESSION_TASK_FAILED_MESSAGE not in caplog.text
+
+
+def test_stop_closes_socket_after_watcher_task_dies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    died = {"n": 0}
+    stop = threading.Event()
+    websocket = _GateWebSocket()
+    client = SingleSessionDingTalkStreamClient(Credential("app-key", "app-secret"))
+    client.pause_poll_seconds = 0.0
+    client.session_should_stop = stop.is_set
+
+    async def crash(_watch: object) -> None:
+        died["n"] += 1
+        stop.set()
+        message = "watcher killed"
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(session_module, "_watch_stream_session_exit", crash)
+    _patch_open_socket(monkeypatch, client, websocket)
+    asyncio.run(client.start())
+    assert died["n"] == 1
+    assert stop.is_set()
+    assert websocket.close_calls == 1
+
+
+def _patch_open_socket(
+    monkeypatch: pytest.MonkeyPatch,
+    client: SingleSessionDingTalkStreamClient,
+    websocket: object,
+) -> None:
+    monkeypatch.setattr(
+        client,
+        "open_connection",
+        lambda: {"endpoint": "wss://example.test", "ticket": "t"},
+    )
+    monkeypatch.setattr(session_module, "_websocket_session", lambda _uri: websocket)
+
+
 def _run_connected_durations(
     monkeypatch: pytest.MonkeyPatch,
     durations: list[float],
@@ -436,6 +539,41 @@ class _TimedWebSocket:
         self._consumed = True
         self._now["t"] += self._remaining.pop(0)
         raise StopAsyncIteration
+
+
+class _GateWebSocket:
+    def __init__(self) -> None:
+        self.close_calls = 0
+        self._closed: asyncio.Event | None = None
+
+    async def __aenter__(self) -> Self:
+        self._closed = asyncio.Event()
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        del args
+        if self._closed is not None:
+            self._closed.set()
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> str:
+        closed = self._closed
+        if closed is None:
+            message = "websocket was not entered"
+            raise AssertionError(message)
+        try:
+            await asyncio.wait_for(closed.wait(), timeout=2.0)
+        except TimeoutError:
+            message = "session did not close"
+            raise AssertionError(message) from None
+        raise StopAsyncIteration
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        if self._closed is not None:
+            self._closed.set()
 
 
 class _StoppableWebSocket:

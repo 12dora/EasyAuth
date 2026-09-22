@@ -4,7 +4,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from easyauth.integrations.dingtalk.errors import DingTalkCallBudgetExceededError
 from easyauth.integrations.dingtalk.stream_session import (
@@ -40,6 +40,11 @@ STREAM_JITTER_UNIT_MESSAGE: Final = "钉钉 Stream 重连抖动采样必须落�
 STREAM_RECONNECT_STREAK_MESSAGE: Final = "钉钉 Stream 短会话计数不能为负数。"
 STREAM_PAUSED_SKIP_OPEN_MESSAGE: Final = "钉钉 Stream 已按用量策略暂停, 暂不打开连接。"
 STREAM_OPEN_REFUSED_MESSAGE: Final = "钉钉 Stream 打开连接被用量策略拒绝, 将按退避重连。"
+STREAM_POLICY_CHECK_FAILED_MESSAGE: Final = "钉钉 Stream 用量策略查询失败, 将按退避重连。"
+STREAM_INTERRUPTED_MESSAGE: Final = "钉钉 Stream 收到中断, 停止重连"
+_FAILED_SESSION_SECONDS: Final = 0.0
+
+type _StreamPolicy = Literal["run", "pause", "error", "stop"]
 
 __all__ = (
     "STREAM_OPEN_CONNECT_TIMEOUT_SECONDS",
@@ -49,6 +54,7 @@ __all__ = (
     "STREAM_PAUSED_CLOSE_MESSAGE",
     "STREAM_PAUSED_SKIP_OPEN_MESSAGE",
     "STREAM_PAUSE_POLL_SECONDS",
+    "STREAM_POLICY_CHECK_FAILED_MESSAGE",
     "STREAM_RECONNECT_HEALTHY_SECONDS",
     "STREAM_RECONNECT_INITIAL_SECONDS",
     "STREAM_RECONNECT_JITTER_RATIO",
@@ -152,33 +158,95 @@ def bind_stream_session(
     return session
 
 
+@dataclass(slots=True)
+class _SupervisorLoop:
+    streak: int = 0
+    pause_logged: bool = False
+
+
 def run_supervised_stream(
     session: Callable[[], float],
     hooks: StreamSupervisorHooks,
 ) -> None:
-    streak = 0
-    pause_logged = False
+    state = _SupervisorLoop()
     while not hooks.should_stop():
-        if not hooks.stream_should_run():
-            pause_logged = _log_stream_paused_once(already_logged=pause_logged)
-            streak = 0
-            if not _sleep_or_stop(hooks, hooks.pause_poll_seconds):
-                return
-            continue
-        pause_logged = False
-        connected_seconds = _invoke_stream_session(session)
-        if connected_seconds is None:
+        if not _advance_supervisor(session, hooks, state):
             return
-        if hooks.should_stop() or not hooks.stream_should_run():
-            continue
-        streak, delay = _plan_reconnect(streak, connected_seconds, hooks.unit_interval())
-        logger.warning(
-            "钉钉 Stream 将重连: 第 %s 次尝试, 下次等待 %.1f 秒",
-            streak,
-            delay,
-        )
-        if not _sleep_or_stop(hooks, delay):
-            return
+
+
+def _advance_supervisor(
+    session: Callable[[], float],
+    hooks: StreamSupervisorHooks,
+    state: _SupervisorLoop,
+) -> bool:
+    policy = _read_stream_policy(hooks)
+    if policy == "stop":
+        return False
+    if policy == "error":
+        return _reconnect_after(hooks, state, _FAILED_SESSION_SECONDS)
+    if policy == "pause":
+        return _wait_while_paused(hooks, state)
+    return _open_and_maybe_reconnect(session, hooks, state)
+
+
+def _read_stream_policy(hooks: StreamSupervisorHooks) -> _StreamPolicy:
+    try:
+        return "run" if hooks.stream_should_run() else "pause"
+    except KeyboardInterrupt:
+        logger.info(STREAM_INTERRUPTED_MESSAGE)
+        return "stop"
+    except Exception:
+        logger.exception(STREAM_POLICY_CHECK_FAILED_MESSAGE)
+        return "error"
+
+
+def _wait_while_paused(hooks: StreamSupervisorHooks, state: _SupervisorLoop) -> bool:
+    state.pause_logged = _log_stream_paused_once(already_logged=state.pause_logged)
+    state.streak = 0
+    return _sleep_or_stop(hooks, hooks.pause_poll_seconds)
+
+
+def _open_and_maybe_reconnect(
+    session: Callable[[], float],
+    hooks: StreamSupervisorHooks,
+    state: _SupervisorLoop,
+) -> bool:
+    state.pause_logged = False
+    connected = _invoke_stream_session(session)
+    if connected is None:
+        return False
+    if hooks.should_stop():
+        return True
+    return _reconnect_after_open(hooks, state, connected)
+
+
+def _reconnect_after_open(
+    hooks: StreamSupervisorHooks,
+    state: _SupervisorLoop,
+    connected: float,
+) -> bool:
+    policy = _read_stream_policy(hooks)
+    if policy == "stop":
+        return False
+    if policy == "pause":
+        return True
+    elapsed = _FAILED_SESSION_SECONDS if policy == "error" else connected
+    return _reconnect_after(hooks, state, elapsed)
+
+
+def _reconnect_after(
+    hooks: StreamSupervisorHooks,
+    state: _SupervisorLoop,
+    elapsed: float,
+) -> bool:
+    state.pause_logged = False
+    state.streak, delay = _plan_reconnect(state.streak, elapsed, hooks.unit_interval())
+    logger.warning(
+        "钉钉 Stream 将重连: 第 %s 次尝试, 下次等待 %.1f 秒",
+        state.streak,
+        delay,
+    )
+    return _sleep_or_stop(hooks, delay)
 
 
 def _plan_reconnect(streak: int, elapsed: float, unit: float) -> tuple[int, float]:
@@ -208,7 +276,7 @@ def _invoke_stream_session(session: Callable[[], float]) -> float | None:
     try:
         return session()
     except KeyboardInterrupt:
-        logger.info("钉钉 Stream 收到中断, 停止重连")
+        logger.info(STREAM_INTERRUPTED_MESSAGE)
         return None
     except DingTalkCallBudgetExceededError:
         logger.warning(STREAM_OPEN_REFUSED_MESSAGE)
@@ -224,6 +292,6 @@ def _sleep_or_stop(hooks: StreamSupervisorHooks, delay: float) -> bool:
     try:
         hooks.sleep(delay)
     except KeyboardInterrupt:
-        logger.info("钉钉 Stream 收到中断, 停止重连")
+        logger.info(STREAM_INTERRUPTED_MESSAGE)
         return False
     return not hooks.should_stop()

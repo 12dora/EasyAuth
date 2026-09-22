@@ -3,6 +3,7 @@ from __future__ import annotations
 import signal
 import threading
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pytest
 from dingtalk_stream import Credential
@@ -11,6 +12,7 @@ from easyauth.integrations.dingtalk.errors import DingTalkCallBudgetExceededErro
 from easyauth.integrations.dingtalk.stream_runner import (
     STREAM_PAUSE_POLL_SECONDS,
     STREAM_PAUSED_SKIP_OPEN_MESSAGE,
+    STREAM_POLICY_CHECK_FAILED_MESSAGE,
     STREAM_RECONNECT_HEALTHY_SECONDS,
     STREAM_RECONNECT_INITIAL_SECONDS,
     STREAM_RECONNECT_JITTER_RATIO,
@@ -29,6 +31,9 @@ from easyauth.integrations.dingtalk.stream_runner import (
 from easyauth.integrations.dingtalk.stream_session import SingleSessionDingTalkStreamClient
 from easyauth.integrations.management.commands import run_dingtalk_stream as command_module
 from easyauth.integrations.management.commands.run_dingtalk_stream import Command
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 EXPECTED_BASE_SEQUENCE = (5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 300.0, 300.0)
 SHORT_SESSION_SECONDS = 1.0
@@ -276,6 +281,76 @@ def test_paused_stream_opens_after_resume() -> None:
     )
     assert probe.sessions == 1
     assert probe.sleeps == [STREAM_PAUSE_POLL_SECONDS, STREAM_PAUSE_POLL_SECONDS]
+
+
+def test_policy_error_before_open_backs_off_and_continues(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls = {"n": 0}
+
+    def should_run() -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            message = "redis down"
+            raise RuntimeError(message)
+        return True
+
+    probe = _Probe(stop_after_sessions=1)
+    with caplog.at_level("ERROR"):
+        run_supervised_stream(probe.session, _policy_hooks(probe, should_run))
+    assert probe.sessions == 1
+    assert probe.sleeps == [STREAM_RECONNECT_INITIAL_SECONDS]
+    assert calls["n"] == 2
+    assert STREAM_POLICY_CHECK_FAILED_MESSAGE in caplog.text
+    assert STREAM_PAUSED_SKIP_OPEN_MESSAGE not in caplog.text
+
+
+def test_policy_error_after_session_backs_off_and_continues() -> None:
+    calls = {"n": 0}
+
+    def should_run() -> bool:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            message = "redis down"
+            raise RuntimeError(message)
+        return True
+
+    probe = _Probe(stop_after_sessions=2)
+    run_supervised_stream(probe.session, _policy_hooks(probe, should_run))
+    assert probe.sessions == 2
+    assert probe.sleeps == [STREAM_RECONNECT_INITIAL_SECONDS]
+    assert calls["n"] == 3
+
+
+def test_policy_keyboard_interrupt_stops_without_backoff() -> None:
+    def should_run() -> bool:
+        raise KeyboardInterrupt
+
+    probe = _Probe(stop_after_sleeps=3)
+    run_supervised_stream(probe.session, _policy_hooks(probe, should_run))
+    assert probe.sessions == 0
+    assert probe.sleeps == []
+
+
+def test_policy_system_exit_escapes() -> None:
+    def should_run() -> bool:
+        raise SystemExit
+
+    probe = _Probe(stop_after_sleeps=3)
+    with pytest.raises(SystemExit):
+        run_supervised_stream(probe.session, _policy_hooks(probe, should_run))
+    assert probe.sessions == 0
+    assert probe.sleeps == []
+
+
+def _policy_hooks(probe: _Probe, should_run: Callable[[], bool]) -> StreamSupervisorHooks:
+    return StreamSupervisorHooks(
+        should_stop=probe.should_stop,
+        sleep=probe.sleep,
+        clock=probe.clock,
+        unit_interval=lambda: 0.0,
+        stream_should_run=should_run,
+    )
 
 
 def test_open_refusal_uses_reconnect_backoff(caplog: pytest.LogCaptureFixture) -> None:
