@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from django.utils import timezone
@@ -18,8 +19,6 @@ from easyauth.notify.messages import NotifyMessageInput
 from easyauth.usage.config import UsageConfig, load
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from easyauth.usage.models import UsageAlertEvent
 
 SENDER_APP_MISSING: Final = "发送方应用未就绪"
@@ -28,6 +27,12 @@ SENDER_CHANNEL_MISSING: Final = "发送方通知通道未就绪"
 NO_RECIPIENTS: Final = "没有可投递的控制台管理员"
 ALERT_TITLE: Final = "EasyAuth 用量告警"
 ALERT_BIZ_TAG: Final = "usage.alert"
+
+
+@dataclass(frozen=True, slots=True)
+class MergedAlertDelivery:
+    failure_reason: str | None
+    handed_off: bool
 
 
 def sender_status() -> tuple[bool, str | None, int]:
@@ -76,37 +81,44 @@ def resolvable_admin_refs() -> tuple[str, ...]:
 
 def send_merged_alert(
     events: tuple[UsageAlertEvent, ...],
-    now: datetime,
     config: UsageConfig,
-) -> str | None:
+) -> MergedAlertDelivery:
     ready, problem, _count = inspect_sender(config)
     if not ready:
-        return problem
+        return MergedAlertDelivery(failure_reason=problem, handed_off=False)
     identity = App.objects.filter(
         app_key=config.alerts.sender_app_key,
         is_active=True,
     ).first()
     credential = notify_credential(identity) if identity is not None else None
     if identity is None or credential is None:
-        return SENDER_APP_MISSING
+        return MergedAlertDelivery(failure_reason=SENDER_APP_MISSING, handed_off=False)
     refs = resolvable_admin_refs()
     if not refs:
-        return NO_RECIPIENTS
-    return _accept(identity, credential, events, now, refs)
+        return MergedAlertDelivery(failure_reason=NO_RECIPIENTS, handed_off=False)
+    return _accept(identity, credential, events, refs)
+
+
+def batch_key_for_parts(parts: tuple[str, ...]) -> str:
+    digest = hashlib.sha256("|".join(sorted(parts)).encode("utf-8")).hexdigest()[:24]
+    return f"usage:{digest}"
+
+
+def batch_key_for_events(events: tuple[UsageAlertEvent, ...]) -> str:
+    return batch_key_for_parts(tuple(_event_part(event) for event in events))
 
 
 def _accept(
     identity: App,
     credential: AppCredential,
     events: tuple[UsageAlertEvent, ...],
-    now: datetime,
     refs: tuple[str, ...],
-) -> str | None:
+) -> MergedAlertDelivery:
     message = NotifyMessageInput(
         title=ALERT_TITLE,
-        content=_build_body(events, now),
+        content=_build_body(events),
         recipients=refs,
-        dedup_key=_dedup_key(events, now),
+        dedup_key=batch_key_for_events(events),
         biz_tag=ALERT_BIZ_TAG,
     )
     try:
@@ -121,22 +133,18 @@ def _accept(
             ),
         )
     except NotifyAcceptError as error:
-        return str(error)
-    return None
+        return MergedAlertDelivery(failure_reason=str(error), handed_off=True)
+    return MergedAlertDelivery(failure_reason=None, handed_off=True)
 
 
-def _build_body(events: tuple[UsageAlertEvent, ...], now: datetime) -> str:
-    stamp = timezone.localtime(now).strftime("%Y-%m-%d %H:%M %z")
+def _build_body(events: tuple[UsageAlertEvent, ...]) -> str:
+    earliest = min(event.created_at for event in events)
+    stamp = timezone.localtime(earliest).strftime("%Y-%m-%d %H:%M %z")
     lines = [f"时间: {stamp}", ""]
     lines.extend(f"- {event.detail}" for event in events)
     return "\n".join(lines)
 
 
-def _dedup_key(events: tuple[UsageAlertEvent, ...], now: datetime) -> str:
-    parts = sorted(
-        f"{event.kind}:{event.metric}:{event.scope}:{event.period_key}:{event.threshold_percent}"
-        for event in events
-    )
-    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:24]
-    minute = timezone.localtime(now).strftime("%Y%m%d%H%M")
-    return f"usage:{digest}:{minute}"
+def _event_part(event: UsageAlertEvent) -> str:
+    threshold = event.threshold_percent
+    return f"{event.kind}:{event.metric}:{event.scope}:{event.period_key}:{threshold}"

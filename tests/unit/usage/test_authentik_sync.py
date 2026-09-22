@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Self
@@ -10,6 +11,8 @@ from django.core.cache import cache
 
 from easyauth.integrations.authentik.directory_client import (
     DIRECTORY_INVALID_FORMAT_MESSAGE,
+    DIRECTORY_NOT_FOUND_MESSAGE,
+    AuthentikDirectoryNotFoundError,
     AuthentikDirectoryUnavailableError,
 )
 from easyauth.integrations.authentik.usage_client import (
@@ -339,6 +342,83 @@ def test_sync_keeps_pull_error_when_push_succeeds(monkeypatch: pytest.MonkeyPatc
     assert state.authentik_pulled_at is None
     assert state.authentik_policy_pushed_at == NOW
     assert push_client.policies
+
+
+def test_pull_logs_not_found_once_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def _forbidden(*_args: object, **_kwargs: object) -> None:
+        message = "不应使用 logger.exception"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(sync_module.logger, "exception", _forbidden)
+    fake = _FakeUsageClient(
+        report=_report(),
+        error=AuthentikDirectoryNotFoundError(DIRECTORY_NOT_FOUND_MESSAGE),
+    )
+    monkeypatch.setattr(sync_module, "_usage_client", lambda: fake)
+    with caplog.at_level(logging.DEBUG, logger=sync_module.logger.name):
+        pull(NOW)
+        pull(NOW)
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and record.name == sync_module.logger.name
+    ]
+    assert len(warnings) == 1
+    assert warnings[0].exc_info is None
+    assert "用量拉取失败" in warnings[0].getMessage()
+    state = UsageRuntimeState.objects.get(pk=1)
+    assert "用量拉取失败" in state.authentik_error
+
+
+def test_pull_logs_recovery_once(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    failing = _FakeUsageClient(
+        report=_report(),
+        error=AuthentikDirectoryUnavailableError("down"),
+    )
+    monkeypatch.setattr(sync_module, "_usage_client", lambda: failing)
+    with caplog.at_level(logging.INFO, logger=sync_module.logger.name):
+        pull(NOW)
+        healthy = _FakeUsageClient(report=_report())
+        monkeypatch.setattr(sync_module, "_usage_client", lambda: healthy)
+        pull(NOW)
+        pull(NOW)
+    infos = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.INFO and "已恢复" in record.getMessage()
+    ]
+    assert len(infos) == 1
+    assert UsageRuntimeState.objects.get(pk=1).authentik_error == ""
+
+
+def test_pull_failure_keeps_unrelated_runtime_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    previous = NOW - timedelta(hours=1)
+    _ = UsageRuntimeState.objects.create(
+        pk=1,
+        enforcement={"keep": True},
+        stream_paused=True,
+        stream_manual_resume_period="2026-09-21",
+        authentik_pulled_at=previous,
+        authentik_error="",
+    )
+    fake = _FakeUsageClient(
+        report=_report(),
+        error=AuthentikDirectoryUnavailableError("down"),
+    )
+    monkeypatch.setattr(sync_module, "_usage_client", lambda: fake)
+    pull(NOW)
+    state = UsageRuntimeState.objects.get(pk=1)
+    assert state.enforcement == {"keep": True}
+    assert state.stream_paused is True
+    assert state.stream_manual_resume_period == "2026-09-21"
+    assert state.authentik_pulled_at == previous
+    assert "用量拉取失败" in state.authentik_error
 
 
 def test_sync_authentik_task_calls_sync(monkeypatch: pytest.MonkeyPatch) -> None:

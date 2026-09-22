@@ -229,6 +229,13 @@ class UsageAlertEvent(models.Model):
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
+    delivery_attempts: models.PositiveSmallIntegerField[int, int] = (
+        models.PositiveSmallIntegerField(default=0)
+    )
+    last_attempt_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
@@ -261,3 +268,29 @@ class UsageAlertEvent(models.Model):
     @override
     def __str__(self) -> str:
         return f"{self.kind}:{self.metric}:{self.period_key}:{self.threshold_percent}"
+
+
+class UsageAlertSendBatch(models.Model):
+    # 当天已交给通知受理的合并告警批次, 供 alerts.daily_cap 按批计数。
+
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+
+    day_key: models.CharField[str, str] = models.CharField(max_length=10)
+    batch_key: models.CharField[str, str] = models.CharField(max_length=64)
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["day_key", "batch_key"],
+                name="usage_alert_send_batch_uniq",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["day_key", "batch_key"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.day_key}:{self.batch_key}"

@@ -85,17 +85,21 @@ api 还用缓存中的当日计费计数做实时日上限:
 
 - **阈值**: 每个指标对日上限、月配额分别用 `alert_thresholds_percent`(默认 50/80/100)。
   同一评估里同一 metric+scope 只投递新越过的最高档, 较低档落库为 `superseded`。
-- **用量异常**: 近 60 分钟计数 > `hourly_absolute`(若设置) **或** > `baseline_multiplier`(默认 5)
-  × 过去 7 天同一小时均值, 且 ≥ `baseline_min_calls`(默认 200)。每指标冷却 `cooldown_minutes`(默认 60)。
+- **用量异常**: 当前本地时钟小时至今的计数 > `hourly_absolute`(若设置) **或** >
+  `baseline_multiplier`(默认 5) × 过去 7 天同一时钟小时的完整小时均值, 且 ≥
+  `baseline_min_calls`(默认 200)。不按已过分钟放大或缩小。每指标冷却
+  `cooldown_minutes`(默认 60)。摘要字段 `last_hour` 使用同一口径(`queries.current_hour`)。
 - **策略变更**: api 进入非 `normal` 时写 `enforcement`, 每个 (metric, period) 最多一次。
 - **Stream**: 暂停/恢复写 `stream_paused` / `stream_resumed`。
 
 一次评估合并成 **一条** 钉钉消息, 标题「EasyAuth 用量告警」, 正文列出每条告警(指标、范围、
-已用/上限、百分比、策略效果)以及具体时间, 避免钉钉对相同正文静默去重。`dedup_key` 由排序后的
-告警身份哈希加上分钟戳决定。收件人为 `UserMirror.is_console_admin=True` 且能解析到钉钉
-userid 的用户; 发送方为 `alerts.sender_app_key`(默认 `host-ops`), 走既有
-`accept_notify_message` 管道(活动凭据 + 活动通知通道)。身份/通道未就绪或收件人为 0 时,
-事件状态 `failed`, 中文 `failure_reason`; `alerts.sender_status()` 供控制台摘要。
+已用/上限、百分比、策略效果)以及该批事件最早的 `created_at`(本地时间)。`dedup_key` 只由排序后的
+告警身份(`kind`、`metric`、`scope`、`period_key`、`threshold_percent`)哈希决定, **不含分钟**,
+因此同一批告警重试时正文与键都不变, 通知管道按幂等键命中已受理消息, 不会再写第二条钉钉消息。
+收件人为 `UserMirror.is_console_admin=True` 且能解析到钉钉 userid 的用户; 发送方为
+`alerts.sender_app_key`(默认 `host-ops`), 走既有 `accept_notify_message` 管道(活动凭据 +
+活动通知通道)。身份/通道未就绪或收件人为 0 时, 事件状态 `failed`, 中文 `failure_reason`;
+`alerts.sender_status()` 供控制台摘要。
 
 ## 防风暴保证
 
@@ -103,10 +107,30 @@ userid 的用户; 发送方为 `alerts.sender_app_key`(默认 `host-ops`), 走�
 2. 唯一约束 `(kind, metric, scope, period_key, threshold_percent)` 去重; `IntegrityError` 视为已告警。
 3. 同一次评估同一 metric+scope 只发送最高新越档, 低档 `superseded`。
 4. 异常告警每指标冷却。
-5. 全局日上限 `alerts.daily_cap`(默认 30, 按当日 `sent` 事件条数计); 超出写入 `suppressed`, 只在页面可见。
+5. 全局日上限 `alerts.daily_cap`(默认 30)按当天实际交给 `accept_notify_message` 的合并消息计,
+   不按事件行。同一批告警身份在同一本地日只占 1 次, 记在 `UsageAlertSendBatch`;
+   重试同一批不重复扣减。发送方未就绪、尚未调用受理的尝试不计入。超出上限的新事件写入
+   `suppressed`, 只在页面可见。
 6. 策略变更每个 (metric, period) 至多一次。
 7. `alerts.enabled=false` 时不发送, 事件仍落库为 `suppressed`。
-8. 发送失败的事件可在后续评估重试; 已 `sent`/`suppressed`/`superseded` 的不再投递。
+8. `failed` 事件最多投递 3 次(`delivery_attempts`), 两次尝试至少间隔 10 分钟(`last_attempt_at`)。
+   到达上限后保持 `failed` 与当时的 `failure_reason`, 不会改写成 `suppressed`。
+   已 `sent`/`suppressed`/`superseded` 的不再投递。
+
+## 告警投递上限
+
+- 评估器每次把本轮要发送的事件合并成一条消息。`alerts.daily_cap` 扣的是这条消息, 不是其中的事件行。
+- 扣减发生在调用 `accept_notify_message` 之前, 受理成功或受理失败都保留这一次计数;
+  发送方身份/通道/收件人未就绪则释放本次预占, 不计入上限。
+- `UsageAlertSendBatch.batch_key` 与通知 `dedup_key` 相同, 都是告警身份哈希, 不含评估分钟。
+  `batch_key="lock"` 的行只用于把当日计数串行化, 不代表一条消息。
+- 管理员恢复 Stream 时 `alerts.record_stream_resumed(now, period_key)` 先写入一条
+  `stream_resumed` 事件, 状态为 `failed` 且 `delivery_attempts=0`(待投递, 不是失败终态)。
+  下一次 `alerts.run` 把它并入合并消息; 只有这次发送成功才改为 `sent`。
+- Authentik 拉取/推送失败把说明写入 `UsageRuntimeState.authentik_error`, 并且只更新
+  `authentik_pulled_at`、`authentik_policy_pushed_at`、`authentik_error`。错误文本相对上次
+  有变化时记一条 warning(HTTP 404 与连接失败不带 traceback); 文本不变则不再记;
+  恢复为空时记一条 info。
 
 ## 数据流(含 Authentik)
 
@@ -129,7 +153,8 @@ flowchart LR
 1. EasyAuth 出站在 HTTP 发出前 `record_and_check`; 入站/内部 `record`, 永不拒绝。
 2. `flush_counters` 把当前小时及前两小时的缓存计数幂等写入 `UsageBucket`(只升不降)。
 3. 每分钟拉取 Authentik 桶并更新 `authentik_pulled_at` / 日计费份额缓存; 失败写入
-   `authentik_error`, 不抛出任务。
+   `authentik_error`, 不抛出任务。只更新 Authentik 自己的三列, 并在行锁内比较错误文本:
+   文本变化时记一条 warning(404 与连接失败不带 traceback), 文本不变则沉默, 恢复时记一条 info。
 4. 评估器: 读配置(30 秒缓存, 保存时失效) → 查询用量 → 计算执法状态并落库/写缓存 →
    `alerts.run` → Stream 暂停变化记事件。
 5. 随后 `push_policy` 把 `authentik_policy(state)` 推到 fork, `expires_at = now + 10min`;

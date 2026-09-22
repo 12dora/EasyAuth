@@ -204,7 +204,7 @@ def _metric_usage(metric: UsageMetric, *, day_start: datetime, day_end: datetime
     return MetricUsage(
         used_day=queries.used_today(metric),
         used_month=queries.used_this_month(metric),
-        last_hour=queries.last_60_minutes(metric),
+        last_hour=queries.current_hour(metric),
         blocked_today=blocked,
     )
 

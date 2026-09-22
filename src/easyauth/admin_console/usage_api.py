@@ -35,7 +35,7 @@ from easyauth.usage.config import (
 from easyauth.usage.config import (
     save as save_usage_config,
 )
-from easyauth.usage.enforcement import resume_stream
+from easyauth.usage.enforcement import StreamNotPausedError, resume_stream
 from easyauth.usage.models import UsageAlertEvent, UsageRuntimeState, UsageSettings
 
 if TYPE_CHECKING:
@@ -148,17 +148,24 @@ def _reject_stale_version(expected: int) -> JsonResponse | None:
 def _resume_stream(actor_id: str) -> JsonResponse:
     runtime = UsageRuntimeState.objects.filter(pk=USAGE_SINGLETON_ID).first()
     if runtime is None or not runtime.stream_paused:
-        details: dict[str, JsonValue] = {"reason": "stream_not_paused"}
-        return error_response(
-            ErrorCode.CONFLICT,
-            STREAM_NOT_PAUSED_MESSAGE,
-            details,
-            status=HTTPStatus.CONFLICT,
-        )
-    resume_stream(actor_id)
+        return _stream_not_paused_response()
+    try:
+        resume_stream(actor_id)
+    except StreamNotPausedError:
+        return _stream_not_paused_response()
     _record_stream_resumed(actor_id)
     refreshed = UsageRuntimeState.objects.filter(pk=USAGE_SINGLETON_ID).first()
     return json_response({"stream": stream_payload(refreshed)})
+
+
+def _stream_not_paused_response() -> JsonResponse:
+    details: dict[str, JsonValue] = {"reason": "stream_not_paused"}
+    return error_response(
+        ErrorCode.CONFLICT,
+        STREAM_NOT_PAUSED_MESSAGE,
+        details,
+        status=HTTPStatus.CONFLICT,
+    )
 
 
 def _superuser_get(request: HttpRequest) -> str | JsonResponse:

@@ -12,6 +12,7 @@ from django.test import Client
 
 from easyauth.audit.models import AuditLog
 from easyauth.usage.config import UsageConfig
+from easyauth.usage.enforcement import StreamNotPausedError
 from easyauth.usage.models import UsageAlertEvent, UsageRuntimeState, UsageSettings
 from tests.integration.admin_console.auth_helpers import (
     authenticate_console_admin,
@@ -111,7 +112,7 @@ def usage_backend(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         raising=False,
     )
     monkeypatch.setattr(
-        "easyauth.admin_console.usage_payloads.queries.last_60_minutes",
+        "easyauth.admin_console.usage_payloads.queries.current_hour",
         lambda metric: LAST_HOUR[str(metric)],
         raising=False,
     )
@@ -438,6 +439,27 @@ def test_usage_stream_resume_requires_superuser() -> None:
     response = client.post(RESUME_URL)
 
     assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_usage_stream_resume_conflict_when_pause_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _logged_in_superuser("usage-resume-race-admin")
+    _create_runtime(stream_paused=True, stream_paused_at=FROZEN_NOW)
+
+    def _ended(_actor_id: str) -> None:
+        raise StreamNotPausedError
+
+    monkeypatch.setattr("easyauth.admin_console.usage_api.resume_stream", _ended)
+    response = client.post(RESUME_URL)
+    payload = _json_object(response)
+    error = cast("dict[str, JsonValue]", payload["error"])
+    details = cast("dict[str, JsonValue]", error["details"])
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert error["code"] == "CONFLICT"
+    assert error["message"] == "用量 Stream 当前未暂停, 无法恢复。"
+    assert details["reason"] == "stream_not_paused"
+    assert AuditLog.objects.filter(event_type="usage_stream_resumed").count() == 0
 
 
 def _used_in_range(_metric: str, _start: datetime, _end: datetime, *, billed_only: bool) -> int:

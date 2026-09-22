@@ -1,40 +1,75 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import importlib
+import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Final, Literal, cast, override
+from typing import TYPE_CHECKING, Final, cast, override
 
 from django.core.cache import cache
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 from redis.exceptions import RedisError
 
 from easyauth.api.datetime_json import datetime_value
-from easyauth.usage.config import ApiMetricConfig, QuotaMetric, UsageConfig, load
+from easyauth.usage.config import load
+from easyauth.usage.enforcement_state import (
+    QUOTA_METRICS,
+    EnforcementState,
+    MetricEnforcement,
+    enforcement_payload,
+    parse_enforcement_state,
+    resumed_enforcement_payload,
+)
 from easyauth.usage.models import UsageRuntimeState
 from easyauth.usage.queries import day_period_key, month_period_key, used_this_month, used_today
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from easyauth.usage.config import ApiMetricConfig, QuotaMetric, UsageConfig
+    from easyauth.usage.enforcement_state import (
+        ApiPolicy,
+        EnforcementStateName,
+        LimitReason,
+        StreamTransition,
+    )
     from easyauth.usage.models import JsonValue
     from easyauth.usage.registry import UsageCategory, UsagePriority
 
-type EnforcementStateName = Literal[
-    "normal", "degraded_p2", "degraded_p1", "throttled", "blocked", "stream_paused"
-]
-type LimitReason = Literal["daily_cap", "monthly_quota"] | None
-type StreamTransition = Literal["paused", "resumed"] | None
-type ApiPolicy = Literal["alert_only", "degrade", "throttle", "block_all"]
+logger = logging.getLogger(__name__)
 
 ENFORCEMENT_CACHE_KEY: Final = "usage:enforcement"
 ENFORCEMENT_CACHE_TTL_SECONDS: Final = 300
 USAGE_RUNTIME_PK: Final = 1
 THROTTLE_TTL_SECONDS: Final = 3 * 60 * 60
 AUTHENTIK_POLICY_TTL: Final = timedelta(minutes=10)
-QUOTA_METRICS: Final[tuple[QuotaMetric, ...]] = ("api", "webhook", "stream")
-ENFORCEMENT_STATE_NAMES: Final[tuple[EnforcementStateName, ...]] = (
-    "normal", "degraded_p2", "degraded_p1", "throttled", "blocked", "stream_paused",
+STREAM_LOOKUP_WARN_INTERVAL_SECONDS: Final = 60.0
+STREAM_NOT_PAUSED_MESSAGE: Final = "Stream 当前未暂停, 不能恢复。"
+NAIVE_DATETIME_MESSAGE: Final = "evaluate 需要带时区的 datetime。"
+CACHE_INCR_FAILED_MESSAGE: Final = "用量节流计数缓存无法递增。"
+STREAM_RESUMED_CALLABLE_MESSAGE: Final = (
+    "easyauth.usage.alerts.record_stream_resumed 必须可调用。"
 )
-LIMIT_REASONS: Final[tuple[Literal["daily_cap", "monthly_quota"], ...]] = (
-    "daily_cap", "monthly_quota",
+EVALUATE_UPDATE_FIELDS: Final[tuple[str, ...]] = (
+    "enforcement",
+    "evaluated_at",
+    "stream_paused",
+    "stream_paused_at",
+    "stream_paused_period",
+)
+RESUME_UPDATE_FIELDS: Final[tuple[str, ...]] = (
+    "stream_paused",
+    "stream_paused_at",
+    "stream_paused_period",
+    "stream_manual_resume_period",
+)
+STREAM_DECISION_FIELDS: Final[tuple[str, ...]] = (
+    "enforcement",
+    "stream_paused",
+    "stream_paused_at",
+    "stream_paused_period",
+    "stream_manual_resume_period",
 )
 OVER_CAP_STATE: Final[dict[ApiPolicy, EnforcementStateName]] = {
     "alert_only": "normal",
@@ -42,15 +77,13 @@ OVER_CAP_STATE: Final[dict[ApiPolicy, EnforcementStateName]] = {
     "throttle": "throttled",
     "block_all": "blocked",
 }
-STREAM_NOT_PAUSED_MESSAGE: Final = "Stream 当前未暂停, 不能恢复。"
-NAIVE_DATETIME_MESSAGE: Final = "evaluate 需要带时区的 datetime。"
-CACHE_INCR_FAILED_MESSAGE: Final = "用量节流计数缓存无法递增。"
-ENFORCEMENT_INVALID_MESSAGE: Final = "enforcement 缓存文档非法。"
-DEFAULT_THROTTLE_P1: Final = 200
-DEFAULT_THROTTLE_P2: Final = 20
 
 _CACHE_BACKEND_ERRORS: Final = (
-    OSError, ConnectionError, TimeoutError, NotImplementedError, RedisError,
+    OSError,
+    ConnectionError,
+    TimeoutError,
+    NotImplementedError,
+    RedisError,
 )
 
 
@@ -65,29 +98,6 @@ class _CacheMeteringError(Exception):
 
 
 _THROTTLE_ERRORS: Final = (*_CACHE_BACKEND_ERRORS, _CacheMeteringError)
-
-
-@dataclass(frozen=True, slots=True)
-class MetricEnforcement:
-    metric: QuotaMetric
-    state: EnforcementStateName
-    reason: LimitReason
-    since: datetime | None
-
-
-@dataclass(frozen=True, slots=True)
-class EnforcementState:
-    metrics: dict[str, MetricEnforcement]
-    evaluated_at: datetime
-    stream_paused: bool = False
-    stream_paused_at: datetime | None = None
-    stream_paused_period: str = ""
-    stream_manual_resume_period: str = ""
-    stream_transition: StreamTransition = None
-    api_daily_cap: int | None = None
-    api_over_limit_policy: ApiPolicy = "degrade"
-    api_throttle_p1: int = DEFAULT_THROTTLE_P1
-    api_throttle_p2: int = DEFAULT_THROTTLE_P2
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,15 +118,30 @@ class _StreamPlan:
     transition: StreamTransition
 
 
+@dataclass(frozen=True, slots=True)
+class _UsageTotals:
+    day: dict[QuotaMetric, int]
+    month: dict[QuotaMetric, int]
+
+
+@dataclass(slots=True)
+class _StreamRunMemo:
+    allow: bool = True
+
+
+@dataclass(slots=True)
+class _WarnGate:
+    last_at: float = 0.0
+
+
+_STREAM_RUN_MEMO = _StreamRunMemo()
+_STREAM_WARN_GATE = _WarnGate()
+
+
 def evaluate(now: datetime) -> EnforcementState:
     if timezone.is_naive(now):
         raise ValueError(NAIVE_DATETIME_MESSAGE)
-    config = load()
-    day: dict[QuotaMetric, int] = {metric: used_today(metric) for metric in QUOTA_METRICS}
-    month: dict[QuotaMetric, int] = {metric: used_this_month(metric) for metric in QUOTA_METRICS}
-    state = _compute_state(config, day, month, now, _load_runtime())
-    _persist(state)
-    return state
+    return _commit_evaluation(load(), _usage_totals(), now)
 
 
 def decide(category: UsageCategory) -> bool:
@@ -149,29 +174,125 @@ def authentik_policy(state: EnforcementState) -> dict[str, object]:
     }
 
 
+# 监管循环不能因缓存或数据库抖动退出; 失败时沿用本进程上一次决策。
 def stream_should_run() -> bool:
-    cached = _cached_enforcement()
-    if cached is not None:
-        return not cached.stream_paused
+    try:
+        decision, cache_error = _read_stream_should_run()
+    except DatabaseError as error:
+        _warn_stream_limited(
+            "用量执行状态读取失败, 沿用本进程最近一次 Stream 决策: %s",
+            error,
+        )
+        return _STREAM_RUN_MEMO.allow
+    if cache_error is not None:
+        _warn_stream_limited("用量执行状态缓存读取失败, 改读数据库: %s", cache_error)
+    _STREAM_RUN_MEMO.allow = decision
+    return decision
+
+
+def resume_stream(actor: object) -> None:
+    _ = actor
+    now = timezone.now()
+    with transaction.atomic():
+        row = _require_paused_row()
+        period = row.stream_paused_period
+        payload = resumed_enforcement_payload(row.enforcement, period)
+        _mark_resumed(row, period)
+        _emit_stream_resumed(now, period)
+    cache.set(ENFORCEMENT_CACHE_KEY, payload, ENFORCEMENT_CACHE_TTL_SECONDS)
+
+
+def _usage_totals() -> _UsageTotals:
+    return _UsageTotals(
+        day={metric: used_today(metric) for metric in QUOTA_METRICS},
+        month={metric: used_this_month(metric) for metric in QUOTA_METRICS},
+    )
+
+
+def _commit_evaluation(
+    config: UsageConfig,
+    usage: _UsageTotals,
+    now: datetime,
+) -> EnforcementState:
+    with transaction.atomic():
+        row = _lock_runtime()
+        # 暂停判定只认锁内重新读到的手动恢复周期, 避免覆盖并发恢复。
+        row.refresh_from_db(fields=STREAM_DECISION_FIELDS)
+        state = _compute_state(config, usage.day, usage.month, now, _snapshot(row))
+        payload = _write_evaluation(row, state)
+    cache.set(ENFORCEMENT_CACHE_KEY, payload, ENFORCEMENT_CACHE_TTL_SECONDS)
+    return state
+
+
+def _lock_runtime() -> UsageRuntimeState:
+    row, _created = UsageRuntimeState.objects.select_for_update().get_or_create(
+        pk=USAGE_RUNTIME_PK,
+    )
+    return row
+
+
+def _write_evaluation(row: UsageRuntimeState, state: EnforcementState) -> dict[str, JsonValue]:
+    payload = enforcement_payload(state)
+    row.enforcement = payload
+    row.evaluated_at = state.evaluated_at
+    row.stream_paused = state.stream_paused
+    row.stream_paused_at = state.stream_paused_at
+    row.stream_paused_period = state.stream_paused_period
+    row.save(update_fields=EVALUATE_UPDATE_FIELDS)
+    return payload
+
+
+def _require_paused_row() -> UsageRuntimeState:
+    row = (
+        UsageRuntimeState.objects.select_for_update()
+        .filter(pk=USAGE_RUNTIME_PK)
+        .first()
+    )
+    if row is None or not row.stream_paused:
+        raise StreamNotPausedError(STREAM_NOT_PAUSED_MESSAGE)
+    return row
+
+
+def _mark_resumed(row: UsageRuntimeState, period: str) -> None:
+    row.stream_paused = False
+    row.stream_paused_at = None
+    row.stream_paused_period = period
+    row.stream_manual_resume_period = period
+    row.save(update_fields=RESUME_UPDATE_FIELDS)
+
+
+def _emit_stream_resumed(now: datetime, period_key: str) -> None:
+    module = importlib.import_module("easyauth.usage.alerts")
+    record_obj = cast("object", getattr(module, "record_stream_resumed", None))
+    if not callable(record_obj):
+        raise TypeError(STREAM_RESUMED_CALLABLE_MESSAGE)
+    record = cast("Callable[[datetime, str], object]", record_obj)
+    _ = record(now, period_key)
+
+
+def _read_stream_should_run() -> tuple[bool, BaseException | None]:
+    try:
+        state = _cached_enforcement()
+    except _CACHE_BACKEND_ERRORS as error:
+        return _db_stream_should_run(), error
+    if state is None:
+        return _db_stream_should_run(), None
+    return (not state.stream_paused), None
+
+
+def _db_stream_should_run() -> bool:
     row = UsageRuntimeState.objects.filter(pk=USAGE_RUNTIME_PK).first()
     if row is None:
         return True
     return not row.stream_paused
 
 
-def resume_stream(actor: object) -> None:
-    _ = actor
-    row = UsageRuntimeState.objects.filter(pk=USAGE_RUNTIME_PK).first()
-    if row is None or not row.stream_paused:
-        raise StreamNotPausedError(STREAM_NOT_PAUSED_MESSAGE)
-    period = row.stream_paused_period
-    row.stream_paused = False
-    row.stream_paused_at = None
-    row.stream_manual_resume_period = period
-    row.enforcement = _resumed_payload(cast("object", row.enforcement), period)
-    fields = ["stream_paused", "stream_paused_at", "stream_manual_resume_period", "enforcement"]
-    row.save(update_fields=fields)
-    cache.set(ENFORCEMENT_CACHE_KEY, row.enforcement, ENFORCEMENT_CACHE_TTL_SECONDS)
+def _warn_stream_limited(template: str, error: BaseException) -> None:
+    now = timezone.now().timestamp()
+    if now - _STREAM_WARN_GATE.last_at < STREAM_LOOKUP_WARN_INTERVAL_SECONDS:
+        return
+    _STREAM_WARN_GATE.last_at = now
+    logger.warning(template, error)
 
 
 def _compute_state(
@@ -319,20 +440,15 @@ def _preserved_since(
     return now
 
 
-def _persist(state: EnforcementState) -> None:
-    payload = _enforcement_payload(state)
-    row = UsageRuntimeState.objects.filter(pk=USAGE_RUNTIME_PK).first()
-    if row is None:
-        row = UsageRuntimeState(pk=USAGE_RUNTIME_PK)
-        row.authentik_error = ""
-    row.enforcement = payload
-    row.evaluated_at = state.evaluated_at
-    row.stream_paused = state.stream_paused
-    row.stream_paused_at = state.stream_paused_at
-    row.stream_paused_period = state.stream_paused_period
-    row.stream_manual_resume_period = state.stream_manual_resume_period
-    row.save()
-    cache.set(ENFORCEMENT_CACHE_KEY, payload, ENFORCEMENT_CACHE_TTL_SECONDS)
+def _snapshot(row: UsageRuntimeState) -> _RuntimeSnapshot:
+    parsed = parse_enforcement_state(row.enforcement)
+    return _RuntimeSnapshot(
+        metrics={} if parsed is None else parsed.metrics,
+        stream_paused=row.stream_paused,
+        stream_paused_at=row.stream_paused_at,
+        stream_paused_period=row.stream_paused_period,
+        stream_manual_resume_period=row.stream_manual_resume_period,
+    )
 
 
 def _decide_billed(category: UsageCategory) -> bool:
@@ -432,169 +548,4 @@ def _cache_int(key: str) -> int | None:
 
 
 def _cached_enforcement() -> EnforcementState | None:
-    return _parse_state(cast("object", cache.get(ENFORCEMENT_CACHE_KEY)))
-
-
-def _load_runtime() -> _RuntimeSnapshot:
-    row = UsageRuntimeState.objects.filter(pk=USAGE_RUNTIME_PK).first()
-    if row is None:
-        return _RuntimeSnapshot(
-            metrics={}, stream_paused=False, stream_paused_at=None,
-            stream_paused_period="", stream_manual_resume_period="",
-        )
-    parsed = _parse_state(cast("object", row.enforcement))
-    return _RuntimeSnapshot(
-        metrics={} if parsed is None else parsed.metrics,
-        stream_paused=row.stream_paused,
-        stream_paused_at=row.stream_paused_at,
-        stream_paused_period=row.stream_paused_period,
-        stream_manual_resume_period=row.stream_manual_resume_period,
-    )
-
-
-def _enforcement_payload(state: EnforcementState) -> dict[str, JsonValue]:
-    metrics: dict[str, JsonValue] = {
-        key: cast(
-            "JsonValue",
-            {
-                "metric": item.metric,
-                "state": item.state,
-                "reason": item.reason,
-                "since": datetime_value(item.since),
-            },
-        )
-        for key, item in state.metrics.items()
-    }
-    return {
-        "metrics": metrics,
-        "evaluated_at": datetime_value(state.evaluated_at),
-        "stream_paused": state.stream_paused,
-        "stream_paused_at": datetime_value(state.stream_paused_at),
-        "stream_paused_period": state.stream_paused_period,
-        "stream_manual_resume_period": state.stream_manual_resume_period,
-        "api_daily_cap": state.api_daily_cap,
-        "api_over_limit_policy": state.api_over_limit_policy,
-        "throttle_per_hour": cast("JsonValue", {
-            "p1": state.api_throttle_p1, "p2": state.api_throttle_p2,
-        }),
-    }
-
-
-def _parse_state(raw: object) -> EnforcementState | None:
-    if not isinstance(raw, dict):
-        return None
-    try:
-        return _state_from_mapping(cast("dict[object, object]", raw))
-    except (TypeError, ValueError):
-        return None
-
-
-def _state_from_mapping(raw: dict[object, object]) -> EnforcementState:
-    metrics_raw = raw.get("metrics")
-    evaluated = _parse_datetime(raw.get("evaluated_at"))
-    if not isinstance(metrics_raw, dict) or evaluated is None:
-        raise ValueError(ENFORCEMENT_INVALID_MESSAGE)
-    metrics_map = cast("dict[object, object]", metrics_raw)
-    metrics: dict[str, MetricEnforcement] = {}
-    for key, value in metrics_map.items():
-        item = _parse_metric(value)
-        if item is not None and key in QUOTA_METRICS:
-            metrics[item.metric] = item
-    paused_raw = raw.get("stream_paused_period")
-    resume_raw = raw.get("stream_manual_resume_period")
-    policy = cast(
-        "ApiPolicy | None",
-        _as_member(raw.get("api_over_limit_policy"), tuple(OVER_CAP_STATE)),
-    )
-    p1, p2 = _throttle_pair(raw.get("throttle_per_hour"))
-    return EnforcementState(
-        metrics=metrics,
-        evaluated_at=evaluated,
-        stream_paused=raw.get("stream_paused") is True,
-        stream_paused_at=_parse_datetime(raw.get("stream_paused_at")),
-        stream_paused_period=paused_raw if isinstance(paused_raw, str) else "",
-        stream_manual_resume_period=resume_raw if isinstance(resume_raw, str) else "",
-        api_daily_cap=_optional_int(raw.get("api_daily_cap"), minimum=1),
-        api_over_limit_policy="degrade" if policy is None else policy,
-        api_throttle_p1=p1,
-        api_throttle_p2=p2,
-    )
-
-
-def _parse_metric(raw: object) -> MetricEnforcement | None:
-    if not isinstance(raw, dict):
-        return None
-    mapping = cast("dict[object, object]", raw)
-    metric = cast("QuotaMetric | None", _as_member(mapping.get("metric"), QUOTA_METRICS))
-    state = cast(
-        "EnforcementStateName | None",
-        _as_member(mapping.get("state"), ENFORCEMENT_STATE_NAMES),
-    )
-    if metric is None or state is None:
-        return None
-    return MetricEnforcement(
-        metric=metric,
-        state=state,
-        reason=_as_member(mapping.get("reason"), LIMIT_REASONS),
-        since=_parse_datetime(mapping.get("since")),
-    )
-
-
-def _as_member[T](value: object, options: tuple[T, ...]) -> T | None:
-    for name in options:
-        if value == name:
-            return name
-    return None
-
-
-def _throttle_pair(raw: object) -> tuple[int, int]:
-    if raw is None:
-        return DEFAULT_THROTTLE_P1, DEFAULT_THROTTLE_P2
-    mapping = cast("dict[object, object]", raw) if isinstance(raw, dict) else {}
-    p1 = _optional_int(mapping.get("p1"), minimum=0)
-    p2 = _optional_int(mapping.get("p2"), minimum=0)
-    if p1 is None or p2 is None:
-        raise ValueError(ENFORCEMENT_INVALID_MESSAGE)
-    return p1, p2
-
-
-def _optional_int(value: object, *, minimum: int) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise ValueError(ENFORCEMENT_INVALID_MESSAGE)
-    return value
-
-
-def _parse_datetime(value: object) -> datetime | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, datetime):
-        if timezone.is_naive(value):
-            return timezone.make_aware(value, timezone.get_current_timezone())
-        return value
-    if not isinstance(value, str):
-        return None
-    parsed = datetime.fromisoformat(value)
-    if timezone.is_naive(parsed):
-        return timezone.make_aware(parsed, timezone.get_current_timezone())
-    return parsed
-
-
-def _resumed_payload(raw: object, period: str) -> dict[str, JsonValue]:
-    now = timezone.now()
-    state = _parse_state(raw)
-    metrics = {} if state is None else dict(state.metrics)
-    metrics["stream"] = _metric("stream", "normal", None, now, metrics.get("stream"))
-    base = EnforcementState(metrics=metrics, evaluated_at=now) if state is None else state
-    return _enforcement_payload(
-        replace(
-            base,
-            metrics=metrics,
-            stream_paused=False,
-            stream_paused_at=None,
-            stream_paused_period=period,
-            stream_manual_resume_period=period,
-            stream_transition=None,
-        ),
-    )
+    return parse_enforcement_state(cast("object", cache.get(ENFORCEMENT_CACHE_KEY)))

@@ -30,6 +30,7 @@ from easyauth.config.net import (
     HttpResponseReadError,
     read_urlopen_body_bounded,
 )
+from easyauth.usage.recorder import record as record_usage
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -58,6 +59,7 @@ LOCAL_HTTP_OIDC_HOSTS: Final[frozenset[str]] = frozenset({"host.docker.internal"
 OIDC_TOKEN_RESPONSE_MAX_BYTES: Final = 64 * 1024
 OIDC_JWKS_RESPONSE_MAX_BYTES: Final = 256 * 1024
 DEFAULT_JWKS_CACHE_TTL_SECONDS: Final = 300
+INTERNAL_AUTHENTIK_OTHER: Final = "internal_authentik_other"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +133,7 @@ def _request_json(
     timeout_seconds: float,
     max_response_bytes: int,
 ) -> JsonObject:
+    record_usage(INTERNAL_AUTHENTIK_OTHER)
     started_at = time.monotonic()
     try:
         response_context = cast(

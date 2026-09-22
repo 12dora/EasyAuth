@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from datetime import datetime
-from typing import cast
+from types import SimpleNamespace
+from typing import Final, cast
 from zoneinfo import ZoneInfo
 
 import pytest
 from django.core.cache import cache
+from django.db import OperationalError
 from django.utils import timezone
+from redis.exceptions import RedisError
 
 from easyauth.usage.config import DEFAULT_USAGE_DOCUMENT, UsageConfig, save
 from easyauth.usage.enforcement import (
@@ -369,3 +373,226 @@ def test_stream_should_run_falls_back_to_db() -> None:
     cache.delete(ENFORCEMENT_CACHE_KEY)
     UsageRuntimeState.objects.filter(pk=1).update(stream_paused=False)
     assert stream_should_run() is True
+
+
+_EVALUATE_FIELDS: Final[tuple[str, ...]] = (
+    "enforcement",
+    "evaluated_at",
+    "stream_paused",
+    "stream_paused_at",
+    "stream_paused_period",
+)
+_RESUME_FIELDS: Final[tuple[str, ...]] = (
+    "stream_paused",
+    "stream_paused_at",
+    "stream_paused_period",
+    "stream_manual_resume_period",
+)
+
+
+@pytest.fixture(autouse=True)
+def stub_record_stream_resumed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "easyauth.usage.alerts.record_stream_resumed",
+        lambda _now, _period: None,
+        raising=False,
+    )
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if record.levelno == logging.WARNING]
+
+
+def _install_stream_memory(monkeypatch: pytest.MonkeyPatch, *, allow: bool) -> None:
+    monkeypatch.setattr(
+        "easyauth.usage.enforcement._STREAM_RUN_MEMO",
+        SimpleNamespace(allow=allow),
+    )
+    monkeypatch.setattr(
+        "easyauth.usage.enforcement._STREAM_WARN_GATE",
+        SimpleNamespace(last_at=0.0),
+    )
+
+
+def _raise_redis(*_args: object, **_kwargs: object) -> object:
+    message = "redis down"
+    raise RedisError(message)
+
+
+def _break_runtime_queries(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _BrokenQuery:
+        def filter(self, *_args: object, **_kwargs: object) -> _BrokenQuery:
+            message = "db down"
+            raise OperationalError(message)
+
+    monkeypatch.setattr(UsageRuntimeState, "objects", _BrokenQuery())
+
+
+@pytest.mark.django_db
+def test_stream_should_run_on_redis_error_reads_database(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _install_stream_memory(monkeypatch, allow=True)
+    _ = UsageRuntimeState.objects.create(
+        pk=1,
+        stream_paused=True,
+        stream_paused_period="2026-09-21",
+    )
+    monkeypatch.setattr("easyauth.usage.enforcement.cache.get", _raise_redis)
+    with caplog.at_level("WARNING", logger="easyauth.usage.enforcement"):
+        assert stream_should_run() is False
+        _break_runtime_queries(monkeypatch)
+        assert stream_should_run() is False
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert "缓存" in warnings[0].message
+
+
+@pytest.mark.django_db
+def test_stream_should_run_defaults_to_last_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _install_stream_memory(monkeypatch, allow=True)
+    monkeypatch.setattr("easyauth.usage.enforcement.cache.get", _raise_redis)
+    _break_runtime_queries(monkeypatch)
+    with caplog.at_level("WARNING", logger="easyauth.usage.enforcement"):
+        assert stream_should_run() is True
+        assert stream_should_run() is True
+        monkeypatch.setattr(
+            "easyauth.usage.enforcement._STREAM_RUN_MEMO",
+            SimpleNamespace(allow=False),
+        )
+        assert stream_should_run() is False
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert "沿用" in warnings[0].message
+
+
+@pytest.mark.django_db
+def test_evaluate_save_does_not_clobber_unowned_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save(_config(), updated_by="t")
+    _patch_usage(monkeypatch)
+    _ = UsageRuntimeState.objects.create(
+        pk=1,
+        authentik_error="before",
+        authentik_pulled_at=NOW,
+        stream_manual_resume_period="seed",
+    )
+    seen: list[object] = []
+    real_save = UsageRuntimeState.save
+
+    def save_spy(self: UsageRuntimeState, *args: object, **kwargs: object) -> None:
+        seen.append(kwargs.get("update_fields"))
+        _ = UsageRuntimeState.objects.filter(pk=self.pk).update(
+            authentik_error="concurrent-404",
+            stream_manual_resume_period="2026-09-21",
+        )
+        real_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(UsageRuntimeState, "save", save_spy)
+    _ = evaluate(NOW)
+    row = UsageRuntimeState.objects.get(pk=1)
+    assert seen == [_EVALUATE_FIELDS]
+    assert row.authentik_error == "concurrent-404"
+    assert row.stream_manual_resume_period == "2026-09-21"
+    assert row.authentik_pulled_at == NOW
+    assert row.evaluated_at == NOW
+
+
+@pytest.mark.django_db
+def test_evaluate_rereads_manual_resume_under_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save(_config(stream={"daily_cap": 10, "over_limit_policy": "pause_stream"}), updated_by="t")
+    _patch_usage(monkeypatch, day={"stream": 10})
+    _ = UsageRuntimeState.objects.create(
+        pk=1,
+        authentik_error="404",
+        stream_manual_resume_period="",
+    )
+    real_refresh = UsageRuntimeState.refresh_from_db
+
+    def refresh_spy(self: UsageRuntimeState, *args: object, **kwargs: object) -> None:
+        _ = UsageRuntimeState.objects.filter(pk=self.pk).update(
+            stream_manual_resume_period="2026-09-21",
+        )
+        real_refresh(self, *args, **kwargs)
+
+    monkeypatch.setattr(UsageRuntimeState, "refresh_from_db", refresh_spy)
+    state = evaluate(NOW)
+    row = UsageRuntimeState.objects.get(pk=1)
+    assert state.stream_paused is False
+    assert state.stream_manual_resume_period == "2026-09-21"
+    assert row.stream_paused is False
+    assert row.stream_manual_resume_period == "2026-09-21"
+    assert row.authentik_error == "404"
+
+
+@pytest.mark.django_db
+def test_resume_stream_locks_owned_columns_and_records_alert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def record(_now: object, period_key: object) -> None:
+        assert isinstance(period_key, str)
+        calls.append(period_key)
+
+    monkeypatch.setattr("easyauth.usage.alerts.record_stream_resumed", record, raising=False)
+    _ = UsageRuntimeState.objects.create(
+        pk=1,
+        enforcement={"marker": True},
+        stream_paused=True,
+        stream_paused_at=NOW,
+        stream_paused_period="2026-09-21",
+        authentik_error="404",
+    )
+    cache.set(ENFORCEMENT_CACHE_KEY, {"stream_paused": True}, 60)
+    seen: list[object] = []
+    real_save = UsageRuntimeState.save
+
+    def save_spy(self: UsageRuntimeState, *args: object, **kwargs: object) -> None:
+        seen.append(kwargs.get("update_fields"))
+        real_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(UsageRuntimeState, "save", save_spy)
+    resume_stream("admin-1")
+    row = UsageRuntimeState.objects.get(pk=1)
+    payload = cache.get(ENFORCEMENT_CACHE_KEY)
+    assert isinstance(payload, dict)
+    assert seen == [_RESUME_FIELDS]
+    assert row.stream_paused is False
+    assert row.stream_manual_resume_period == "2026-09-21"
+    assert row.authentik_error == "404"
+    assert row.enforcement == {"marker": True}
+    assert payload["stream_paused"] is False
+    assert calls == ["2026-09-21"]
+    assert stream_should_run() is True
+
+
+@pytest.mark.django_db
+def test_resume_stream_rolls_back_when_alert_record_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def record(_now: object, _period: object) -> None:
+        message = "alert write failed"
+        raise RuntimeError(message)
+
+    monkeypatch.setattr("easyauth.usage.alerts.record_stream_resumed", record, raising=False)
+    _ = UsageRuntimeState.objects.create(
+        pk=1,
+        stream_paused=True,
+        stream_paused_period="2026-09-21",
+        authentik_error="404",
+    )
+    cache.delete(ENFORCEMENT_CACHE_KEY)
+    with pytest.raises(RuntimeError, match="alert write failed"):
+        resume_stream("admin-1")
+    row = UsageRuntimeState.objects.get(pk=1)
+    assert row.stream_paused is True
+    assert row.stream_manual_resume_period == ""
+    assert stream_should_run() is False

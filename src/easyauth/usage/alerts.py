@@ -7,13 +7,18 @@ from typing import TYPE_CHECKING, Final, Literal
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from easyauth.usage.alert_delivery import send_merged_alert, sender_status
-from easyauth.usage.enforcement import QUOTA_METRICS, EnforcementState
-from easyauth.usage.models import UsageAlertEvent
+from easyauth.usage.alert_delivery import (
+    batch_key_for_events,
+    batch_key_for_parts,
+    send_merged_alert,
+    sender_status,
+)
+from easyauth.usage.enforcement_state import QUOTA_METRICS, EnforcementState
+from easyauth.usage.models import UsageAlertEvent, UsageAlertSendBatch
 from easyauth.usage.queries import (
     baseline_same_hour_avg,
+    current_hour,
     day_period_key,
-    last_60_minutes,
     month_period_key,
     used_this_month,
     used_today,
@@ -35,6 +40,7 @@ __all__ = [
     "STATUS_SUPERSEDED",
     "STATUS_SUPPRESSED",
     "AlertRunResult",
+    "record_stream_resumed",
     "run",
     "sender_status",
 ]
@@ -49,6 +55,12 @@ STATUS_SUPPRESSED: Final = "suppressed"
 STATUS_SUPERSEDED: Final = "superseded"
 STATUS_FAILED: Final = "failed"
 ANOMALY_BASELINE_DAYS: Final = 7
+MAX_DELIVERY_ATTEMPTS: Final = 3
+ORPHAN_RETRY_LIMIT: Final = 20
+MIN_RETRY_GAP: Final = timedelta(minutes=10)
+LOCK_BATCH_KEY: Final = "lock"
+EMPTY_PERIOD_MESSAGE: Final = "Stream 恢复周期不能为空。"
+NAIVE_RESUME_MESSAGE: Final = "Stream 恢复时刻必须是带时区的 datetime。"
 MONTH_PERIOD_KEY_LENGTH: Final = 7
 METRIC_LABEL_ZH: Final[dict[str, str]] = {
     "api": "钉钉出站 API",
@@ -94,6 +106,22 @@ class _Draft:
     role: _DraftRole
 
 
+@dataclass(slots=True)
+class _Buckets:
+    fresh: list[_Draft]
+    retries: list[UsageAlertEvent]
+    suppressed: list[_Draft]
+    superseded: list[_Draft]
+
+
+@dataclass(frozen=True, slots=True)
+class _Classified:
+    fresh: tuple[_Draft, ...]
+    retries: tuple[UsageAlertEvent, ...]
+    suppressed: tuple[_Draft, ...]
+    superseded: tuple[_Draft, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class _ThresholdScope:
     metric: QuotaMetric
@@ -105,16 +133,30 @@ class _ThresholdScope:
 
 def run(now: datetime, config: UsageConfig, state: EnforcementState) -> AlertRunResult:
     ctx = _AlertContext(now=now, config=config, state=state)
-    drafts = _collect_drafts(ctx)
-    claimed = _claim_drafts(ctx, drafts)
-    sendable = tuple(event for event in claimed if event.status == STATUS_SENT)
-    if not sendable:
-        return AlertRunResult(created=len(claimed), sent=0, delivered=False)
-    failure = send_merged_alert(sendable, now, config)
-    if failure is None:
-        return AlertRunResult(created=len(claimed), sent=len(sendable), delivered=True)
-    _mark_failed(sendable, failure)
-    return AlertRunResult(created=len(claimed), sent=0, delivered=False)
+    grouped = _classify(ctx, _collect_drafts(ctx))
+    if not grouped.fresh and not grouped.retries:
+        parked = _store_terminal(grouped)
+        return AlertRunResult(created=len(parked), sent=0, delivered=False)
+    if not _cap_open(ctx, grouped):
+        return _store_blocked(grouped)
+    return _deliver(ctx, grouped)
+
+
+def record_stream_resumed(now: datetime, period_key: str) -> None:
+    # 无独立 pending 状态: failed 且 delivery_attempts=0 表示待下次评估合并发送。
+    if timezone.is_naive(now):
+        raise ValueError(NAIVE_RESUME_MESSAGE)
+    if period_key == "":
+        raise ValueError(EMPTY_PERIOD_MESSAGE)
+    draft = _stream_draft(
+        ALERT_KIND_STREAM_RESUMED,
+        "Stream 已恢复",
+        period_key,
+        _scope_for_period(period_key),
+    )
+    if _existing_event(draft) is not None:
+        return
+    _ = _insert_event(draft, STATUS_FAILED)
 
 
 def _collect_drafts(ctx: _AlertContext) -> list[_Draft]:
@@ -201,7 +243,7 @@ def _anomaly_drafts(ctx: _AlertContext) -> list[_Draft]:
 
 def _anomaly_for_metric(ctx: _AlertContext, metric: QuotaMetric) -> _Draft | None:
     anomaly = ctx.config.quota_for(metric).anomaly
-    count = last_60_minutes(metric)
+    count = current_hour(metric)
     if not anomaly.enabled or count < anomaly.baseline_min_calls:
         return None
     if not _anomaly_triggered(anomaly, count, metric):
@@ -210,10 +252,9 @@ def _anomaly_for_metric(ctx: _AlertContext, metric: QuotaMetric) -> _Draft | Non
         return None
     baseline = baseline_same_hour_avg(metric, days=ANOMALY_BASELINE_DAYS)
     period = timezone.localtime(ctx.now).strftime("%Y-%m-%dT%H")
-    detail = (
-        f"{METRIC_LABEL_ZH[metric]} 近 60 分钟 {count} 次, "
-         f"基线(7 日同时段均) {baseline:.1f} 次, 阈值倍数 {anomaly.baseline_multiplier}"
-    )
+    observed = f"{METRIC_LABEL_ZH[metric]} 本小时 {count} 次"
+    compared = f"基线(7 日同时段均) {baseline:.1f} 次, 阈值倍数 {anomaly.baseline_multiplier}"
+    detail = f"{observed}, {compared}"
     return _Draft(
         kind=ALERT_KIND_ANOMALY,
         metric=metric,
@@ -300,39 +341,128 @@ def _stream_draft(
     )
 
 
-def _claim_drafts(ctx: _AlertContext, drafts: list[_Draft]) -> list[UsageAlertEvent]:
-    remaining = _remaining_budget(ctx)
-    claimed: list[UsageAlertEvent] = []
+def _classify(ctx: _AlertContext, drafts: list[_Draft]) -> _Classified:
+    buckets = _Buckets(fresh=[], retries=[], suppressed=[], superseded=[])
     for draft in drafts:
-        status = _status_for_draft(ctx, draft, remaining)
-        event = _claim_one(draft, status)
-        if event is None:
-            continue
-        claimed.append(event)
-        if event.status == STATUS_SENT:
-            remaining = max(0, remaining - 1)
-    return claimed
+        _place_draft(ctx, draft, buckets)
+    buckets.retries.extend(_orphan_retries(ctx, buckets.retries))
+    return _Classified(
+        tuple(buckets.fresh),
+        tuple(buckets.retries),
+        tuple(buckets.suppressed),
+        tuple(buckets.superseded),
+    )
 
 
-def _status_for_draft(ctx: _AlertContext, draft: _Draft, remaining: int) -> str:
-    if draft.role == "supersede":
-        return STATUS_SUPERSEDED
-    if not ctx.config.alerts.enabled or remaining <= 0:
-        return STATUS_SUPPRESSED
-    return STATUS_SENT
-
-
-def _remaining_budget(ctx: _AlertContext) -> int:
-    start = timezone.localtime(ctx.now).replace(hour=0, minute=0, second=0, microsecond=0)
-    sent = UsageAlertEvent.objects.filter(status=STATUS_SENT, created_at__gte=start).count()
-    return max(0, ctx.config.alerts.daily_cap - sent)
-
-
-def _claim_one(draft: _Draft, status: str) -> UsageAlertEvent | None:
+def _place_draft(ctx: _AlertContext, draft: _Draft, buckets: _Buckets) -> None:
     existing = _existing_event(draft)
     if existing is not None:
-        return _reuse_failed(existing, status)
-    return _insert_event(draft, status)
+        if ctx.config.alerts.enabled and _retryable(existing, ctx.now):
+            buckets.retries.append(existing)
+        return
+    if draft.role == "supersede":
+        buckets.superseded.append(draft)
+        return
+    if not ctx.config.alerts.enabled:
+        buckets.suppressed.append(draft)
+        return
+    buckets.fresh.append(draft)
+
+
+def _orphan_retries(
+    ctx: _AlertContext,
+    matched: list[UsageAlertEvent],
+) -> list[UsageAlertEvent]:
+    # 待重试事件未必会在本轮再次生成草稿(条件已解除、或手动恢复 Stream 记下的事件),
+    # 也要并入本轮合并发送; 数量有上限, 次数上限与间隔由 _retryable 约束。
+    if not ctx.config.alerts.enabled:
+        return []
+    seen = {event.id for event in matched}
+    rows = UsageAlertEvent.objects.filter(
+        status=STATUS_FAILED,
+        delivery_attempts__lt=MAX_DELIVERY_ATTEMPTS,
+    ).order_by("created_at")[:ORPHAN_RETRY_LIMIT]
+    return [row for row in rows if row.id not in seen and _retryable(row, ctx.now)]
+
+
+def _retryable(event: UsageAlertEvent, now: datetime) -> bool:
+    if event.status != STATUS_FAILED:
+        return False
+    if event.delivery_attempts >= MAX_DELIVERY_ATTEMPTS:
+        return False
+    last = event.last_attempt_at
+    if last is None:
+        return True
+    return now - last >= MIN_RETRY_GAP
+
+
+def _store_terminal(grouped: _Classified) -> tuple[UsageAlertEvent, ...]:
+    superseded = _insert_drafts(grouped.superseded, STATUS_SUPERSEDED)
+    suppressed = _insert_drafts(grouped.suppressed, STATUS_SUPPRESSED)
+    return superseded + suppressed
+
+
+def _store_blocked(grouped: _Classified) -> AlertRunResult:
+    parked = _store_terminal(grouped)
+    blocked = _insert_drafts(grouped.fresh, STATUS_SUPPRESSED)
+    created = len(parked) + len(blocked)
+    return AlertRunResult(created=created, sent=0, delivered=False)
+
+
+def _deliver(ctx: _AlertContext, grouped: _Classified) -> AlertRunResult:
+    parked = _store_terminal(grouped)
+    created = _insert_drafts(grouped.fresh, STATUS_SENT)
+    sendable = grouped.retries + created
+    if not sendable:
+        return AlertRunResult(created=len(parked), sent=0, delivered=False)
+    return _send_events(ctx, sendable, created_count=len(parked) + len(created))
+
+
+def _send_events(
+    ctx: _AlertContext,
+    events: tuple[UsageAlertEvent, ...],
+    *,
+    created_count: int,
+) -> AlertRunResult:
+    day_key = _day_key(ctx.now)
+    batch_key = batch_key_for_events(events)
+    reservation = _reserve_send_batch(day_key, batch_key, ctx.config.alerts.daily_cap)
+    if reservation == "blocked":
+        _suppress_unattempted(events)
+        return AlertRunResult(created=created_count, sent=0, delivered=False)
+    outcome = send_merged_alert(events, ctx.config)
+    if not outcome.handed_off and reservation == "created":
+        _release_send_batch(day_key, batch_key)
+    _finish_delivery(events, ctx.now, outcome.failure_reason)
+    delivered = outcome.handed_off and outcome.failure_reason is None
+    sent = len(events) if delivered else 0
+    return AlertRunResult(created=created_count, sent=sent, delivered=delivered)
+
+
+def _cap_open(ctx: _AlertContext, grouped: _Classified) -> bool:
+    parts = tuple(_draft_part(draft) for draft in grouped.fresh)
+    parts += tuple(_event_part(event) for event in grouped.retries)
+    batch_key = batch_key_for_parts(parts)
+    return _send_batch_allowed(_day_key(ctx.now), batch_key, ctx.config.alerts.daily_cap)
+
+
+def _draft_part(draft: _Draft) -> str:
+    threshold = draft.threshold_percent
+    return f"{draft.kind}:{draft.metric}:{draft.scope}:{draft.period_key}:{threshold}"
+
+
+def _event_part(event: UsageAlertEvent) -> str:
+    threshold = event.threshold_percent
+    return f"{event.kind}:{event.metric}:{event.scope}:{event.period_key}:{threshold}"
+
+
+def _insert_drafts(drafts: tuple[_Draft, ...], status: str) -> tuple[UsageAlertEvent, ...]:
+    created: list[UsageAlertEvent] = []
+    for draft in drafts:
+        event = _insert_event(draft, status)
+        if event is not None:
+            created.append(event)
+    return tuple(created)
 
 
 def _existing_event(draft: _Draft) -> UsageAlertEvent | None:
@@ -343,15 +473,6 @@ def _existing_event(draft: _Draft) -> UsageAlertEvent | None:
         period_key=draft.period_key,
         threshold_percent=draft.threshold_percent,
     ).first()
-
-
-def _reuse_failed(existing: UsageAlertEvent, status: str) -> UsageAlertEvent | None:
-    if existing.status != STATUS_FAILED:
-        return None
-    existing.status = status
-    existing.failure_reason = ""
-    existing.save(update_fields=["status", "failure_reason"])
-    return existing
 
 
 def _insert_event(draft: _Draft, status: str) -> UsageAlertEvent | None:
@@ -367,16 +488,87 @@ def _insert_event(draft: _Draft, status: str) -> UsageAlertEvent | None:
                 title=draft.title,
                 detail=draft.detail,
                 failure_reason="",
+                delivery_attempts=0,
+                last_attempt_at=None,
             )
     except IntegrityError:
         return None
 
 
-def _mark_failed(events: tuple[UsageAlertEvent, ...], reason: str) -> None:
+def _suppress_unattempted(events: tuple[UsageAlertEvent, ...]) -> None:
     for event in events:
-        event.status = STATUS_FAILED
+        if event.status != STATUS_SENT:
+            continue
+        event.status = STATUS_SUPPRESSED
+        event.save(update_fields=["status"])
+
+
+def _finish_delivery(
+    events: tuple[UsageAlertEvent, ...],
+    now: datetime,
+    failure: str | None,
+) -> None:
+    status = STATUS_FAILED if failure else STATUS_SENT
+    reason = "" if failure is None else failure
+    for event in events:
+        event.status = status
         event.failure_reason = reason
-        event.save(update_fields=["status", "failure_reason"])
+        event.delivery_attempts = event.delivery_attempts + 1
+        event.last_attempt_at = now
+        event.save(
+            update_fields=[
+                "status",
+                "failure_reason",
+                "delivery_attempts",
+                "last_attempt_at",
+            ],
+        )
+
+
+def _reserve_send_batch(
+    day_key: str,
+    batch_key: str,
+    cap: int,
+) -> Literal["created", "kept", "blocked"]:
+    with transaction.atomic():
+        _lock_send_day(day_key)
+        if _batch_exists(day_key, batch_key):
+            return "kept"
+        if _charged_batch_count(day_key) >= cap:
+            return "blocked"
+        _ = UsageAlertSendBatch.objects.create(day_key=day_key, batch_key=batch_key)
+        return "created"
+
+
+def _release_send_batch(day_key: str, batch_key: str) -> None:
+    _ = UsageAlertSendBatch.objects.filter(day_key=day_key, batch_key=batch_key).delete()
+
+
+def _send_batch_allowed(day_key: str, batch_key: str, cap: int) -> bool:
+    if _batch_exists(day_key, batch_key):
+        return True
+    return _charged_batch_count(day_key) < cap
+
+
+def _lock_send_day(day_key: str) -> None:
+    # batch_key=lock 只串行化当日计数, 不代表一条已发送的合并消息。
+    _ = UsageAlertSendBatch.objects.select_for_update().get_or_create(
+        day_key=day_key,
+        batch_key=LOCK_BATCH_KEY,
+    )
+
+
+def _batch_exists(day_key: str, batch_key: str) -> bool:
+    return UsageAlertSendBatch.objects.filter(day_key=day_key, batch_key=batch_key).exists()
+
+
+def _charged_batch_count(day_key: str) -> int:
+    rows = UsageAlertSendBatch.objects.filter(day_key=day_key).exclude(batch_key=LOCK_BATCH_KEY)
+    return rows.count()
+
+
+def _day_key(now: datetime) -> str:
+    return timezone.localtime(now).date().isoformat()
 
 
 def _policy_effect(ctx: _AlertContext, metric: QuotaMetric) -> str:

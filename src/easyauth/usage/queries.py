@@ -79,10 +79,15 @@ def used_this_month(metric: UsageMetric) -> int:
     return used_in_range(metric, start, end, billed_only=metric == "api")
 
 
-def last_60_minutes(metric: UsageMetric) -> int:
-    end = timezone.now()
-    start = end - timedelta(minutes=60)
-    return used_in_range(metric, start, end, billed_only=False)
+def current_hour(metric: UsageMetric) -> int:
+    now_local = timezone.localtime(timezone.now())
+    hour_start = now_local.replace(minute=0, second=0, microsecond=0)
+    return used_in_range(
+        metric,
+        hour_start,
+        hour_start + timedelta(hours=1),
+        billed_only=False,
+    )
 
 
 def baseline_same_hour_avg(metric: UsageMetric, *, days: int = 7) -> float:

@@ -10,8 +10,8 @@ from easyauth.usage.models import UsageBucket
 from easyauth.usage.queries import (
     baseline_same_hour_avg,
     breakdown,
+    current_hour,
     day_period_key,
-    last_60_minutes,
     month_period_key,
     timeseries,
     used_in_range,
@@ -92,14 +92,14 @@ def test_today_and_month_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @override_settings(TIME_ZONE=SHANGHAI)
-def test_last_60_minutes_includes_overlapping_hours(
+def test_current_hour_excludes_previous_clock_hour(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _freeze(monkeypatch, _utc(2026, 9, 21, 6, 30))
     _write_bucket(_utc(2026, 9, 21, 5), "notify_send", 5)
     _write_bucket(_utc(2026, 9, 21, 6), "notify_send", 7)
     _write_bucket(_utc(2026, 9, 21, 4), "notify_send", 100)
-    assert last_60_minutes("api") == 12
+    assert current_hour("api") == 7
 
 
 @override_settings(TIME_ZONE=SHANGHAI)

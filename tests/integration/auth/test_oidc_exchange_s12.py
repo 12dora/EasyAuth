@@ -25,6 +25,7 @@ from easyauth.accounts.auth import (
     OidcSessionError,
 )
 from easyauth.accounts.oidc_exchange import exchange_authorization_code_for_claims
+from easyauth.usage.recorder import current_hour_counts
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -131,6 +132,17 @@ def test_exchange_rejects_oversized_token_response(
             _oidc_config(),
         )
     assert error.value.field == "code_exchange"
+
+
+def test_exchange_counts_token_and_jwks_as_internal_authentik_other(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    id_token = _signed_id_token(private_key, nonce=OIDC_NONCE)
+    jwk = _public_jwk(private_key.public_key())
+    _patch_authentik_http(monkeypatch, id_token=id_token, jwk=jwk, captured_form={})
+    _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+    assert current_hour_counts()["internal_authentik_other"] == (2, 0)
 
 
 def test_exchange_normalizes_body_read_timeout(
