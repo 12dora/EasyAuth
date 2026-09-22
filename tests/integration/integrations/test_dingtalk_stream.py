@@ -14,6 +14,13 @@ from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
 from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
+from easyauth.integrations.authentik.directory_refresh import (
+    DIRECTORY_REFRESH_MAX_RETRIES,
+    REFRESH_MARKER_TTL_SECONDS,
+    REFRESH_RETRY_BUDGET_SECONDS,
+    REFRESH_WAIT_TIMEOUT_SECONDS,
+    DirectoryRefreshHooks,
+)
 from easyauth.integrations.authentik.directory_sync_types import AuthentikDirectorySyncResult
 from easyauth.integrations.dingtalk import stream as stream_module
 from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
@@ -35,11 +42,6 @@ from easyauth.outbox.models import OutboxEvent
 from easyauth.tasks import dingtalk_stream as tasks_module
 from easyauth.tasks.dingtalk_stream import (
     DIRECTORY_REFRESH_TASK_NAME,
-    REFRESH_COALESCE_SECONDS,
-    REFRESH_MAX_CONSECUTIVE_REQUEUES,
-    REFRESH_MIN_INTERVAL_SECONDS,
-    REFRESH_USER_IDS_CACHE_KEY_TEMPLATE,
-    REFRESH_USER_IDS_MAX,
     SKIP_REASON_INSTANCE_NOT_FOUND,
     SKIP_REASON_INSTANCE_STARTED,
     SKIP_REASON_RECORDED_NO_CONSUMER,
@@ -48,6 +50,20 @@ from easyauth.tasks.dingtalk_stream import (
     process_dingtalk_stream_event_task,
     refresh_dingtalk_directory_task,
     request_directory_refresh,
+)
+from easyauth.tasks.dingtalk_stream_markers import (
+    REFRESH_APPLY_BUDGET_SECONDS,
+    REFRESH_COALESCE_SECONDS,
+    REFRESH_MAX_CONSECUTIVE_REQUEUES,
+    REFRESH_MIN_INTERVAL_SECONDS,
+    REFRESH_RUNNING_CACHE_KEY_TEMPLATE,
+    REFRESH_RUNNING_LOCK_TTL_SECONDS,
+    REFRESH_TASK_SOFT_TIME_LIMIT_SECONDS,
+    REFRESH_TASK_TIME_LIMIT_SECONDS,
+    REFRESH_USER_IDS_CACHE_KEY_TEMPLATE,
+    REFRESH_USER_IDS_MAX,
+    acquire_running_lock,
+    extend_running_lock,
 )
 from easyauth.workflows.models import (
     APPROVAL_STATUS_APPROVED,
@@ -68,6 +84,7 @@ pytestmark = pytest.mark.django_db
 @dataclass(slots=True)
 class _SendTaskRecorder:
     calls: list[tuple[str, tuple[object, ...], float | None]] = field(default_factory=list)
+    task_kwargs: list[dict[str, object]] = field(default_factory=list)
 
     def send_task(
         self,
@@ -76,8 +93,8 @@ class _SendTaskRecorder:
         kwargs: dict[str, object] | None = None,
         countdown: float | None = None,
     ) -> object:
-        _ = kwargs
         self.calls.append((name, tuple(args or ()), countdown))
+        self.task_kwargs.append(dict(kwargs or {}))
         return object()
 
     def enqueue_task(
@@ -89,8 +106,9 @@ class _SendTaskRecorder:
         kwargs: dict[str, object] | None = None,
         countdown: float = 0,
     ) -> object:
-        _ = (event_key, kwargs)
+        _ = event_key
         self.calls.append((task_name, tuple(args), countdown or None))
+        self.task_kwargs.append(dict(kwargs or {}))
         return object()
 
 
@@ -428,12 +446,14 @@ def test_event_during_cooldown_schedules_one_trailing_with_merged_ids(
     ]
 
 
-def test_queued_false_keeps_ids_pending_and_caps_trailing_reschedules(
+def test_queued_false_keeps_ids_and_enqueues_one_delayed_followup(
     sent_tasks: _SendTaskRecorder,
     refresh_recorder: _RefreshRecorder,
     caplog: pytest.LogCaptureFixture,
     django_capture_on_commit_callbacks: DjangoCaptureOnCommitCallbacks,
 ) -> None:
+    # 旧行为是触顶后只打日志并停住, id 会随 600 秒 TTL 消失。
+    # 现在仍停掉忙等, 但恰好再排一次延迟补刷新, 倒计时等于整段重试预算。
     refresh_recorder.queued = False
     event = _stored_event("evt-nq-1", "user_add_org", data={"userId": ["u-hold"]})
     _ = _process(event, django_capture_on_commit_callbacks)
@@ -446,12 +466,19 @@ def test_queued_false_keeps_ids_pending_and_caps_trailing_reschedules(
 
     with caplog.at_level("ERROR", logger="easyauth.tasks.dingtalk_stream"):
         _ = refresh_dingtalk_directory_task("corp-1")
+        _ = refresh_dingtalk_directory_task("corp-1")
 
-    assert len(sent_tasks.calls) == 1 + REFRESH_MAX_CONSECUTIVE_REQUEUES
+    followups = [
+        index
+        for index, call in enumerate(sent_tasks.calls)
+        if call[2] == float(REFRESH_RETRY_BUDGET_SECONDS)
+    ]
+    assert followups == [1 + REFRESH_MAX_CONSECUTIVE_REQUEUES]
+    assert sent_tasks.task_kwargs[followups[0]] == {"trailing": True}
     assert refresh_recorder.calls == [("corp-1", ("u-hold",))] * (
-        REFRESH_MAX_CONSECUTIVE_REQUEUES + 1
+        REFRESH_MAX_CONSECUTIVE_REQUEUES + 2
     )
-    assert "停止再调度" in caplog.text
+    assert "已安排一次延迟补刷新" in caplog.text
     assert _pending_user_ids("corp-1") == ["u-hold"]
 
     later = _stored_event("evt-nq-2", "user_leave_org", data={"userId": ["u-later"]})
@@ -470,7 +497,7 @@ def test_user_ids_overflow_keeps_first_200(
     overflow_ids = [f"u-{index:03d}" for index in range(REFRESH_USER_IDS_MAX + 1)]
     event = _stored_event("evt-overflow", "user_add_org", data={"userId": overflow_ids})
 
-    with caplog.at_level("WARNING", logger="easyauth.tasks.dingtalk_stream"):
+    with caplog.at_level("WARNING", logger="easyauth.tasks.dingtalk_stream_markers"):
         _ = _process(event, django_capture_on_commit_callbacks)
     _ = refresh_dingtalk_directory_task("corp-1")
 
@@ -740,6 +767,164 @@ def test_bpms_unsupported_change_marks_failed() -> None:
 
     event.refresh_from_db()
     assert event.status == STREAM_EVENT_STATUS_FAILED
+
+
+def test_running_lock_time_limits_stay_below_ttl() -> None:
+    assert REFRESH_APPLY_BUDGET_SECONDS == 600
+    assert (
+        int(REFRESH_WAIT_TIMEOUT_SECONDS) + REFRESH_APPLY_BUDGET_SECONDS
+    ) == REFRESH_RUNNING_LOCK_TTL_SECONDS
+    assert refresh_dingtalk_directory_task.soft_time_limit == REFRESH_TASK_SOFT_TIME_LIMIT_SECONDS
+    assert refresh_dingtalk_directory_task.time_limit == REFRESH_TASK_TIME_LIMIT_SECONDS
+    assert (
+        REFRESH_TASK_SOFT_TIME_LIMIT_SECONDS
+        < REFRESH_TASK_TIME_LIMIT_SECONDS
+        < REFRESH_RUNNING_LOCK_TTL_SECONDS
+    )
+    assert REFRESH_MARKER_TTL_SECONDS > REFRESH_RETRY_BUDGET_SECONDS > 600
+
+
+def test_late_worker_does_not_delete_the_new_running_lock(
+    refresh_recorder: _RefreshRecorder,
+    django_capture_on_commit_callbacks: DjangoCaptureOnCommitCallbacks,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = REFRESH_RUNNING_CACHE_KEY_TEMPLATE.format(corp_id="corp-1")
+
+    def _replace_lock(
+        _client: object,
+        corp_id: str,
+        **kwargs: object,
+    ) -> AuthentikDirectorySyncResult | None:
+        hooks = kwargs["hooks"]
+        assert isinstance(hooks, DirectoryRefreshHooks)
+        assert cache.delete(key)
+        assert cache.add(key, "token-b", timeout=REFRESH_RUNNING_LOCK_TTL_SECONDS)
+        hooks.before_apply()
+        return refresh_recorder.fake_refresh(_client, corp_id, **kwargs)
+
+    monkeypatch.setattr(tasks_module, "refresh_dingtalk_directory", _replace_lock)
+    event = _stored_event("evt-lock", "user_leave_org", data={"userId": ["u-lock"]})
+    _ = _process(event, django_capture_on_commit_callbacks)
+    with pytest.raises(RuntimeError, match="running 锁已不属于当前任务"):
+        _ = refresh_dingtalk_directory_task("corp-1")
+    assert cache.get(key) == "token-b"
+
+
+def test_extend_running_lock_refreshes_expiry_for_the_same_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = {"now": 1_800_000_000.0}
+    monkeypatch.setattr(tasks_module.time, "time", lambda: clock["now"])
+    token = acquire_running_lock("corp-1")
+    assert token is not None
+    clock["now"] += REFRESH_RUNNING_LOCK_TTL_SECONDS - 1
+    extend_running_lock("corp-1", token)
+    clock["now"] += 10
+    key = REFRESH_RUNNING_CACHE_KEY_TEMPLATE.format(corp_id="corp-1")
+    assert cache.get(key) == token
+    clock["now"] += REFRESH_RUNNING_LOCK_TTL_SECONDS
+    assert cache.get(key) is None
+
+
+def test_user_ids_survive_outage_past_600_seconds(
+    refresh_recorder: _RefreshRecorder,
+    django_capture_on_commit_callbacks: DjangoCaptureOnCommitCallbacks,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = {"now": 1_700_000_000.0}
+    monkeypatch.setattr(tasks_module.time, "time", lambda: clock["now"])
+    gap = 700
+    assert gap > 600
+    assert gap < REFRESH_MARKER_TTL_SECONDS
+    refresh_recorder.queued = False
+    first = _stored_event("evt-long-1", "user_leave_org", data={"userId": ["u-old"]})
+    _ = _process(first, django_capture_on_commit_callbacks)
+    _ = refresh_dingtalk_directory_task("corp-1")
+
+    clock["now"] += gap
+    second = _stored_event("evt-long-2", "user_leave_org", data={"userId": ["u-new"]})
+    _ = _process(second, django_capture_on_commit_callbacks)
+    clock["now"] += gap
+    assert _pending_user_ids("corp-1") == ["u-old", "u-new"]
+
+    refresh_recorder.queued = True
+    _ = refresh_dingtalk_directory_task("corp-1")
+    assert refresh_recorder.calls[-1] == ("corp-1", ("u-old", "u-new"))
+
+
+def test_celery_retry_exhaustion_enqueues_one_followup(
+    sent_tasks: _SendTaskRecorder,
+    refresh_recorder: _RefreshRecorder,
+    django_capture_on_commit_callbacks: DjangoCaptureOnCommitCallbacks,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = refresh_recorder
+    event = _stored_event("evt-exhaust", "user_leave_org", data={"userId": ["u-hold"]})
+    _ = _process(event, django_capture_on_commit_callbacks)
+
+    def _down(_client: object, _corp_id: str, **_kwargs: object) -> None:
+        message = "upstream down"
+        raise AuthentikDirectoryUnavailableError(message)
+
+    monkeypatch.setattr(tasks_module, "refresh_dingtalk_directory", _down)
+    refresh_dingtalk_directory_task.push_request(
+        retries=DIRECTORY_REFRESH_MAX_RETRIES,
+        called_directly=False,
+    )
+    try:
+        with pytest.raises(AuthentikDirectoryUnavailableError, match="upstream down"):
+            _ = refresh_dingtalk_directory_task("corp-1")
+        with pytest.raises(AuthentikDirectoryUnavailableError, match="upstream down"):
+            _ = refresh_dingtalk_directory_task("corp-1")
+    finally:
+        refresh_dingtalk_directory_task.pop_request()
+
+    followups = [
+        index
+        for index, call in enumerate(sent_tasks.calls)
+        if call[2] == float(REFRESH_RETRY_BUDGET_SECONDS)
+    ]
+    assert followups == [1]
+    assert sent_tasks.task_kwargs[followups[0]] == {"trailing": True}
+    assert _pending_user_ids("corp-1") == ["u-hold"]
+
+
+def test_trailing_without_ids_or_dept_flag_skips_trigger(
+    refresh_recorder: _RefreshRecorder,
+    django_capture_on_commit_callbacks: DjangoCaptureOnCommitCallbacks,
+) -> None:
+    event = _stored_event("evt-trail-empty", "user_leave_org", data={"userId": ["u-1"]})
+    _ = _process(event, django_capture_on_commit_callbacks)
+    _ = refresh_dingtalk_directory_task("corp-1")
+    _ = refresh_dingtalk_directory_task("corp-1", trailing=True)
+    assert refresh_recorder.calls == [("corp-1", ("u-1",))]
+
+
+def test_trailing_with_dept_flag_calls_trigger(
+    sent_tasks: _SendTaskRecorder,
+    refresh_recorder: _RefreshRecorder,
+    django_capture_on_commit_callbacks: DjangoCaptureOnCommitCallbacks,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _during_refresh(
+        _client: object,
+        corp_id: str,
+        **kwargs: object,
+    ) -> AuthentikDirectorySyncResult | None:
+        during = _stored_event("evt-dept-mid", "org_dept_modify", data={"deptId": ["1"]})
+        _ = _process(during, django_capture_on_commit_callbacks)
+        return refresh_recorder.fake_refresh(_client, corp_id, **kwargs)
+
+    monkeypatch.setattr(tasks_module, "refresh_dingtalk_directory", _during_refresh)
+    event = _stored_event("evt-trail-dept", "user_leave_org", data={"userId": ["u-1"]})
+    _ = _process(event, django_capture_on_commit_callbacks)
+    _ = refresh_dingtalk_directory_task("corp-1")
+    assert sent_tasks.task_kwargs[-1] == {"trailing": True}
+
+    monkeypatch.setattr(tasks_module, "refresh_dingtalk_directory", refresh_recorder.fake_refresh)
+    _ = refresh_dingtalk_directory_task("corp-1", trailing=True)
+    assert refresh_recorder.calls == [("corp-1", ("u-1",)), ("corp-1", ())]
 
 
 def _pk(event: DingTalkStreamEvent) -> int:

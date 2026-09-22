@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from django.core.cache import cache
@@ -18,11 +19,15 @@ if TYPE_CHECKING:
     from easyauth.integrations.authentik.directory_payloads import DirectoryJson
     from easyauth.integrations.authentik.directory_sync import AuthentikDirectorySyncResult
 
+logger = logging.getLogger(__name__)
+
 # Stream 事件驱动的目录刷新: 先让 Authentik 从钉钉拉最新目录, 等它完成后再跑
 # EasyAuth 的镜像同步(含离职检出/撤权/交接单)。等待窗口按小目录(数百人)一次
 # 全量同步的耗时上限估计; 超时按目录不可用处理, 交给任务重试与定时兜底。
 # 超时重试不得盲目再 trigger_sync: 先读 status/, 已成功则只做本地 apply,
 # 仍在跑则继续等, 没有覆盖本次触发的同步时才重新触发。
+# 重新触发的 user_ids 是标记里已提交的 id 与当前 peek 的并集, 只有这次
+# queued=true 之后才从 pending 集合删除。
 REFRESH_WAIT_TIMEOUT_SECONDS: Final = 180.0
 REFRESH_POLL_INTERVAL_SECONDS: Final = 3.0
 REFRESH_TIMEOUT_MESSAGE: Final = "等待 Authentik 钉钉目录同步完成超时。"
@@ -31,8 +36,30 @@ REFRESH_TRIGGER_MARKER_TYPE_MESSAGE: Final = "钉钉目录刷新触发标记缓�
 REFRESH_TRIGGER_MARKER_CACHE_KEY_TEMPLATE: Final = (
     "easyauth:dingtalk:stream:refresh-trigger:{corp_id}"
 )
-# 覆盖 180s 等待 + Celery 重试退避窗口, 避免重试时丢失本次触发基线。
-REFRESH_TRIGGER_MARKER_TTL_SECONDS: Final = int(REFRESH_WAIT_TIMEOUT_SECONDS) + 600
+# Authentik 增量同步 user_ids 上限(与 REST 契约一致); 超出部分由每日全量同步兜底。
+REFRESH_USER_IDS_MAX: Final = 200
+
+# Celery autoretry: retry_backoff=True 的因子是 1, countdown = min(backoff_max, 2**retries)。
+# request.retries 从 0 起, 真正会睡过去的是 0 .. max_retries-1;
+# 第 max_retries 次失败时 retry() 发现下一次将超过上限, 不再等待。
+# retry_jitter 只把退避缩短到 [0, countdown], 预算按无抖动上界计算。
+# 尝试次数 = max_retries + 1, 每次等待上限 = REFRESH_WAIT_TIMEOUT_SECONDS。
+# 预算 = 尝试次数 x 等待 + 退避上界。标记 TTL 比预算多 1 秒, 避免与同长度的
+# 延迟补刷新倒计时在同一秒被缓存判过期。
+DIRECTORY_REFRESH_MAX_RETRIES: Final = 5
+DIRECTORY_REFRESH_RETRY_BACKOFF_MAX_SECONDS: Final = 600
+REFRESH_MARKER_TTL_SLACK_SECONDS: Final = 1
+REFRESH_RETRY_BACKOFF_BUDGET_SECONDS: Final[int] = sum(
+    min(DIRECTORY_REFRESH_RETRY_BACKOFF_MAX_SECONDS, 1 << index)
+    for index in range(DIRECTORY_REFRESH_MAX_RETRIES)
+)
+REFRESH_RETRY_BUDGET_SECONDS: Final[int] = (
+    (DIRECTORY_REFRESH_MAX_RETRIES + 1) * int(REFRESH_WAIT_TIMEOUT_SECONDS)
+    + REFRESH_RETRY_BACKOFF_BUDGET_SECONDS
+)
+REFRESH_MARKER_TTL_SECONDS: Final[int] = (
+    REFRESH_RETRY_BUDGET_SECONDS + REFRESH_MARKER_TTL_SLACK_SECONDS
+)
 
 AUTHENTIK_SYNC_STATUS_SUCCESS: Final = "success"
 AUTHENTIK_SYNC_STATUS_ERROR: Final = "error"
@@ -74,6 +101,19 @@ class AuthentikDirectoryRefreshClient(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class DirectoryRefreshHooks:
+    """目录刷新挂点。peek 在决定重新触发时读取当前 pending, 不是任务开始时的快照。"""
+
+    on_accepted_user_ids: Callable[[tuple[str, ...]], None] | None = None
+    before_trigger: Callable[[], None] | None = None
+    before_apply: Callable[[], None] | None = None
+    peek_user_ids: Callable[[], Sequence[str]] | None = None
+
+
+_NO_REFRESH_HOOKS: Final = DirectoryRefreshHooks()
+
+
+@dataclass(frozen=True, slots=True)
 class _TriggerMarker:
     baseline: str
     user_ids: tuple[str, ...]
@@ -85,11 +125,19 @@ class _RefreshCall:
     corp_id: str
     user_ids: tuple[str, ...]
     wait_policy: RefreshWaitPolicy
-    on_accepted_user_ids: Callable[[tuple[str, ...]], None] | None
+    hooks: DirectoryRefreshHooks
 
 
 def refresh_trigger_marker_cache_key(corp_id: str) -> str:
     return REFRESH_TRIGGER_MARKER_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
+
+
+def refresh_trigger_marker_ttl(corp_id: str) -> None:
+    # 延迟补刷新启动时仍要能读到这次触发基线; 没有标记则不做任何事。
+    marker = _load_trigger_marker(corp_id)
+    if marker is None:
+        return
+    _store_trigger_marker(corp_id, baseline=marker.baseline, user_ids=marker.user_ids)
 
 
 def refresh_dingtalk_directory(
@@ -98,7 +146,7 @@ def refresh_dingtalk_directory(
     *,
     user_ids: Sequence[str] = (),
     wait_policy: RefreshWaitPolicy = DEFAULT_REFRESH_WAIT_POLICY,
-    on_accepted_user_ids: Callable[[tuple[str, ...]], None] | None = None,
+    hooks: DirectoryRefreshHooks | None = None,
 ) -> AuthentikDirectorySyncResult | None:
     # 以 Authentik 自己记录的 finished_at 为基线判断"这次触发的同步已完成",
     # 避免 EasyAuth 与 Authentik 主机时钟偏差造成误判。
@@ -109,7 +157,7 @@ def refresh_dingtalk_directory(
         corp_id=corp_id,
         user_ids=tuple(user_ids),
         wait_policy=wait_policy,
-        on_accepted_user_ids=on_accepted_user_ids,
+        hooks=hooks or _NO_REFRESH_HOOKS,
     )
     marker = _load_trigger_marker(corp_id)
     if marker is not None:
@@ -118,6 +166,7 @@ def refresh_dingtalk_directory(
 
 
 def _trigger_and_wait(call: _RefreshCall) -> AuthentikDirectorySyncResult | None:
+    _run_before_trigger(call)
     baseline = _corp_finished_at(call.client, call.corp_id)
     trigger = call.client.trigger_sync(call.corp_id, user_ids=call.user_ids)
     if not trigger.queued:
@@ -131,20 +180,54 @@ def _resume_triggered_refresh(
     call: _RefreshCall,
     marker: _TriggerMarker,
 ) -> AuthentikDirectorySyncResult | None:
-    # 等待超时后的 Celery 重试: 先承认上次已 queued 的 ids, 再按 status 决定
-    # 本地 apply / 继续等 / 重新触发, 禁止盲目第二次 trigger_sync。
-    _notify_accepted(call, marker.user_ids)
+    # 等待超时后的 Celery 重试: 按 status 决定本地 apply / 继续等 / 重新触发。
+    # 重新触发前不删除 pending id, 避免这次请求丢掉上一轮已经提交的离职人员。
     entry = _corp_sync_entry(call.client, call.corp_id)
     covering = _covering_state(entry, baseline=marker.baseline)
     if covering == _COVERING_SUCCESS:
+        _notify_accepted(call, marker.user_ids)
         return _apply_and_clear_marker(call)
     if covering == _COVERING_ERROR:
+        _notify_accepted(call, marker.user_ids)
         _clear_trigger_marker(call.corp_id)
         raise AuthentikDirectoryUnavailableError(_upstream_error_message(call.corp_id, entry))
     if covering == _COVERING_IN_FLIGHT:
+        _notify_accepted(call, marker.user_ids)
         return _wait_and_apply(call, baseline=marker.baseline)
-    _clear_trigger_marker(call.corp_id)
-    return _trigger_and_wait(call)
+    return _retrigger_after_absent(call, marker)
+
+
+def _retrigger_after_absent(
+    call: _RefreshCall,
+    marker: _TriggerMarker,
+) -> AuthentikDirectorySyncResult | None:
+    merged = _retrigger_user_ids(call, marker)
+    # queued=false 时保留标记, 下次重试仍带得上 marker 里的 id。
+    _store_trigger_marker(call.corp_id, baseline=marker.baseline, user_ids=merged)
+    return _trigger_and_wait(replace(call, user_ids=merged))
+
+
+def _retrigger_user_ids(call: _RefreshCall, marker: _TriggerMarker) -> tuple[str, ...]:
+    if call.hooks.peek_user_ids is None:
+        current = call.user_ids
+    else:
+        current = tuple(call.hooks.peek_user_ids())
+    return _bounded_trigger_ids(call.corp_id, [*marker.user_ids, *current])
+
+
+def _bounded_trigger_ids(corp_id: str, user_ids: list[str]) -> tuple[str, ...]:
+    merged = list(dict.fromkeys(user_id for user_id in user_ids if user_id))
+    overflow = len(merged) - REFRESH_USER_IDS_MAX
+    if overflow <= 0:
+        return tuple(merged)
+    logger.warning(
+        "钉钉目录重触发 user_ids 超过 %s, 只保留先到 %s 个, 余下由每日全量兜底; corp=%s dropped=%s",
+        REFRESH_USER_IDS_MAX,
+        REFRESH_USER_IDS_MAX,
+        corp_id,
+        overflow,
+    )
+    return tuple(merged[:REFRESH_USER_IDS_MAX])
 
 
 def _wait_and_apply(call: _RefreshCall, *, baseline: str) -> AuthentikDirectorySyncResult:
@@ -158,14 +241,27 @@ def _wait_and_apply(call: _RefreshCall, *, baseline: str) -> AuthentikDirectoryS
 
 
 def _apply_and_clear_marker(call: _RefreshCall) -> AuthentikDirectorySyncResult:
+    _run_before_apply(call)
+    # Authentik 每次成功同步都会推进快照代际, 触发完成后本地写入路径会执行,
+    # 不必再把这次等待的 finished_at 当作跳过条件。
     result = sync_authentik_dingtalk_directory(call.client)
     _clear_trigger_marker(call.corp_id)
     return result
 
 
+def _run_before_trigger(call: _RefreshCall) -> None:
+    if call.hooks.before_trigger is not None:
+        call.hooks.before_trigger()
+
+
+def _run_before_apply(call: _RefreshCall) -> None:
+    if call.hooks.before_apply is not None:
+        call.hooks.before_apply()
+
+
 def _notify_accepted(call: _RefreshCall, user_ids: tuple[str, ...]) -> None:
-    if call.on_accepted_user_ids is not None:
-        call.on_accepted_user_ids(user_ids)
+    if call.hooks.on_accepted_user_ids is not None:
+        call.hooks.on_accepted_user_ids(user_ids)
 
 
 def _covering_state(entry: DirectoryJson | None, *, baseline: str) -> str:
@@ -273,7 +369,7 @@ def _store_trigger_marker(
     cache.set(
         refresh_trigger_marker_cache_key(corp_id),
         {"baseline": baseline, "user_ids": list(user_ids)},
-        timeout=REFRESH_TRIGGER_MARKER_TTL_SECONDS,
+        timeout=REFRESH_MARKER_TTL_SECONDS,
     )
 
 

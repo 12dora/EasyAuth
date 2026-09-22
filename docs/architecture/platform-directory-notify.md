@@ -67,8 +67,10 @@ Stream 通讯录事件以增量方式触发 Authentik 目录同步，避免每�
 `POST /api/v3/sources/oauth/dingtalk-directory/{slug}/sync/` 请求体为 `{"corp_id", "full": false, "user_ids"}`：
 `user_ids` 来自窗口内 `user_*` 事件的钉钉 userId（去重，最多 200；部门事件不传，增量树遍历即可覆盖；超出打警告，
 由每日全量同步兜底）。合并窗口 30 秒；同一 corp 两次触发最小间隔 120 秒。冷却期内到达的事件只累积，并保证冷却结束时
-恰好一次 trailing 刷新。Authentik 返回 `queued: false`（已有同步在排队/运行，本次 `user_ids` 未入队）时，把 userId
-放回 pending 并在冷却后再触发，连续 3 次仍未入队则记错误放弃，不忙等。下游必须用响应里的
+恰好一次 trailing 刷新。userId 只在 Authentik 确认 `queued: true` 后才从 pending 移除（崩溃重投会原样重发）；
+`queued: false`（已有同步在排队/运行）时 userId 留在 pending，冷却后再触发。连续 3 次仍未入队或 Celery 重试预算耗尽时，
+若仍有待同步的人员或部门变化，只再排一次延迟补刷新，不忙等；每日全量同步仍是最后兜底。每个 corp 的刷新有带
+owner token 的运行锁，TTL 覆盖整个等待与本地落库，任务 time_limit 小于锁 TTL。下游必须用响应里的
 `directory_snapshot.authoritative` / `stale` / `complete` 判断可信性，**不能靠调度周期推断**。
 `snapshots[]` 每个 `(source_slug, corp_id)` 作用域一项，不是每个 `corp_id` 一项。
 

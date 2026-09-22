@@ -3,10 +3,9 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from celery import shared_task
-from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
@@ -15,8 +14,12 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryError,
 )
 from easyauth.integrations.authentik.directory_refresh import (
-    REFRESH_WAIT_TIMEOUT_SECONDS,
+    DIRECTORY_REFRESH_MAX_RETRIES,
+    DIRECTORY_REFRESH_RETRY_BACKOFF_MAX_SECONDS,
+    REFRESH_RETRY_BUDGET_SECONDS,
+    DirectoryRefreshHooks,
     refresh_dingtalk_directory,
+    refresh_trigger_marker_ttl,
 )
 from easyauth.integrations.models import (
     STREAM_EVENT_STATUS_FAILED,
@@ -26,6 +29,33 @@ from easyauth.integrations.models import (
     DingTalkStreamEvent,
 )
 from easyauth.outbox.services import enqueue_task
+from easyauth.tasks.dingtalk_stream_markers import (
+    REFRESH_MAX_CONSECUTIVE_REQUEUES,
+    REFRESH_TASK_SOFT_TIME_LIMIT_SECONDS,
+    REFRESH_TASK_TIME_LIMIT_SECONDS,
+    accumulate_refresh_user_ids,
+    acquire_running_lock,
+    claim_exhaustion_followup,
+    clear_dept_event_token,
+    clear_exhaustion_followup,
+    consume_trailing_needed,
+    delete_pending_marker,
+    delete_requeue_count,
+    extend_running_lock,
+    increment_requeue_count,
+    mark_dept_event_pending,
+    mark_sync_triggered,
+    mark_trailing_needed,
+    peek_pending_user_ids,
+    pending_marker_exists,
+    read_dept_event_token,
+    refresh_countdown,
+    release_running_lock,
+    remove_sent_user_ids,
+    running_lock_held,
+    set_pending_marker,
+    trailing_refresh_should_trigger,
+)
 from easyauth.workflows.models import (
     APPROVAL_STATUS_APPROVED,
     APPROVAL_STATUS_CANCELED,
@@ -38,7 +68,7 @@ from easyauth.workflows.services import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
     from easyauth.applications.ops_models import JsonValue
     from easyauth.integrations.authentik.directory_sync import AuthentikDirectorySyncResult
@@ -88,35 +118,6 @@ RECORD_ONLY_EVENT_TYPES: Final[frozenset[str]] = frozenset(
     },
 )
 
-# 事件风暴合并与钉钉计费: 30s 合并窗口、queued=true 后 120s 冷却、全程 running 锁
-# (TTL ≥ Authentik 等待+余量)。锁内事件只累积 id 并标记 trailing, 当前刷新结束且过
-# 冷却后再触发恰好一次。user_ids 只 peek, queued=true 后删除本次送出的 id。
-REFRESH_PENDING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-pending:{corp_id}"
-REFRESH_USER_IDS_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-user-ids:{corp_id}"
-REFRESH_USER_IDS_LOCK_CACHE_KEY_TEMPLATE: Final = (
-    "easyauth:dingtalk:stream:refresh-user-ids-lock:{corp_id}"
-)
-REFRESH_LAST_TRIGGERED_CACHE_KEY_TEMPLATE: Final = (
-    "easyauth:dingtalk:stream:refresh-last-triggered:{corp_id}"
-)
-REFRESH_REQUEUE_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-requeue:{corp_id}"
-REFRESH_RUNNING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-running:{corp_id}"
-REFRESH_TRAILING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-trailing:{corp_id}"
-REFRESH_COALESCE_SECONDS: Final = 30
-REFRESH_PENDING_TTL_SECONDS: Final = 600
-REFRESH_MIN_INTERVAL_SECONDS: Final = 120
-REFRESH_RUNNING_LOCK_TTL_SECONDS: Final = (
-    int(REFRESH_WAIT_TIMEOUT_SECONDS) + REFRESH_MIN_INTERVAL_SECONDS
-)
-# Authentik 增量同步 user_ids 上限(与 REST 契约一致); 超出部分由每日全量同步兜底。
-REFRESH_USER_IDS_MAX: Final = 200
-# queued=false 时最多连续再调度次数, 避免在 Authentik 长事务上忙等烧配额。
-REFRESH_MAX_CONSECUTIVE_REQUEUES: Final = 3
-REFRESH_USER_IDS_LOCK_TTL_SECONDS: Final = 5
-REFRESH_USER_IDS_LOCK_ATTEMPTS: Final = 20
-REFRESH_USER_IDS_LOCK_SLEEP_SECONDS: Final = 0.05
-REFRESH_USER_IDS_LOCK_FAILED_MESSAGE: Final = "钉钉目录刷新 user_ids 缓存锁获取失败。"
-REFRESH_CACHE_TYPE_MESSAGE: Final = "钉钉目录刷新缓存值类型无效。"
 _REFRESH_COUNT_KEYS: Final[tuple[str, ...]] = (
     "department_count",
     "user_count",
@@ -130,6 +131,12 @@ _REFRESH_COUNT_KEYS: Final[tuple[str, ...]] = (
 DIRECTORY_EVENT_MISSING_CORP_MESSAGE: Final = "钉钉目录事件缺少 corp_id。"
 BPMS_EVENT_MISSING_INSTANCE_MESSAGE: Final = "钉钉审批事件缺少 processInstanceId。"
 BPMS_EVENT_UNSUPPORTED_CHANGE_MESSAGE: Final = "钉钉审批事件状态组合无法识别。"
+_EXHAUSTED_FOLLOWUP_SCHEDULED_MESSAGE: Final = (
+    "Authentik 目录刷新重试预算耗尽, 已安排一次延迟补刷新; corp=%s countdown=%s"
+)
+_EXHAUSTED_FOLLOWUP_SKIPPED_MESSAGE: Final = (
+    "Authentik 目录刷新重试预算耗尽, 不再安排新的延迟补刷新; corp=%s"
+)
 
 SKIP_REASON_UNHANDLED_EVENT_TYPE: Final = "unhandled_event_type"
 SKIP_REASON_RECORDED_NO_CONSUMER: Final = "recorded_no_consumer"
@@ -144,6 +151,16 @@ _BPMS_CHANGE_TO_STATUS: Final[dict[tuple[str, str], str]] = {
 }
 
 
+class _DirectoryRefreshRequest(Protocol):
+    called_directly: bool
+    retries: int
+
+
+class _BoundDirectoryRefreshTask(Protocol):
+    max_retries: int
+    request: _DirectoryRefreshRequest
+
+
 class StreamEventContractError(Exception):
     """事件载荷违反钉钉数据契约, 无法处理且重试无意义。"""
 
@@ -154,8 +171,10 @@ class StreamEventOutcome:
     result: dict[str, JsonValue] = field(default_factory=dict)
 
 
-def _corp_key(template: str, corp_id: str) -> str:
-    return template.format(corp_id=corp_id)
+@dataclass(frozen=True, slots=True)
+class _RefreshExit:
+    skipped: bool
+    outcome: AuthentikDirectorySyncResult | None
 
 
 def request_directory_refresh(
@@ -163,42 +182,88 @@ def request_directory_refresh(
     *,
     source_event_id: str,
     user_ids: Sequence[str] = (),
+    trailing: bool = False,
 ) -> bool:
-    _accumulate_refresh_user_ids(corp_id, user_ids)
-    if _running_remaining_seconds(corp_id) > 0:
-        _mark_trailing_needed(corp_id)
+    accumulate_refresh_user_ids(corp_id, user_ids)
+    if running_lock_held(corp_id):
+        mark_trailing_needed(corp_id)
         return False
-    if _pending_marker_exists(corp_id):
+    if pending_marker_exists(corp_id):
         return False
     _ = enqueue_task(
         event_key=f"dingtalk-directory-refresh:{corp_id}:{source_event_id}",
         task_name=DIRECTORY_REFRESH_TASK_NAME,
         args=[corp_id],
-        countdown=_refresh_countdown(corp_id),
+        kwargs=_trailing_task_kwargs(trailing=trailing),
+        countdown=refresh_countdown(corp_id),
     )
-    transaction.on_commit(lambda: _set_pending_marker(corp_id))
+    transaction.on_commit(lambda: set_pending_marker(corp_id))
     return True
 
 
+def _trailing_task_kwargs(*, trailing: bool) -> dict[str, JsonValue] | None:
+    if not trailing:
+        return None
+    payload: dict[str, JsonValue] = {"trailing": True}
+    return payload
+
+
+# retry_backoff=True 的因子是 1, 与 REFRESH_RETRY_BUDGET_SECONDS 的算术一致。
 @shared_task(
     name=DIRECTORY_REFRESH_TASK_NAME,
+    bind=True,
     autoretry_for=(AuthentikDirectoryError,),
     retry_backoff=True,
-    retry_backoff_max=600,
+    retry_backoff_max=DIRECTORY_REFRESH_RETRY_BACKOFF_MAX_SECONDS,
     retry_jitter=True,
-    max_retries=5,
+    max_retries=DIRECTORY_REFRESH_MAX_RETRIES,
+    soft_time_limit=REFRESH_TASK_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=REFRESH_TASK_TIME_LIMIT_SECONDS,
     acks_late=True,
 )
-def refresh_dingtalk_directory_task(corp_id: str) -> dict[str, int]:
-    if not _acquire_running_lock(corp_id):
-        _mark_trailing_needed(corp_id)
+def refresh_dingtalk_directory_task(
+    self: _BoundDirectoryRefreshTask,
+    corp_id: str,
+    *,
+    trailing: bool = False,
+) -> dict[str, int]:
+    try:
+        return _refresh_directory_for_corp(corp_id, trailing=trailing)
+    except AuthentikDirectoryError:
+        if _retries_exhausted(self):
+            _schedule_exhaustion_followup(corp_id)
+        raise
+
+
+def _retries_exhausted(task: _BoundDirectoryRefreshTask) -> bool:
+    # 直接调用(测试、eager 的 called_directly)会立刻把异常抛回, 不是预算耗尽。
+    if task.request.called_directly:
+        return False
+    return task.request.retries >= task.max_retries
+
+
+def _refresh_directory_for_corp(corp_id: str, *, trailing: bool) -> dict[str, int]:
+    token = acquire_running_lock(corp_id)
+    if token is None:
+        mark_trailing_needed(corp_id)
         return _empty_refresh_counts()
     try:
-        _ = cache.delete(_corp_key(REFRESH_PENDING_CACHE_KEY_TEMPLATE, corp_id))
-        outcome = _run_directory_refresh(corp_id, _peek_pending_user_ids(corp_id))
+        exit_state = _locked_refresh(corp_id, token, trailing=trailing)
     finally:
-        _release_running_lock(corp_id)
-    return _finish_directory_refresh(corp_id, outcome)
+        release_running_lock(corp_id, token)
+    if exit_state.skipped:
+        clear_exhaustion_followup(corp_id)
+        _arm_trailing_after_success(corp_id)
+        return _empty_refresh_counts()
+    return _finish_directory_refresh(corp_id, exit_state.outcome)
+
+
+def _locked_refresh(corp_id: str, token: str, *, trailing: bool) -> _RefreshExit:
+    delete_pending_marker(corp_id)
+    if trailing and not trailing_refresh_should_trigger(corp_id):
+        return _RefreshExit(skipped=True, outcome=None)
+    outcome = _run_directory_refresh(corp_id, peek_pending_user_ids(corp_id), token)
+    return _RefreshExit(skipped=False, outcome=outcome)
 
 
 def _finish_directory_refresh(
@@ -206,9 +271,10 @@ def _finish_directory_refresh(
     outcome: AuthentikDirectorySyncResult | None,
 ) -> dict[str, int]:
     if outcome is None:
-        _ = _consume_trailing_needed(corp_id)
+        _ = consume_trailing_needed(corp_id)
         return _reschedule_after_not_queued(corp_id)
-    _ = cache.delete(_corp_key(REFRESH_REQUEUE_CACHE_KEY_TEMPLATE, corp_id))
+    delete_requeue_count(corp_id)
+    clear_exhaustion_followup(corp_id)
     _arm_trailing_after_success(corp_id)
     return {key: cast("int", getattr(outcome, key)) for key in _REFRESH_COUNT_KEYS}
 
@@ -216,21 +282,39 @@ def _finish_directory_refresh(
 def _run_directory_refresh(
     corp_id: str,
     user_ids: tuple[str, ...],
+    token: str,
 ) -> AuthentikDirectorySyncResult | None:
     accepted = False
+    # 只在真正 trigger_sync 之前采样。恢复一条已经 queued 的同步时不采样,
+    # 这样等待期间新到的部门事件不会被这次成功 apply 清掉。
+    dept_token: str | None = None
+
+    def _before_trigger() -> None:
+        nonlocal dept_token
+        dept_token = read_dept_event_token(corp_id)
 
     def _on_accepted(accepted_ids: tuple[str, ...]) -> None:
         nonlocal accepted
         accepted = True
-        _remove_sent_user_ids(corp_id, accepted_ids)
-        _mark_sync_triggered(corp_id)
+        remove_sent_user_ids(corp_id, accepted_ids)
+        if dept_token is not None:
+            clear_dept_event_token(corp_id, dept_token)
+        mark_sync_triggered(corp_id)
+
+    def _before_apply() -> None:
+        extend_running_lock(corp_id, token)
 
     client = AuthentikDirectoryClient.from_settings()
     result = refresh_dingtalk_directory(
         client,
         corp_id,
         user_ids=user_ids,
-        on_accepted_user_ids=_on_accepted,
+        hooks=DirectoryRefreshHooks(
+            on_accepted_user_ids=_on_accepted,
+            before_trigger=_before_trigger,
+            before_apply=_before_apply,
+            peek_user_ids=lambda: peek_pending_user_ids(corp_id),
+        ),
     )
     if result is not None and not accepted:
         _on_accepted(user_ids)
@@ -238,13 +322,9 @@ def _run_directory_refresh(
 
 
 def _reschedule_after_not_queued(corp_id: str) -> dict[str, int]:
-    requeue_count = _increment_requeue_count(corp_id)
+    requeue_count = increment_requeue_count(corp_id)
     if requeue_count > REFRESH_MAX_CONSECUTIVE_REQUEUES:
-        logger.error(
-            "Authentik 目录同步连续 queued=false 超过 %s 次, 停止再调度; corp=%s",
-            REFRESH_MAX_CONSECUTIVE_REQUEUES,
-            corp_id,
-        )
+        _schedule_exhaustion_followup(corp_id)
         return _empty_refresh_counts()
     _ = request_directory_refresh(
         corp_id,
@@ -254,210 +334,40 @@ def _reschedule_after_not_queued(corp_id: str) -> dict[str, int]:
     return _empty_refresh_counts()
 
 
+def _schedule_exhaustion_followup(corp_id: str) -> None:
+    if not claim_exhaustion_followup(corp_id):
+        logger.error(_EXHAUSTED_FOLLOWUP_SKIPPED_MESSAGE, corp_id)
+        return
+    refresh_trigger_marker_ttl(corp_id)
+    _ = enqueue_task(
+        event_key=f"dingtalk-directory-refresh-followup:{corp_id}:{time.time_ns()}",
+        task_name=DIRECTORY_REFRESH_TASK_NAME,
+        args=[corp_id],
+        kwargs=_trailing_task_kwargs(trailing=True),
+        countdown=float(REFRESH_RETRY_BUDGET_SECONDS),
+    )
+    logger.error(
+        _EXHAUSTED_FOLLOWUP_SCHEDULED_MESSAGE,
+        corp_id,
+        REFRESH_RETRY_BUDGET_SECONDS,
+    )
+
+
 def _arm_trailing_after_success(corp_id: str) -> None:
-    trailing = _consume_trailing_needed(corp_id)
-    if not trailing and not _peek_pending_user_ids(corp_id):
+    trailing = consume_trailing_needed(corp_id)
+    if not trailing and not peek_pending_user_ids(corp_id):
         return
     _ = request_directory_refresh(
         corp_id,
         source_event_id=f"trailing-{time.time_ns()}",
         user_ids=(),
+        trailing=True,
     )
 
 
 def _empty_refresh_counts() -> dict[str, int]:
     counts: dict[str, int] = dict.fromkeys(_REFRESH_COUNT_KEYS, 0)
     return counts
-
-
-def _refresh_countdown(corp_id: str) -> float:
-    remaining = max(
-        _timestamp_remaining_seconds(
-            cast(
-                "object",
-                cache.get(_corp_key(REFRESH_LAST_TRIGGERED_CACHE_KEY_TEMPLATE, corp_id)),
-            ),
-            extra_seconds=float(REFRESH_MIN_INTERVAL_SECONDS),
-        ),
-        _running_remaining_seconds(corp_id),
-    )
-    if remaining > 0:
-        return remaining
-    return float(REFRESH_COALESCE_SECONDS)
-
-
-def _running_remaining_seconds(corp_id: str) -> float:
-    return _timestamp_remaining_seconds(
-        cast("object", cache.get(_corp_key(REFRESH_RUNNING_CACHE_KEY_TEMPLATE, corp_id))),
-    )
-
-
-def _timestamp_remaining_seconds(raw: object, *, extra_seconds: float = 0.0) -> float:
-    if raw is None:
-        return 0.0
-    if isinstance(raw, bool) or not isinstance(raw, int | float):
-        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
-    remaining = float(raw) + extra_seconds - time.time()
-    return remaining if remaining > 0 else 0.0
-
-
-def _mark_sync_triggered(corp_id: str) -> None:
-    cache.set(
-        _corp_key(REFRESH_LAST_TRIGGERED_CACHE_KEY_TEMPLATE, corp_id),
-        time.time(),
-        timeout=REFRESH_MIN_INTERVAL_SECONDS,
-    )
-
-
-def _acquire_running_lock(corp_id: str) -> bool:
-    expires_at = time.time() + float(REFRESH_RUNNING_LOCK_TTL_SECONDS)
-    return cache.add(
-        _corp_key(REFRESH_RUNNING_CACHE_KEY_TEMPLATE, corp_id),
-        expires_at,
-        timeout=REFRESH_RUNNING_LOCK_TTL_SECONDS,
-    )
-
-
-def _release_running_lock(corp_id: str) -> None:
-    _ = cache.delete(_corp_key(REFRESH_RUNNING_CACHE_KEY_TEMPLATE, corp_id))
-
-
-def _set_pending_marker(corp_id: str) -> None:
-    _ = cache.add(
-        _corp_key(REFRESH_PENDING_CACHE_KEY_TEMPLATE, corp_id),
-        "1",
-        timeout=REFRESH_PENDING_TTL_SECONDS,
-    )
-
-
-def _pending_marker_exists(corp_id: str) -> bool:
-    raw = cast("object", cache.get(_corp_key(REFRESH_PENDING_CACHE_KEY_TEMPLATE, corp_id)))
-    if raw is None:
-        return False
-    if raw != "1":
-        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
-    return True
-
-
-def _mark_trailing_needed(corp_id: str) -> None:
-    cache.set(
-        _corp_key(REFRESH_TRAILING_CACHE_KEY_TEMPLATE, corp_id),
-        "1",
-        timeout=REFRESH_PENDING_TTL_SECONDS,
-    )
-
-
-def _consume_trailing_needed(corp_id: str) -> bool:
-    key = _corp_key(REFRESH_TRAILING_CACHE_KEY_TEMPLATE, corp_id)
-    raw = cast("object", cache.get(key))
-    _ = cache.delete(key)
-    if raw is None:
-        return False
-    if raw != "1":
-        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
-    return True
-
-
-def _increment_requeue_count(corp_id: str) -> int:
-    key = _corp_key(REFRESH_REQUEUE_CACHE_KEY_TEMPLATE, corp_id)
-    if cache.add(key, 1, timeout=REFRESH_PENDING_TTL_SECONDS):
-        return 1
-    try:
-        count = cast("object", cache.incr(key))
-    except ValueError:
-        cache.set(key, 1, timeout=REFRESH_PENDING_TTL_SECONDS)
-        return 1
-    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
-        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
-    return count
-
-
-def _accumulate_refresh_user_ids(corp_id: str, user_ids: Sequence[str]) -> None:
-    incoming = [item for item in user_ids if item]
-    if not incoming:
-        return
-
-    def _merge(current: list[str]) -> list[str]:
-        return _bounded_user_ids(corp_id, [*current, *incoming])
-
-    _ = _with_user_ids_lock(corp_id, _merge)
-
-
-def _peek_pending_user_ids(corp_id: str) -> tuple[str, ...]:
-    peeked: list[str] = []
-
-    def _copy(current: list[str]) -> list[str]:
-        peeked.extend(current)
-        return current
-
-    _ = _with_user_ids_lock(corp_id, _copy)
-    return tuple(peeked)
-
-
-def _remove_sent_user_ids(corp_id: str, user_ids: Sequence[str]) -> None:
-    sent = {item for item in user_ids if item}
-    if not sent:
-        return
-
-    def _drop(current: list[str]) -> list[str]:
-        return [item for item in current if item not in sent]
-
-    _ = _with_user_ids_lock(corp_id, _drop)
-
-
-def _bounded_user_ids(corp_id: str, user_ids: list[str]) -> list[str]:
-    merged = list(dict.fromkeys(user_ids))
-    overflow = len(merged) - REFRESH_USER_IDS_MAX
-    if overflow <= 0:
-        return merged
-    logger.warning(
-        "钉钉目录刷新 user_ids 超过 %s, 只保留先到的 %s 个, 其余由每日全量兜底; corp=%s dropped=%s",
-        REFRESH_USER_IDS_MAX,
-        REFRESH_USER_IDS_MAX,
-        corp_id,
-        overflow,
-    )
-    return merged[:REFRESH_USER_IDS_MAX]
-
-
-def _with_user_ids_lock(
-    corp_id: str,
-    mutator: Callable[[list[str]], list[str]],
-) -> list[str]:
-    lock_key = _corp_key(REFRESH_USER_IDS_LOCK_CACHE_KEY_TEMPLATE, corp_id)
-    ids_key = _corp_key(REFRESH_USER_IDS_CACHE_KEY_TEMPLATE, corp_id)
-    for _attempt in range(REFRESH_USER_IDS_LOCK_ATTEMPTS):
-        if cache.add(lock_key, "1", timeout=REFRESH_USER_IDS_LOCK_TTL_SECONDS):
-            try:
-                updated = mutator(_read_cached_user_ids(ids_key))
-                _write_cached_user_ids(ids_key, updated)
-                return updated
-            finally:
-                _ = cache.delete(lock_key)
-        time.sleep(REFRESH_USER_IDS_LOCK_SLEEP_SECONDS)
-    raise RuntimeError(REFRESH_USER_IDS_LOCK_FAILED_MESSAGE)
-
-
-def _read_cached_user_ids(ids_key: str) -> list[str]:
-    raw = cast("object", cache.get(ids_key))
-    if raw is None:
-        return []
-    if not isinstance(raw, list | tuple):
-        raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
-    items: list[str] = []
-    for item in cast("list[object] | tuple[object, ...]", raw):
-        if not isinstance(item, str):
-            raise TypeError(REFRESH_CACHE_TYPE_MESSAGE)
-        if item:
-            items.append(item)
-    return items
-
-
-def _write_cached_user_ids(ids_key: str, user_ids: list[str]) -> None:
-    if not user_ids:
-        _ = cache.delete(ids_key)
-        return
-    cache.set(ids_key, user_ids, timeout=REFRESH_PENDING_TTL_SECONDS)
 
 
 @shared_task(name=PROCESS_STREAM_EVENT_TASK_NAME, acks_late=True)
@@ -511,6 +421,8 @@ def _handle_directory_event(event: DingTalkStreamEvent) -> StreamEventOutcome:
         raise StreamEventContractError(DIRECTORY_EVENT_MISSING_CORP_MESSAGE)
     user_ids = _data_string_list(event.data, "userId") or _data_string_list(event.data, "UserId")
     pending_ids = user_ids if event.event_type in USER_DIRECTORY_EVENT_TYPES else ()
+    if event.event_type not in USER_DIRECTORY_EVENT_TYPES:
+        transaction.on_commit(lambda: mark_dept_event_pending(corp_id))
     refresh_queued = request_directory_refresh(
         corp_id,
         source_event_id=event.event_id,

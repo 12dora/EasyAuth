@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
@@ -12,8 +13,11 @@ from easyauth.integrations.authentik.directory_client import (
 )
 from easyauth.integrations.authentik.directory_payloads import DingTalkDirectoryStatus
 from easyauth.integrations.authentik.directory_refresh import (
+    REFRESH_MARKER_TTL_SECONDS,
     REFRESH_TIMEOUT_MESSAGE,
     REFRESH_UPSTREAM_FAILED_MESSAGE,
+    REFRESH_WAIT_TIMEOUT_SECONDS,
+    DirectoryRefreshHooks,
     RefreshWaitPolicy,
     refresh_dingtalk_directory,
 )
@@ -40,6 +44,7 @@ class _RefreshClientStub:
     triggered_corp_ids: list[str] = field(default_factory=list)
     triggered_user_ids: list[tuple[str, ...]] = field(default_factory=list)
     queued: bool = True
+    events: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
     source_slug: str = "dingtalk"
 
     def get_status(self) -> DingTalkDirectoryStatus:
@@ -56,7 +61,9 @@ class _RefreshClientStub:
         user_ids: Sequence[str] = (),
     ) -> DirectorySyncTriggerResult:
         self.triggered_corp_ids.append(corp_id)
-        self.triggered_user_ids.append(tuple(user_ids))
+        recorded = tuple(user_ids)
+        self.triggered_user_ids.append(recorded)
+        self.events.append(("trigger", recorded))
         return DirectorySyncTriggerResult(queued=self.queued)
 
     def iter_departments(self) -> list[dict[str, object]]:
@@ -326,3 +333,123 @@ def test_refresh_timeout_retry_keeps_waiting_without_retrigger() -> None:
     with pytest.raises(AuthentikDirectoryUnavailableError, match=REFRESH_TIMEOUT_MESSAGE):
         _ = refresh_dingtalk_directory(client, "corp-1", wait_policy=_timeout_policy())
     assert client.triggered_corp_ids == ["corp-1"]
+
+
+def test_refresh_hook_order_is_trigger_then_accept_then_apply() -> None:
+    events: list[str] = []
+    client = _RefreshClientStub(
+        status_script=[
+            _status_entry("success", _BASELINE_FINISHED_AT),
+            _status_entry("running", _BASELINE_FINISHED_AT),
+            _status_entry("success", _FRESH_FINISHED_AT, generation=2),
+        ],
+        users=_mirrored_users(),
+        departments=_mirrored_departments(),
+        org_contexts=_mirrored_org_contexts(),
+    )
+
+    result = refresh_dingtalk_directory(
+        client,
+        "corp-1",
+        user_ids=("u-1",),
+        wait_policy=_instant_policy(),
+        hooks=DirectoryRefreshHooks(
+            before_trigger=lambda: events.append("before_trigger"),
+            on_accepted_user_ids=lambda _ids: events.append("accepted"),
+            before_apply=lambda: events.append("before_apply"),
+        ),
+    )
+
+    assert events == ["before_trigger", "accepted", "before_apply"]
+    assert result is not None
+    assert result.user_count == 1
+
+
+def test_timeout_retry_retrigger_unions_marker_ids_with_current_peek() -> None:
+    accepted: list[tuple[str, ...]] = []
+    client = _RefreshClientStub(
+        status_script=[
+            _status_entry("success", _BASELINE_FINISHED_AT),
+            _status_entry("running", _BASELINE_FINISHED_AT),
+        ],
+    )
+
+    def _accept(user_ids: tuple[str, ...]) -> None:
+        accepted.append(user_ids)
+
+    with pytest.raises(AuthentikDirectoryUnavailableError, match=REFRESH_TIMEOUT_MESSAGE):
+        _ = refresh_dingtalk_directory(
+            client,
+            "corp-1",
+            user_ids=("u-old",),
+            wait_policy=_timeout_policy(),
+            hooks=DirectoryRefreshHooks(on_accepted_user_ids=_accept),
+        )
+    assert client.events == [("trigger", ("u-old",))]
+    assert accepted == [("u-old",)]
+
+    client.status_script = [
+        _status_entry("success", _BASELINE_FINISHED_AT),
+        _status_entry("success", _BASELINE_FINISHED_AT),
+        _status_entry("running", _BASELINE_FINISHED_AT),
+        _status_entry("success", _FRESH_FINISHED_AT, generation=2),
+    ]
+    client.users = _mirrored_users()
+    client.departments = _mirrored_departments()
+    client.org_contexts = _mirrored_org_contexts()
+    result = refresh_dingtalk_directory(
+        client,
+        "corp-1",
+        user_ids=("u-stale",),
+        wait_policy=_instant_policy(),
+        hooks=DirectoryRefreshHooks(
+            on_accepted_user_ids=_accept,
+            peek_user_ids=lambda: ("u-new",),
+        ),
+    )
+
+    assert client.events == [
+        ("trigger", ("u-old",)),
+        ("trigger", ("u-old", "u-new")),
+    ]
+    assert accepted == [("u-old",), ("u-old", "u-new")]
+    assert result is not None
+    assert result.user_count == 1
+
+
+def test_trigger_marker_survives_past_the_old_780_second_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = {"now": 1_800_000_000.0}
+    monkeypatch.setattr(time, "time", lambda: clock["now"])
+    elapsed = int(REFRESH_WAIT_TIMEOUT_SECONDS) + 600 + 120
+    assert elapsed < REFRESH_MARKER_TTL_SECONDS
+    client = _RefreshClientStub(
+        status_script=[
+            _status_entry("success", _BASELINE_FINISHED_AT),
+            _status_entry("running", _BASELINE_FINISHED_AT),
+        ],
+        users=_mirrored_users(),
+        departments=_mirrored_departments(),
+        org_contexts=_mirrored_org_contexts(),
+    )
+
+    with pytest.raises(AuthentikDirectoryUnavailableError, match=REFRESH_TIMEOUT_MESSAGE):
+        _ = refresh_dingtalk_directory(
+            client,
+            "corp-1",
+            user_ids=("u-1",),
+            wait_policy=_timeout_policy(),
+        )
+    clock["now"] += elapsed
+    client.status_script = [_status_entry("success", _FRESH_FINISHED_AT, generation=2)]
+    result = refresh_dingtalk_directory(
+        client,
+        "corp-1",
+        user_ids=("u-2",),
+        wait_policy=_instant_policy(),
+    )
+
+    assert client.triggered_user_ids == [("u-1",)]
+    assert result is not None
+    assert result.user_count == 1
