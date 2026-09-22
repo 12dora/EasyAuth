@@ -32,7 +32,7 @@ _LOCK_RELEASE_SLACK_SECONDS: Final = 3
     acks_late=True,
     soft_time_limit=_DELIVER_SOFT_TIME_LIMIT,
     time_limit=_DELIVER_TIME_LIMIT,
-)  # pyright: ignore[reportCallIssue, reportUntypedFunctionDecorator]
+)
 def deliver_message_task(message_id: str, generation: int) -> None:
     deliver_message(message_id, generation)
 

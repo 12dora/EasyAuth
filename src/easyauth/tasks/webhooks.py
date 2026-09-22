@@ -18,7 +18,7 @@ from easyauth.webhooks.delivery import (
     acks_late=True,
     soft_time_limit=18,
     time_limit=20,
-)  # pyright: ignore[reportCallIssue, reportUntypedFunctionDecorator]
+)
 def deliver_webhook_task(delivery_id: int, generation: int, expected_attempt: int = 1) -> str:
     # 重试计划以 WebhookDelivery.attempts(库内事实)为准, 不依赖 celery 任务链上下文,
     # 手动重投重置计数后自然重新走完整计划。

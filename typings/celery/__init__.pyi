@@ -40,6 +40,7 @@ def shared_task[**P, R](
     *,
     name: str | None = None,
     bind: bool = False,
+    soft_time_limit: int | None = None,
     time_limit: int | None = None,
     retry_kwargs: dict[str, object] | None = None,
     acks_late: bool = False,

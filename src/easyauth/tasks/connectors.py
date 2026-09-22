@@ -47,7 +47,7 @@ SYNC_RUN_RETENTION_PER_INSTANCE: Final = 200
     acks_late=True,
     soft_time_limit=RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS,
     time_limit=RECONCILE_TASK_TIME_LIMIT_SECONDS,
-)  # pyright: ignore[reportCallIssue, reportUntypedFunctionDecorator]
+)
 def reconcile_connector_instance_task(instance_id: int) -> str:
     run = reconcile_instance(instance_id)
     if run is None:
