@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Final, Literal
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from easyauth.usage.alert_delivery import (
@@ -373,12 +374,14 @@ def _orphan_retries(
     ctx: _AlertContext,
     matched: list[UsageAlertEvent],
 ) -> list[UsageAlertEvent]:
-    # 待重试事件未必会在本轮再次生成草稿(条件已解除、或手动恢复 Stream 记下的事件),
-    # 也要并入本轮合并发送; 数量有上限, 次数上限与间隔由 _retryable 约束。
+    # 待重试事件未必会在本轮再次生成草稿(条件已解除、或手动恢复 Stream 记下的事件)。
+    # 间隔必须在 LIMIT 之前过滤, 否则未到期的旧失败行会占满名额。
     if not ctx.config.alerts.enabled:
         return []
     seen = {event.id for event in matched}
+    due_at = ctx.now - MIN_RETRY_GAP
     rows = UsageAlertEvent.objects.filter(
+        Q(last_attempt_at__isnull=True) | Q(last_attempt_at__lte=due_at),
         status=STATUS_FAILED,
         delivery_attempts__lt=MAX_DELIVERY_ATTEMPTS,
     ).order_by("created_at")[:ORPHAN_RETRY_LIMIT]

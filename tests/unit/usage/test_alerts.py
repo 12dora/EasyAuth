@@ -22,6 +22,7 @@ from easyauth.usage.alerts import (
     ALERT_KIND_ENFORCEMENT,
     ALERT_KIND_STREAM_RESUMED,
     ALERT_KIND_THRESHOLD,
+    ORPHAN_RETRY_LIMIT,
     STATUS_FAILED,
     STATUS_SENT,
     STATUS_SUPERSEDED,
@@ -325,6 +326,38 @@ def test_sender_not_ready_does_not_consume_cap(monkeypatch: pytest.MonkeyPatch) 
     assert _charged_batches() == 0
 
 
+def test_orphan_retry_returns_due_row_behind_older_gap_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _silent_send(monkeypatch)
+    _patch_usage(monkeypatch)
+    _seed_sender()
+    blocking = _seed_not_yet_due_failures()
+    due = UsageAlertEvent.objects.create(
+        kind=ALERT_KIND_STREAM_RESUMED,
+        metric="stream",
+        scope="day",
+        period_key="2026-09-20",
+        threshold_percent=0,
+        status=STATUS_FAILED,
+        title="Stream 已恢复",
+        detail="应在未到期的旧失败行之前被捞起",
+        failure_reason="",
+        delivery_attempts=0,
+        last_attempt_at=None,
+    )
+    _ = UsageAlertEvent.objects.filter(pk=due.pk).update(created_at=NOW - timedelta(hours=1))
+    result = run(NOW, _config(), _state())
+    due.refresh_from_db()
+    still_waiting = UsageAlertEvent.objects.filter(pk__in=[row.pk for row in blocking])
+    assert result.delivered is True
+    assert result.sent == 1
+    assert due.status == STATUS_SENT
+    assert due.delivery_attempts == 1
+    assert set(still_waiting.values_list("status", flat=True)) == {STATUS_FAILED}
+    assert set(still_waiting.values_list("delivery_attempts", flat=True)) == {1}
+
+
 def test_record_stream_resumed_joins_next_merged_send(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = _silent_send(monkeypatch)
     _patch_usage(monkeypatch)
@@ -417,6 +450,29 @@ def test_retry_reuses_dedup_key_and_body(monkeypatch: pytest.MonkeyPatch) -> Non
     assert seen[0] == seen[1]
     assert seen[0][0].startswith("usage:")
     assert "202609211540" not in seen[0][0]
+
+
+def _seed_not_yet_due_failures() -> list[UsageAlertEvent]:
+    rows = [
+        UsageAlertEvent.objects.create(
+            kind=ALERT_KIND_THRESHOLD,
+            metric="api",
+            scope="day",
+            period_key=f"gap-{index:02d}",
+            threshold_percent=50,
+            status=STATUS_FAILED,
+            title="未到期失败",
+            detail="仍在重试间隔内",
+            failure_reason="发送方应用未就绪",
+            delivery_attempts=1,
+            last_attempt_at=NOW - timedelta(minutes=1),
+        )
+        for index in range(ORPHAN_RETRY_LIMIT)
+    ]
+    _ = UsageAlertEvent.objects.filter(pk__in=[row.pk for row in rows]).update(
+        created_at=NOW - timedelta(days=1),
+    )
+    return rows
 
 
 def _seed_sender(*, with_admin: bool = True) -> App:

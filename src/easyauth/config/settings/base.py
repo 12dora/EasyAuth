@@ -192,6 +192,11 @@ else:
         "default": {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
             "LOCATION": _cache_url or "redis://localhost:6379/2",
+            # RedisCache 把 OPTIONS 原样传给 redis 连接池, 避免黑洞 Redis 无限期卡住。
+            "OPTIONS": {
+                "socket_connect_timeout": 3,
+                "socket_timeout": 3,
+            },
         },
     }
 CACHES = _cache_config

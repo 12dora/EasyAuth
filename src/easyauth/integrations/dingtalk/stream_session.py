@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import logging
 import platform
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http import HTTPStatus
 from importlib.metadata import version as package_version
@@ -30,6 +32,11 @@ STREAM_OPEN_READ_TIMEOUT_SECONDS: Final = 15.0
 STREAM_SESSION_POLL_SECONDS: Final = 1.0
 DINGTALK_STREAM_SDK_VERSION: Final = package_version("dingtalk-stream")
 
+STREAM_SOCKET_CLOSE_TIMEOUT_SECONDS: Final = 5.0
+STREAM_TASK_JOIN_TIMEOUT_SECONDS: Final = 2.0
+# 同一时刻只有一次策略查询; 卡住时不能占用 asyncio 的默认线程池。
+STREAM_POLICY_EXECUTOR_WORKERS: Final = 1
+STREAM_POLICY_EXECUTOR_PREFIX: Final = "easyauth-stream-policy"
 STREAM_OPEN_FAILED_MESSAGE: Final = "钉钉 Stream 打开连接失败。"
 STREAM_INVALID_MESSAGE_MESSAGE: Final = "钉钉 Stream 收到非文本消息, 无法解析。"
 STREAM_START_FOREVER_FORBIDDEN_MESSAGE: Final = (
@@ -42,6 +49,7 @@ STREAM_CLIENT_TYPE_MESSAGE: Final = (
 STREAM_PAUSED_CLOSE_MESSAGE: Final = "钉钉 Stream 已按用量策略暂停, 正在关闭当前连接。"
 STREAM_PREDICATE_FAILED_MESSAGE: Final = "钉钉 Stream 会话内策略检查失败, 保持连接并在下一轮重试。"
 STREAM_SESSION_TASK_FAILED_MESSAGE: Final = "钉钉 Stream 会话任务异常结束。"
+STREAM_TASK_ABANDONED_MESSAGE: Final = "钉钉 Stream 会话任务在限时内未结束, 已放弃等待。"
 STREAM_PREDICATE_WARNING_INTERVAL_SECONDS: Final = 60.0
 _STREAM_ENDED: Final = object()
 
@@ -112,6 +120,7 @@ class _SessionExitWatch:
     interval_seconds: float
     exit_requested: asyncio.Event
     warnings: _WarningRateLimiter
+    executor: ThreadPoolExecutor
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,15 +196,16 @@ class SingleSessionDingTalkStreamClient(DingTalkStreamClient):
     @override
     async def start(self) -> None:
         self.last_websocket_seconds = 0.0
-        # 策略查询缓存未命中会走同步 ORM, 记账会写缓存, 都只能经 to_thread 离开事件循环线程。
-        if not await _session_may_open(self):
-            return
-        await _off_loop(self.record_stream_open)
-        self.pre_start()
-        connection = await asyncio.to_thread(self.open_connection)
-        if not await _session_may_open(self):
-            return
-        await _consume_websocket(self, _websocket_uri(connection))
+        # 策略查询走独立线程池。asyncio.run 退出时会 join 默认执行器, 卡住的查询不能放进去。
+        executor = ThreadPoolExecutor(
+            max_workers=STREAM_POLICY_EXECUTOR_WORKERS,
+            thread_name_prefix=STREAM_POLICY_EXECUTOR_PREFIX,
+        )
+        try:
+            await _open_and_consume_session(self, executor)
+        finally:
+            # 不等待正在执行的策略查询: 缓存或数据库黑洞不得拖住会话结束。
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 def run_one_stream_session(client: DingTalkStreamClient) -> None:
@@ -259,14 +269,33 @@ def _websocket_uri(connection: object) -> str:
     return f"{endpoint}?ticket={quote_plus(ticket)}"
 
 
-async def _consume_websocket(client: SingleSessionDingTalkStreamClient, uri: str) -> None:
+async def _open_and_consume_session(
+    client: SingleSessionDingTalkStreamClient,
+    executor: ThreadPoolExecutor,
+) -> None:
+    # 策略查询缓存未命中会走同步 ORM, 记账会写缓存, 都必须离开事件循环线程。
+    if not await _session_may_open(client, executor):
+        return
+    await _off_loop(client.record_stream_open, executor)
+    client.pre_start()
+    connection = await asyncio.to_thread(client.open_connection)
+    if not await _session_may_open(client, executor):
+        return
+    await _consume_websocket(client, _websocket_uri(connection), executor)
+
+
+async def _consume_websocket(
+    client: SingleSessionDingTalkStreamClient,
+    uri: str,
+    executor: ThreadPoolExecutor,
+) -> None:
     # 健康时长从 WebSocket 连上起算; 打开 HTTP 或握手失败不得清零退避。
     connected_at: float | None = None
     try:
         async with _websocket_session(uri) as websocket:
             connected_at = client.clock()
             client.websocket = websocket
-            await _run_connected_session(client, websocket)
+            await _run_connected_session(client, websocket, executor)
     finally:
         _record_websocket_seconds(client, connected_at)
 
@@ -274,23 +303,33 @@ async def _consume_websocket(client: SingleSessionDingTalkStreamClient, uri: str
 async def _run_connected_session(
     client: SingleSessionDingTalkStreamClient,
     websocket: object,
+    executor: ThreadPoolExecutor,
 ) -> None:
     tasks: set[asyncio.Task[None]] = set()
-    watch = _new_exit_watch(client)
+    watch = _new_exit_watch(client, executor)
     try:
         _start_session_tasks(client, websocket, tasks, watch)
         await _drain_websocket_messages(client, websocket, tasks, watch)
     finally:
-        await _release_connected_session(client, websocket, tasks)
+        await _release_connected_session(
+            client,
+            websocket,
+            tasks,
+            exit_requested=watch.exit_requested.is_set(),
+        )
 
 
-def _new_exit_watch(client: SingleSessionDingTalkStreamClient) -> _SessionExitWatch:
+def _new_exit_watch(
+    client: SingleSessionDingTalkStreamClient,
+    executor: ThreadPoolExecutor,
+) -> _SessionExitWatch:
     return _SessionExitWatch(
         should_run=client.stream_should_run,
         should_stop=client.session_should_stop,
         interval_seconds=client.pause_poll_seconds,
         exit_requested=asyncio.Event(),
         warnings=_WarningRateLimiter(STREAM_PREDICATE_WARNING_INTERVAL_SECONDS),
+        executor=executor,
     )
 
 
@@ -377,12 +416,31 @@ async def _release_connected_session(
     client: SingleSessionDingTalkStreamClient,
     websocket: object,
     tasks: set[asyncio.Task[None]],
+    *,
+    exit_requested: bool,
 ) -> None:
+    try:
+        if exit_requested:
+            # 停止或策略暂停: 先关连接, 再限时取消任务。不得等卡住的策略线程。
+            await _close_then_drop_tasks(websocket, tasks)
+        else:
+            await _drop_tasks_then_close(websocket, tasks)
+    finally:
+        client.websocket = None
+
+
+async def _close_then_drop_tasks(websocket: object, tasks: set[asyncio.Task[None]]) -> None:
+    try:
+        await _close_stream_websocket(websocket)
+    finally:
+        await _shutdown_session_tasks(tasks)
+
+
+async def _drop_tasks_then_close(websocket: object, tasks: set[asyncio.Task[None]]) -> None:
     try:
         await _shutdown_session_tasks(tasks)
     finally:
         await _close_stream_websocket(websocket)
-        client.websocket = None
 
 
 def _record_websocket_seconds(
@@ -395,11 +453,14 @@ def _record_websocket_seconds(
 
 
 async def _shutdown_session_tasks(tasks: set[asyncio.Task[None]]) -> None:
-    pending = [task for task in tasks if not task.done()]
+    pending = {task for task in tasks if not task.done()}
     for task in pending:
         _ = task.cancel()
-    if pending:
-        _ = await asyncio.gather(*pending, return_exceptions=True)
+    if not pending:
+        return
+    _, stuck = await asyncio.wait(pending, timeout=STREAM_TASK_JOIN_TIMEOUT_SECONDS)
+    if stuck:
+        logger.warning(STREAM_TASK_ABANDONED_MESSAGE)
 
 
 def _websocket_session(uri: str) -> AbstractAsyncContextManager[object]:
@@ -438,10 +499,13 @@ def _on_session_task_done(tasks: set[asyncio.Task[None]], task: asyncio.Task[Non
         logger.warning(STREAM_SESSION_TASK_FAILED_MESSAGE, exc_info=error)
 
 
-async def _session_may_open(client: SingleSessionDingTalkStreamClient) -> bool:
+async def _session_may_open(
+    client: SingleSessionDingTalkStreamClient,
+    executor: ThreadPoolExecutor,
+) -> bool:
     if client.session_should_stop():
         return False
-    allowed = await _off_loop(client.stream_should_run)
+    allowed = await _off_loop(client.stream_should_run, executor)
     return allowed and not client.session_should_stop()
 
 
@@ -457,7 +521,7 @@ async def _watch_stream_session_exit(watch: _SessionExitWatch) -> None:
 
 
 async def _poll_until_stop(watch: _SessionExitWatch) -> None:
-    # 停止判断留在事件循环线程: 线程池卡住时 SIGTERM 仍能结束会话并在 finally 里关连接。
+    # 停止判断留在事件循环线程。策略线程卡住时, 停止事件仍能先关连接再放弃该线程。
     while not watch.exit_requested.is_set():
         if _request_stop_if_needed(watch):
             return
@@ -481,7 +545,7 @@ def _predicate_is_true(predicate: Callable[[], bool], warnings: _WarningRateLimi
 
 async def _stream_should_keep_running(watch: _SessionExitWatch) -> bool:
     try:
-        return await _off_loop(watch.should_run)
+        return await _off_loop(watch.should_run, watch.executor)
     except Exception as error:  # noqa: BLE001 - 同上, 监视任务必须存活, 异常按"继续运行"处理.
         watch.warnings.warning(STREAM_PREDICATE_FAILED_MESSAGE, error)
         return True
@@ -500,13 +564,27 @@ async def _close_stream_websocket(websocket: object) -> None:
     if not callable(close):
         return
     result = close()
-    if inspect.isawaitable(result):
-        _ = await cast("Awaitable[object]", result)
+    if not inspect.isawaitable(result):
+        return
+    _ = await asyncio.wait_for(
+        cast("Awaitable[object]", result),
+        timeout=STREAM_SOCKET_CLOSE_TIMEOUT_SECONDS,
+    )
 
 
-async def _off_loop[R](func: Callable[[], R]) -> R:
-    # 策略查询可能回落到同步 ORM, Django 禁止在事件循环线程访问 ORM, 故放到线程池执行。
-    return await asyncio.to_thread(_with_fresh_db_connection, func)
+async def _off_loop[R](func: Callable[[], R], executor: ThreadPoolExecutor) -> R:
+    # 策略查询可能回落到同步 ORM, Django 禁止在事件循环线程访问数据库。
+    # 复制上下文以保持原先 to_thread 的语义, 但不要放进 asyncio 的默认执行器。
+    loop = asyncio.get_running_loop()
+    context = contextvars.copy_context()
+
+    def run() -> R:
+        def invoke() -> R:
+            return _with_fresh_db_connection(func)
+
+        return context.run(invoke)
+
+    return await loop.run_in_executor(executor, run)
 
 
 def _with_fresh_db_connection[R](func: Callable[[], R]) -> R:

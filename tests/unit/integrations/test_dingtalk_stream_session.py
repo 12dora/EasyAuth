@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import pytest
@@ -29,8 +30,18 @@ from easyauth.integrations.dingtalk.stream_session import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from typing import Self
+
+# 卡住的策略线程由夹具在收尾时放行, 测试本体不得 set。
+_BLOCKED_SESSION_TIMEOUT_SECONDS = 5.0
+
+
+@pytest.fixture
+def policy_thread_release() -> Iterator[threading.Event]:
+    release = threading.Event()
+    yield release
+    release.set()
 
 
 def test_start_forever_is_forbidden() -> None:
@@ -450,6 +461,25 @@ def test_watcher_survives_predicate_errors_then_stop_closes_socket(
     assert STREAM_SESSION_TASK_FAILED_MESSAGE not in caplog.text
 
 
+def test_blocked_policy_thread_does_not_hold_stopped_session(
+    monkeypatch: pytest.MonkeyPatch,
+    policy_thread_release: threading.Event,
+) -> None:
+    release = policy_thread_release
+    entered = threading.Event()
+    stop = threading.Event()
+    order: list[str] = []
+    shutdowns: list[tuple[bool, bool, bool]] = []
+    websocket = _GateWebSocket()
+    client = _client_with_blocked_policy(_block_policy_after_open(entered, release), stop)
+    _patch_open_socket(monkeypatch, client, websocket)
+    _watch_shutdown_order(monkeypatch, websocket, order, shutdowns, release)
+    assert _finish_session_after_policy_blocks(client, entered, stop) is True
+    assert order == ["close", "tasks"]
+    assert websocket.close_calls == 1
+    assert (False, True, False) in shutdowns
+
+
 def test_stop_closes_socket_after_watcher_task_dies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -472,6 +502,90 @@ def test_stop_closes_socket_after_watcher_task_dies(
     assert died["n"] == 1
     assert stop.is_set()
     assert websocket.close_calls == 1
+
+
+def _block_policy_after_open(
+    entered: threading.Event,
+    release: threading.Event,
+) -> Callable[[], bool]:
+    calls = {"n": 0}
+
+    def should_run() -> bool:
+        calls["n"] += 1
+        # start() 在打开连接前询问两次; 第三次是会话内监视, 卡在线程里。
+        if calls["n"] <= 2:
+            return True
+        entered.set()
+        release.wait()
+        return True
+
+    return should_run
+
+
+def _client_with_blocked_policy(
+    should_run: Callable[[], bool],
+    stop: threading.Event,
+) -> SingleSessionDingTalkStreamClient:
+    client = SingleSessionDingTalkStreamClient(Credential("app-key", "app-secret"))
+    client.pause_poll_seconds = 0.01
+    client.session_should_stop = stop.is_set
+    client.stream_should_run = should_run
+    return client
+
+
+def _watch_shutdown_order(
+    monkeypatch: pytest.MonkeyPatch,
+    websocket: _GateWebSocket,
+    order: list[str],
+    shutdowns: list[tuple[bool, bool, bool]],
+    release: threading.Event,
+) -> None:
+    original_close = websocket.close
+    original_shutdown = vars(session_module)["_shutdown_session_tasks"]
+    original_executor_shutdown = ThreadPoolExecutor.shutdown
+
+    async def close() -> None:
+        order.append("close")
+        await original_close()
+
+    async def shutdown(tasks: set[asyncio.Task[None]]) -> None:
+        order.append("tasks")
+        await original_shutdown(tasks)
+
+    def executor_shutdown(
+        self: ThreadPoolExecutor,
+        *,
+        wait: bool = True,
+        cancel_futures: bool = False,
+    ) -> None:
+        shutdowns.append((wait, cancel_futures, release.is_set()))
+        original_executor_shutdown(self, wait=wait, cancel_futures=cancel_futures)
+
+    websocket.close = close
+    monkeypatch.setattr(session_module, "_shutdown_session_tasks", shutdown)
+    monkeypatch.setattr(ThreadPoolExecutor, "shutdown", executor_shutdown)
+
+
+def _finish_session_after_policy_blocks(
+    client: SingleSessionDingTalkStreamClient,
+    entered: threading.Event,
+    stop: threading.Event,
+) -> bool:
+    finished = threading.Event()
+
+    def request_stop() -> None:
+        if entered.wait(timeout=_BLOCKED_SESSION_TIMEOUT_SECONDS):
+            stop.set()
+
+    def drive() -> None:
+        asyncio.run(client.start())
+        finished.set()
+
+    threading.Thread(target=request_stop, daemon=True).start()
+    runner = threading.Thread(target=drive)
+    runner.start()
+    runner.join(timeout=_BLOCKED_SESSION_TIMEOUT_SECONDS)
+    return finished.is_set()
 
 
 def _patch_open_socket(
